@@ -41,6 +41,18 @@ REPORT_SUBJECTS = {
     "ft_cloud_camera": "Camera status Report All fleet",
 }
 
+# A mailbox rule files the three MiX Unity report notifications into a
+# subfolder instead of leaving them in INBOX; Teletrac and FT Cloud stay
+# in INBOX. Confirmed against the real mailbox, not a guess: searching
+# INBOX alone finds 0 of the 3 MiX reports even though they arrive daily.
+REPORT_FOLDERS = {
+    "teletrac_offline": "INBOX",
+    "mix_movement": "INBOX.Mix subscriptions",
+    "mix_mobile_status": "INBOX.Mix subscriptions",
+    "mix_power_events": "INBOX.Mix subscriptions",
+    "ft_cloud_camera": "INBOX",
+}
+
 # The domain MiX/Powerfleet always uses for the actual signed CSV download,
 # confirmed from real report emails. This is the primary filter.
 DOWNLOAD_LINK_DOMAIN = "report-dl"
@@ -68,7 +80,10 @@ def _decode(value):
 def find_latest_message(conn, subject_substring, mailbox="INBOX"):
     """Returns the raw email.message.Message for the most recent email
     whose subject contains subject_substring, or None if not found."""
-    conn.select(mailbox)
+    # Quoted unconditionally: IMAP mailbox names containing a space (like
+    # "INBOX.Mix subscriptions") are rejected as an invalid atom otherwise,
+    # and a quoted plain "INBOX" is still valid per RFC 3501.
+    conn.select(f'"{mailbox}"')
     # IMAP SEARCH with quoted substring, case-insensitive per RFC 3501 SUBJECT search
     status, data = conn.search(None, f'(SUBJECT "{subject_substring}")')
     if status != "OK" or not data or not data[0]:

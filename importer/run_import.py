@@ -89,9 +89,10 @@ def fetch_reports(username, password, work_dir=WORK_DIR):
         # Direct-attachment reports
         for key, ext in [("teletrac_offline", ".csv"), ("ft_cloud_camera", ".zip")]:
             subject = mail_reader.REPORT_SUBJECTS[key]
-            msg = mail_reader.find_latest_message(conn, subject)
+            folder = mail_reader.REPORT_FOLDERS[key]
+            msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
             if msg is None:
-                raise ImportError_(f"No email found matching subject '{subject}'")
+                raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
             filename, content = mail_reader.extract_attachment(msg)
             if content is None:
                 raise ImportError_(f"Email for '{subject}' had no attachment")
@@ -104,9 +105,10 @@ def fetch_reports(username, password, work_dir=WORK_DIR):
         import requests
         for key in ("mix_movement", "mix_mobile_status", "mix_power_events"):
             subject = mail_reader.REPORT_SUBJECTS[key]
-            msg = mail_reader.find_latest_message(conn, subject)
+            folder = mail_reader.REPORT_FOLDERS[key]
+            msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
             if msg is None:
-                raise ImportError_(f"No email found matching subject '{subject}'")
+                raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
             html = mail_reader._get_html_body(msg)
             link = mail_reader.extract_download_link(html)
             if link is None:
