@@ -32,7 +32,8 @@ from tamper_engine import analyse as run_tamper_analysis
 from adapters import teletrac_csv, mix_mobile_status, mix_power_events, mix_movement, ft_cloud_camera
 from classifier import group_by_plate, classify_fleet
 from settings import load_settings
-from control_room import _build_data
+from control_room import _build_data, _b64_file
+from report_writer import write_integrity_report, write_tamper_report
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 WORK_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "_incoming")
@@ -166,6 +167,18 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
     }
 
     data = _build_data(results, settings, tampering, [], [], now, False, None, None)
+
+    # Generate the actual downloadable .xlsx files from the same rows
+    # just computed above, then embed them - no separate calculation
+    # path to drift from what the dashboard shows.
+    os.makedirs(DATA_DIR, exist_ok=True)
+    integrity_path = os.path.join(DATA_DIR, "GTL_integrity_report.xlsx")
+    tamper_path = os.path.join(DATA_DIR, "GTL_tampering_report.xlsx")
+    write_integrity_report(data, integrity_path)
+    write_tamper_report(data, tampering["summary"], tamper_path)
+    data["xlsxB64"] = _b64_file(integrity_path)
+    data["tamperB64"] = _b64_file(tamper_path)
+
     data["_skipped_plates"] = sorted(set(skipped))
     return data
 
