@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+data/_incoming/
+.claude/
+
+# database/users.json and data/fleet_today.json are intentionally
+# KEPT in version control: they're the documented demo account
+# (password "TestPass123!", meant to be changed, see README) and a
+# real historical dataset, not secrets. This is what makes `git clone
+# && pip install -r requirements.txt && python app.py` work immediately
+# without any credentials. Once you add real accounts and a live
+# import replaces this file, feel free to start ignoring them.

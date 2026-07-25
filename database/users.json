@@ -1,0 +1,14 @@
+{
+  "justin": {
+    "password_hash": "scrypt:32768:8:1$ArStBrxNUX6u3EGc$4da88ab5151d92fa54619643c4db58b9020e767ae4cd785e7ff9620f842e7a663e88f0e049fb2ad3863a6b8d874424fc920eb7dc95e76efc86af0ec190586e75",
+    "role": "admin"
+  },
+  "brandon.b": {
+    "password_hash": "scrypt:32768:8:1$QHo4WhFFPu5MJQao$b956b37dce911c7e408ff37c9b370d8ed975c443246a49b2aaf70eb1199e4e1011e56900ae66470bedd8b924907dff199f6f57a2c267260cf83b7569a94ff61f",
+    "role": "technician"
+  },
+  "gtl-client": {
+    "password_hash": "scrypt:32768:8:1$48V0dSXAML6JtcBd$5d69164c13064a1cbe03c340095949c0bbfc600334af65a17c8b53b01c08109c08889757288fc7fec3baa5a46bc7d30d6a40eecf50728e772ae38f4065e4df13",
+    "role": "client"
+  }
+}
