@@ -5,73 +5,164 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GTL Fleet Intelligence - Sign In</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:#05050A; --card-bg:#161622; --card-bg-2:#1C1C2C; --border:rgba(255,255,255,0.10);
-    --text-primary:#FAFAFC; --text-secondary:rgba(250,250,252,0.62); --text-tertiary:rgba(250,250,252,0.42);
-    --primary:#2E8CFF; --primary-2:#7B61FF; --danger:#FF5C7A;
+    --bg:#050507; --panel:#0B0B10; --card-bg:#12121A; --border:rgba(255,255,255,0.09); --divider:rgba(255,255,255,0.06);
+    --text-primary:#F5F6F8; --text-secondary:rgba(245,246,248,0.60); --text-tertiary:rgba(245,246,248,0.38);
+    --primary:#3B82F6; --primary-2:#8B5CF6; --success:#2DD4A7; --danger:#FF5C7A;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; }
   body {
-    background: var(--bg); color:var(--text-primary); font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;
-    min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background-image: radial-gradient(circle at 12% -8%, rgba(46,140,255,0.22), transparent 42%),
-                       radial-gradient(circle at 92% 4%, rgba(197,99,255,0.18), transparent 40%);
-    background-attachment:fixed;
+    background:var(--bg); color:var(--text-primary); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    display:flex; -webkit-font-smoothing:antialiased;
   }
-  .card {
-    background: linear-gradient(160deg, var(--card-bg-2), var(--card-bg));
-    border:1px solid var(--border); border-radius:20px; padding:40px 36px; width:360px;
-    box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+
+  /* ============ LEFT: BRAND PANEL ============ */
+  .brand-panel {
+    flex:1.15; position:relative; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;
+    padding:48px 56px; background:
+      radial-gradient(circle at 15% 8%, rgba(59,130,246,0.35), transparent 45%),
+      radial-gradient(circle at 85% 92%, rgba(139,92,246,0.28), transparent 48%),
+      linear-gradient(160deg, #0A0A12, #050507);
   }
-  .brand { display:flex; align-items:center; gap:12px; margin-bottom:28px; }
-  .brand-mark { width:40px; height:40px; border-radius:11px; background:linear-gradient(135deg,var(--primary),var(--primary-2));
-    color:#fff; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-weight:700; font-size:12px; }
-  .brand-text .name { font-weight:700; font-size:15px; }
-  .brand-text .sub { font-size:11.5px; color:var(--text-tertiary); }
-  h1 { font-size:19px; font-weight:700; margin-bottom:6px; }
-  .subtitle { font-size:13px; color:var(--text-secondary); margin-bottom:26px; }
-  label { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:6px; font-weight:600; }
-  input {
-    width:100%; background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text-primary);
-    padding:11px 14px; border-radius:10px; font-size:14px; margin-bottom:18px;
+  .brand-panel::before {
+    content:""; position:absolute; inset:0; opacity:0.5; pointer-events:none;
+    background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size:44px 44px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%, #000 40%, transparent 90%);
   }
-  input:focus { outline:none; border-color:var(--primary); }
-  button {
-    width:100%; background:linear-gradient(135deg,var(--primary),var(--primary-2)); border:none; color:#fff;
-    padding:12px; border-radius:10px; font-size:14px; font-weight:700; cursor:pointer;
-    box-shadow: 0 4px 14px rgba(46,140,255,0.3);
+  .brand-top { display:flex; align-items:center; gap:12px; position:relative; z-index:1; }
+  .brand-mark { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,var(--primary),var(--primary-2));
+    color:#fff; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-weight:700; font-size:12px;
+    box-shadow:0 6px 20px rgba(59,130,246,0.35); }
+  .brand-top .name { font-weight:700; font-size:15px; font-family:'Manrope'; }
+  .brand-top .sub { font-size:11px; color:var(--text-tertiary); }
+
+  .brand-mid { position:relative; z-index:1; max-width:460px; }
+  .brand-eyebrow { display:inline-flex; align-items:center; gap:7px; font-size:11px; font-weight:600; letter-spacing:0.6px;
+    text-transform:uppercase; color:var(--success); background:rgba(45,212,167,0.12); border:1px solid rgba(45,212,167,0.25);
+    padding:5px 11px; border-radius:20px; margin-bottom:22px; }
+  .brand-eyebrow .dot { width:6px; height:6px; border-radius:50%; background:var(--success); animation:pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.35;} }
+  .brand-mid h1 { font-family:'Manrope'; font-size:34px; font-weight:800; line-height:1.18; letter-spacing:-0.02em; margin-bottom:16px; }
+  .brand-mid h1 span { background:linear-gradient(135deg,#8FBFFF,var(--primary),var(--primary-2)); -webkit-background-clip:text;
+    background-clip:text; -webkit-text-fill-color:transparent; }
+  .brand-mid p { font-size:14.5px; line-height:1.65; color:var(--text-secondary); max-width:400px; }
+
+  .brand-stats { display:flex; gap:28px; margin-top:38px; position:relative; z-index:1; }
+  .brand-stat .num { font-family:'JetBrains Mono'; font-size:22px; font-weight:700; }
+  .brand-stat .label { font-size:11px; color:var(--text-tertiary); margin-top:2px; }
+
+  .brand-foot { font-size:11.5px; color:var(--text-tertiary); position:relative; z-index:1; }
+
+  /* ============ RIGHT: FORM PANEL ============ */
+  .form-panel { flex:1; display:flex; align-items:center; justify-content:center; padding:32px; background:var(--panel); }
+  .form-wrap { width:100%; max-width:340px; }
+  .form-wrap h2 { font-family:'Manrope'; font-size:23px; font-weight:700; margin-bottom:6px; letter-spacing:-0.01em; }
+  .form-wrap .lede { font-size:13px; color:var(--text-secondary); margin-bottom:32px; }
+
+  .field { margin-bottom:16px; }
+  .field label { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:7px; font-weight:600; }
+  .input-shell { position:relative; display:flex; align-items:center; }
+  .input-shell svg { position:absolute; left:13px; width:15px; height:15px; stroke:var(--text-tertiary); fill:none; stroke-width:1.8; pointer-events:none; }
+  .input-shell input {
+    width:100%; background:var(--card-bg); border:1px solid var(--border); color:var(--text-primary);
+    padding:11px 14px 11px 38px; border-radius:10px; font-size:14px; font-family:inherit;
   }
-  button:hover { filter:brightness(1.06); }
-  button:disabled { opacity:0.6; cursor:default; }
-  .error { color:var(--danger); font-size:12.5px; margin-top:14px; min-height:16px; }
+  .input-shell input:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(59,130,246,0.15); }
+  .toggle-visibility { position:absolute; right:10px; background:none; border:none; color:var(--text-tertiary); cursor:pointer;
+    width:26px; height:26px; display:flex; align-items:center; justify-content:center; border-radius:6px; }
+  .toggle-visibility:hover { color:var(--text-primary); background:rgba(255,255,255,0.06); }
+  .toggle-visibility svg { position:static; width:15px; height:15px; }
+
+  button[type="submit"] {
+    width:100%; margin-top:6px; background:linear-gradient(135deg,var(--primary),var(--primary-2)); border:none; color:#fff;
+    padding:12px; border-radius:10px; font-size:14px; font-weight:700; font-family:inherit; cursor:pointer;
+    box-shadow:0 6px 18px rgba(59,130,246,0.3); transition:transform 0.15s, filter 0.15s;
+  }
+  button[type="submit"]:hover { filter:brightness(1.08); transform:translateY(-1px); }
+  button[type="submit"]:active { transform:translateY(0) scale(0.99); }
+  button[type="submit"]:disabled { opacity:0.6; cursor:default; transform:none; }
+  .error { color:var(--danger); font-size:12.5px; margin-top:14px; min-height:16px; display:flex; align-items:center; gap:6px; }
+
+  .form-foot { margin-top:28px; padding-top:20px; border-top:1px solid var(--divider); font-size:11.5px; color:var(--text-tertiary); text-align:center; }
+
+  @media (max-width:900px) {
+    .brand-panel { display:none; }
+    .form-panel { padding:24px; }
+  }
 </style>
 </head>
 <body>
 
-<form class="card" id="login-form">
-  <div class="brand">
+<div class="brand-panel">
+  <div class="brand-top">
     <div class="brand-mark">GTL</div>
-    <div class="brand-text">
+    <div>
       <div class="name">Fleet Intelligence</div>
       <div class="sub">Command Centre</div>
     </div>
   </div>
-  <h1>Sign in</h1>
-  <div class="subtitle">Globe Trotters Ltd &middot; Cross-Platform Integrity Monitor</div>
 
-  <label for="username">Username</label>
-  <input type="text" id="username" autocomplete="username" required>
+  <div class="brand-mid">
+    <div class="brand-eyebrow"><span class="dot"></span>Live monitoring</div>
+    <h1>Every asset, <span>one view.</span></h1>
+    <p>Cross-platform fleet health, tampering detection, and border-risk monitoring for Globe Trotters Ltd &mdash; unified across Teletrac, MiX Unity, and FT Cloud.</p>
+    <div class="brand-stats">
+      <div class="brand-stat"><div class="num">3</div><div class="label">Platforms merged</div></div>
+      <div class="brand-stat"><div class="num">24/7</div><div class="label">Continuous tracking</div></div>
+      <div class="brand-stat"><div class="num">Role</div><div class="label">Based access</div></div>
+    </div>
+  </div>
 
-  <label for="password">Password</label>
-  <input type="password" id="password" autocomplete="current-password" required>
+  <div class="brand-foot">Globe Trotters Ltd &middot; Cross-Platform Integrity Monitor</div>
+</div>
 
-  <button type="submit" id="submit-btn">Sign in</button>
-  <div class="error" id="error-msg"></div>
-</form>
+<div class="form-panel">
+  <form class="form-wrap" id="login-form">
+    <h2>Sign in</h2>
+    <div class="lede">Enter your credentials to access the dashboard.</div>
+
+    <div class="field">
+      <label for="username">Username</label>
+      <div class="input-shell">
+        <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <input type="text" id="username" autocomplete="username" required>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="password">Password</label>
+      <div class="input-shell">
+        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <input type="password" id="password" autocomplete="current-password" required style="padding-right:38px;">
+        <button type="button" class="toggle-visibility" id="toggle-pw" tabindex="-1" aria-label="Show password">
+          <svg id="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <button type="submit" id="submit-btn">Sign in</button>
+    <div class="error" id="error-msg"></div>
+
+    <div class="form-foot">Access is role-based &mdash; admin, technician, and client see different panels.</div>
+  </form>
+</div>
 
 <script>
+const pwInput = document.getElementById('password');
+const toggleBtn = document.getElementById('toggle-pw');
+const eyeIcon = document.getElementById('eye-icon');
+toggleBtn.addEventListener('click', () => {
+  const show = pwInput.type === 'password';
+  pwInput.type = show ? 'text' : 'password';
+  toggleBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  eyeIcon.innerHTML = show
+    ? '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.3 21.3 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a21.3 21.3 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    : '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>';
+});
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const btn = document.getElementById('submit-btn');
