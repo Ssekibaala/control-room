@@ -27,13 +27,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "fleet_logic"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mail_reader
-from tamper_engine import analyse as run_tamper_analysis
+from tamper_engine import analyse as run_tamper_analysis, build_workbook as build_tamper_workbook
 
 from adapters import teletrac_csv, mix_mobile_status, mix_power_events, mix_movement, ft_cloud_camera
 from classifier import group_by_plate, classify_fleet
 from settings import load_settings
-from control_room import _build_data, _b64_file
-from report_writer import write_integrity_report, write_tamper_report
+from control_room import _build_data
+import report_writer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 WORK_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "_incoming")
@@ -166,19 +166,19 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
         "quality_log": [_quality_skip_to_loader_shape(s) for s in tamper_result["skipped"]],
     }
 
-    data = _build_data(results, settings, tampering, [], [], now, False, None, None)
-
-    # Generate the actual downloadable .xlsx files from the same rows
-    # just computed above, then embed them - no separate calculation
-    # path to drift from what the dashboard shows.
+    # Generate the actual downloadable .xlsx files - same formatting as
+    # the original standalone tool (report_writer.write_report() for
+    # Fleet Integrity, tamper_engine.build_workbook() for Tampering Risk)
+    # - then hand their paths to _build_data(), which embeds them via
+    # its own _b64_file() helper.
     os.makedirs(DATA_DIR, exist_ok=True)
     integrity_path = os.path.join(DATA_DIR, "GTL_integrity_report.xlsx")
     tamper_path = os.path.join(DATA_DIR, "GTL_tampering_report.xlsx")
-    write_integrity_report(data, integrity_path)
-    write_tamper_report(data, tampering["summary"], tamper_path)
-    data["xlsxB64"] = _b64_file(integrity_path)
-    data["tamperB64"] = _b64_file(tamper_path)
+    report_writer.write_report(results, settings, recovered=[], newly_offline=[],
+                                output_path=integrity_path, report_date=now, history_available=False)
+    build_tamper_workbook(tamper_result, tamper_path)
 
+    data = _build_data(results, settings, tampering, [], [], now, False, integrity_path, tamper_path)
     data["_skipped_plates"] = sorted(set(skipped))
     return data
 
