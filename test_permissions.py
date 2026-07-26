@@ -107,6 +107,71 @@ def run():
     print(f"  [{'PASS' if 'exec' in json.dumps(client_data) or client_data.get('kpi') else 'FAIL'}] client still receives Executive Dashboard KPIs")
 
     print()
+    print("=== Feedback: client can submit, validation holds, history readable ===")
+    login(client, "gtl-client", "TestPass123!")
+
+    sess = client.get("/api/session").get_json()
+    known_in_panels = "p-known" in sess.get("panels", [])
+    print(f"  [{'PASS' if known_in_panels else 'FAIL'}] client's allowed_panels includes p-known (Known Issues)")
+    if not known_in_panels:
+        failures.append("client cannot see Known Issues panel")
+
+    TEST_PLATE = "ZZZTEST1"
+
+    r = client.post("/api/feedback", json={"plate": TEST_PLATE, "comment": "x"})  # missing reportedBy/requiresFollowup
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] missing required fields rejected (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("feedback missing-field validation broken")
+
+    r = client.post("/api/feedback", json={"plate": TEST_PLATE, "comment": "x", "reportedBy": "Tester", "requiresFollowup": "yes"})
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] non-boolean requiresFollowup rejected (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("feedback requiresFollowup type validation broken")
+
+    r = client.post("/api/feedback", json={
+        "plate": TEST_PLATE, "comment": "Automated test - safe to ignore/delete",
+        "reportedBy": "test_permissions.py", "requiresFollowup": False,
+    })
+    sheets_configured = r.status_code != 503
+    if sheets_configured:
+        print(f"  [{'PASS' if r.status_code == 200 else 'FAIL'}] client CAN submit feedback now (status {r.status_code}) - was admin/technician-only before")
+        if r.status_code != 200:
+            failures.append("client cannot submit feedback")
+
+        r = client.get(f"/api/feedback-history/{TEST_PLATE}")
+        history = r.get_json().get("history", []) if r.status_code == 200 else []
+        found = any(h.get("addedBy") == "test_permissions.py" for h in history)
+        print(f"  [{'PASS' if found else 'FAIL'}] just-submitted feedback appears in /api/feedback-history/{TEST_PLATE}")
+        if not found:
+            failures.append("submitted feedback not readable back from history")
+
+        # Clean up: this test data has no business staying in the real
+        # Sheet permanently, same principle as never leaving fabricated
+        # entries against a real vehicle plate.
+        try:
+            import sheets_store
+            sh_client, sheet_id = sheets_store._get_client()
+            ws = sh_client.open_by_key(sheet_id).worksheet("Feedback")
+            cell_matches = ws.findall(TEST_PLATE)
+            for cell in sorted(cell_matches, key=lambda c: -c.row):
+                ws.delete_rows(cell.row)
+            print(f"  (cleaned up {len(cell_matches)} test row(s) from the real Sheet)")
+        except Exception as e:
+            print(f"  (could not clean up test row automatically: {e})")
+    else:
+        print("  [SKIP] Sheets not configured in this environment (503) - validation-only checks above still count")
+
+    client.post("/api/logout")
+    r = client.post("/api/feedback", json={"plate": TEST_PLATE, "comment": "x", "reportedBy": "x", "requiresFollowup": True})
+    print(f"  [{'PASS' if r.status_code == 401 else 'FAIL'}] logged-out feedback submission rejected (status {r.status_code})")
+    if r.status_code != 401:
+        failures.append("logged-out user can submit feedback")
+    r = client.get(f"/api/feedback-history/{TEST_PLATE}")
+    print(f"  [{'PASS' if r.status_code == 401 else 'FAIL'}] logged-out feedback history read rejected (status {r.status_code})")
+    if r.status_code != 401:
+        failures.append("logged-out user can read feedback history")
+
+    print()
     print("=== Logged out: no access at all ===")
     client.post("/api/logout")
     r = client.get("/api/dashboard-data")

@@ -27,6 +27,7 @@ PANEL_ACCESS = {
     "p-border":        ("admin", "technician"),
     "p-recovered":     ("admin", "technician", "client"),
     "p-healthy":       ("admin", "technician", "client"),
+    "p-known":         ("admin", "technician", "client"),   # explained-offline, no follow-up needed - client-facing by design
     "p-settings":      ("admin",),
     "p-priority":      ("admin", "technician"),
     "p-tsummary":      ("admin", "technician"),
@@ -82,7 +83,7 @@ def filter_payload_for_role(data: dict, role: str) -> dict:
     if "kpi" in filtered:
         filtered["kpi"] = {k: v for k, v in filtered["kpi"].items() if k not in CLIENT_BLOCKED_KPI_KEYS}
 
-    for section_key in ("critical", "healthy", "pending", "criticalCards"):
+    for section_key in ("critical", "healthy", "pending", "criticalCards", "knownIssues"):
         if section_key in filtered and isinstance(filtered[section_key], list):
             filtered[section_key] = [
                 {k: v for k, v in row.items() if k not in CLIENT_ROW_FIELD_BLOCKLIST}

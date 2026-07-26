@@ -277,6 +277,14 @@ def run_import(username=None, password=None, force=False):
 
     data = process_reports(paths, feedback_rows=feedback_rows)
 
+    # meta.generated reflects the latest timestamp found IN the report
+    # data itself, which naturally lags real time (assets report
+    # periodically, not continuously) - that's fine for "as of" display,
+    # but wrong for detecting "did the scheduled import actually run
+    # recently", which needs real wall-clock time instead. Kept
+    # separate rather than overloading one field for two questions.
+    data["meta"]["importedAt"] = datetime.now().strftime("%d %B %Y, %H:%M")
+
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(os.path.join(DATA_DIR, "fleet_today.json"), "w") as f:
         json.dump(data, f, default=str)

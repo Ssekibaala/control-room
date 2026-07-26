@@ -238,6 +238,39 @@
     display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
   .drill-foot .btn-primary { padding:7px 13px; font-size:11.5px; }
 
+  /* ---- Vehicle feedback: history trail + submission form, shown
+     inside the drill-down modal only when it's viewing exactly one
+     vehicle (a plate was passed to openDrillDown). ---- */
+  #drill-feedback-section { padding:20px 22px; border-top:1px solid var(--divider); display:flex; flex-direction:column; gap:22px; }
+  .drill-feedback-block h4 { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-tertiary);
+    font-weight:700; margin-bottom:12px; }
+  .feedback-entry { padding:11px 13px; border-radius:10px; background:var(--panel-bg); border:1px solid var(--divider); margin-bottom:8px; }
+  .feedback-entry:last-child { margin-bottom:0; }
+  .feedback-entry-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:5px; }
+  .feedback-entry-who { font-size:12px; font-weight:700; color:var(--text-primary); }
+  .feedback-entry-who .role-tag { font-weight:500; color:var(--text-tertiary); text-transform:capitalize; margin-left:4px; }
+  .feedback-entry-date { font-size:10.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; white-space:nowrap; }
+  .feedback-entry-comment { font-size:12.5px; color:var(--text-secondary); line-height:1.5; margin-bottom:6px; }
+  .feedback-entry-badge { display:inline-block; font-size:9.5px; font-weight:700; padding:2px 8px; border-radius:8px; text-transform:uppercase; letter-spacing:0.3px; }
+  .feedback-entry-badge.followup { background:var(--warning-surface); color:var(--warning); }
+  .feedback-entry-badge.known { background:var(--success-surface); color:var(--success); }
+  .feedback-empty, .feedback-loading { font-size:12.5px; color:var(--text-tertiary); padding:4px 0; }
+
+  .ff-row { margin-bottom:12px; }
+  .ff-row label { display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px; }
+  .ff-row input, .ff-row textarea { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
+    padding:9px 12px; border-radius:9px; font-size:13px; font-family:inherit; resize:vertical; }
+  .ff-row input:focus, .ff-row textarea:focus { outline:none; border-color:var(--primary); }
+  .ff-toggle { display:flex; gap:8px; }
+  .ff-toggle-btn { flex:1; padding:10px; border-radius:9px; border:1px solid var(--border); background:var(--hover-surface);
+    color:var(--text-secondary); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .ff-toggle-btn.selected[data-value="true"] { background:var(--warning-surface); border-color:var(--warning); color:var(--warning); }
+  .ff-toggle-btn.selected[data-value="false"] { background:var(--success-surface); border-color:var(--success); color:var(--success); }
+  .ff-msg { font-size:12px; margin-top:10px; min-height:16px; }
+  .ff-msg.ok { color:var(--success); }
+  .ff-msg.err { color:var(--danger); }
+  .ff-note { font-size:11px; color:var(--text-tertiary); margin-top:10px; font-style:italic; line-height:1.5; }
+
   .icon-btn { position:relative; background:var(--hover-surface); border:1px solid var(--border); border-radius:12px;
     width:34px; height:34px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-secondary);
     transition:color 0.15s, transform 0.12s, border-color 0.15s; }
@@ -627,6 +660,12 @@
           <span>Healthy Fleet</span><span class="nav-count good">0</span>
         </button>
 {% endif %}
+        {% if 'p-known' in allowed_panels %}
+<button class="nav-item" data-panel="p-known" data-label="Known Issues">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M12 22c5.5-2 8-6.5 8-11V5l-8-3-8 3v6c0 4.5 2.5 9 8 11z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>Known Issues</span><span class="nav-count">0</span>
+        </button>
+{% endif %}
         {% if 'p-settings' in allowed_panels %}
 <button class="nav-item" data-panel="p-settings" data-label="Settings">
           <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -725,6 +764,35 @@
       </div>
       <div class="drill-body">
         <table id="drill-table"></table>
+        <div id="drill-feedback-section" style="display:none">
+          <div class="drill-feedback-block">
+            <h4>Feedback History</h4>
+            <div id="drill-feedback-history"></div>
+          </div>
+          <div class="drill-feedback-block">
+            <h4>Add Feedback</h4>
+            <form id="drill-feedback-form">
+              <div class="ff-row">
+                <label for="ff-name">Your name</label>
+                <input type="text" id="ff-name" placeholder="Who's reporting this?" required>
+              </div>
+              <div class="ff-row">
+                <label for="ff-comment">Comment</label>
+                <textarea id="ff-comment" rows="3" placeholder="What's the situation with this vehicle?" required></textarea>
+              </div>
+              <div class="ff-row">
+                <label>Does this need technician follow-up?</label>
+                <div class="ff-toggle">
+                  <button type="button" class="ff-toggle-btn" data-value="true">Yes &mdash; needs follow-up</button>
+                  <button type="button" class="ff-toggle-btn" data-value="false">No &mdash; known issue</button>
+                </div>
+              </div>
+              <button type="submit" class="btn-primary" id="ff-submit">Submit Feedback</button>
+              <div class="ff-msg" id="ff-msg"></div>
+            </form>
+            <div class="ff-note">"No follow-up needed" moves this asset out of Critical/Pending into Known Issues on the next data refresh, not immediately.</div>
+          </div>
+        </div>
       </div>
       <div class="drill-foot" id="drill-foot"></div>
     </div>
@@ -929,6 +997,16 @@
       </section>
 {% endif %}
 
+      {% if 'p-known' in allowed_panels %}
+<section id="p-known" class="panel">
+        <div class="grid-toolbar"><h3>Known Issues</h3><span class="row-count" id="known-count"></span></div>
+        <div class="callout muted" style="margin-bottom:var(--sp-2)">
+          Assets a client or technician has explicitly marked as "no follow-up needed" - a known, explained reason (accident, sold, written off...), not an active fault. Excluded from Critical/Pending and from the escalation counts. Click a row for the full record and comment trail.
+        </div>
+        <div class="table-wrap"><table id="known-table"></table></div>
+      </section>
+{% endif %}
+
       {% if 'p-settings' in allowed_panels %}
 <section id="p-settings" class="panel">
         <div class="panel-card">
@@ -1081,6 +1159,15 @@ async function boot() {
 
     renderEverything();
 
+    // Backup for a missed Apps Script trigger: fire-and-forget, never
+    // awaited, and any failure here is silently swallowed - this must
+    // never be able to break the dashboard itself just because the
+    // staleness check couldn't reach the server. Staleness and the
+    // cross-process trigger lock are both decided server-side (see
+    // /api/refresh-if-stale in app.py), this is just the "someone
+    // should ask" trigger.
+    fetch('/api/refresh-if-stale', { method: 'POST' }).catch(() => {});
+
     if (!sessionInfo.panels.includes('p-exec')) {
       const firstAllowed = document.querySelector('[data-panel="' + sessionInfo.panels[0] + '"]');
       if (firstAllowed) firstAllowed.click();
@@ -1182,6 +1269,7 @@ const PANEL_SUBS = {
   'p-priority': 'Integrity issues confirmed by tampering evidence', 'p-tsummary': 'Location-continuity analysis overview',
   'p-tconfirmed': 'Location gap plus a power event logged', 'p-tunconfirmed': 'Location gap, no power event, needs a field check',
   'p-tquality': 'Excluded for null GPS fix',
+  'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
 };
 let ALLOWED_PANELS = null;
 
@@ -1227,6 +1315,7 @@ const TOUR_PANELS_ALL = [
   {% if 'p-tsummary' in allowed_panels %}['p-tsummary', 'Tampering Summary'],{% endif %}
   {% if 'p-tconfirmed' in allowed_panels %}['p-tconfirmed', 'Confirmed Tampering Cases'],{% endif %}
   {% if 'p-healthy' in allowed_panels %}['p-healthy', 'Healthy Fleet'],{% endif %}
+  {% if 'p-known' in allowed_panels %}['p-known', 'Known Issues'],{% endif %}
 ];
 // Restricted to whatever this role is actually allowed to open, so
 // auto-tour can never surface a panel the sidebar itself is hiding.
@@ -1441,6 +1530,7 @@ const NAV_COUNT_BY_PANEL = {
   'p-tconfirmed': () => DATA.tamperConfirmed.length,
   'p-tunconfirmed': () => DATA.tamperUnconfirmed.length,
   'p-tquality': () => DATA.qualityLog.length,
+  'p-known': () => (DATA.knownIssues || []).length,
 };
 document.querySelectorAll('.nav-item[data-panel]').forEach(btn => {
   const getCount = NAV_COUNT_BY_PANEL[btn.dataset.panel];
@@ -1595,7 +1685,7 @@ function cellHTML(c, r) {
 // the same cellHTML()/pillFor() rendering the main tables use, so a
 // drill-down never shows a different shape of truth than the table it
 // came from. footLink (optional) lets the user jump to the full panel. ----
-function openDrillDown(title, subtitle, columns, rows, footLink) {
+function openDrillDown(title, subtitle, columns, rows, footLink, plate) {
   document.getElementById('drill-title').textContent = title;
   document.getElementById('drill-subtitle').textContent = subtitle;
   const table = document.getElementById('drill-table');
@@ -1615,14 +1705,148 @@ function openDrillDown(title, subtitle, columns, rows, footLink) {
     const targetBtn = document.querySelector('.nav-item[data-panel="' + footLink.panel + '"]');
     if (targetBtn) targetBtn.click();
   });
+
+  const feedbackSection = document.getElementById('drill-feedback-section');
+  if (plate) {
+    feedbackSection.style.display = '';
+    loadFeedbackForVehicle(plate);
+  } else {
+    feedbackSection.style.display = 'none';
+  }
+
   document.getElementById('drill-backdrop').classList.add('open');
 }
+
+// ---- Vehicle feedback: history trail (fetched fresh every open, it's
+// the one part of this modal that can change between opens without a
+// full dashboard refresh) + a submission form wired to POST
+// /api/feedback. Both client and technician/admin can submit; this is
+// a two-way log, not a one-way form. ----
+function _feedbackBadgeHTML(entry) {
+  if (entry.requiresFollowup === true) return '<span class="feedback-entry-badge followup">Needs Follow-up</span>';
+  if (entry.requiresFollowup === false) return '<span class="feedback-entry-badge known">Known Issue</span>';
+  return '';
+}
+function loadFeedbackForVehicle(plate, resetForm) {
+  if (resetForm === undefined) resetForm = true;
+  const historyEl = document.getElementById('drill-feedback-history');
+  historyEl.innerHTML = '<div class="feedback-loading">Loading history&hellip;</div>';
+
+  const form = document.getElementById('drill-feedback-form');
+  form.dataset.plate = plate;
+  // resetForm=false when this is just refreshing the history right
+  // after a successful submit (see the submit handler below) - wiping
+  // the just-set "Feedback saved." message here would undo it before
+  // the user ever sees it.
+  if (resetForm) {
+    document.getElementById('ff-comment').value = '';
+    const usernameDisplay = document.getElementById('username-display');
+    document.getElementById('ff-name').value = usernameDisplay ? usernameDisplay.textContent.split(' (')[0] : '';
+    document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
+    document.getElementById('ff-msg').textContent = '';
+    document.getElementById('ff-msg').className = 'ff-msg';
+  }
+
+  fetch('/api/feedback-history/' + encodeURIComponent(plate))
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+    .then(data => {
+      const history = data.history || [];
+      if (!history.length) {
+        historyEl.innerHTML = '<div class="feedback-empty">No feedback on file for this vehicle yet.</div>';
+        return;
+      }
+      historyEl.innerHTML = history.slice().reverse().map(h =>
+        '<div class="feedback-entry">' +
+          '<div class="feedback-entry-head">' +
+            '<span class="feedback-entry-who">' + escapeHTML(h.addedBy || 'Unknown') +
+              (h.role ? '<span class="role-tag">(' + escapeHTML(h.role) + ')</span>' : '') + '</span>' +
+            '<span class="feedback-entry-date">' + escapeHTML(h.date || '') + '</span>' +
+          '</div>' +
+          '<div class="feedback-entry-comment">' + escapeHTML(h.comment) + '</div>' +
+          _feedbackBadgeHTML(h) +
+        '</div>'
+      ).join('');
+    })
+    .catch(() => {
+      historyEl.innerHTML = '<div class="feedback-empty">Could not load feedback history (Sheets may not be configured yet).</div>';
+    });
+}
+document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+  });
+});
+document.getElementById('drill-feedback-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const plate = form.dataset.plate;
+  const selected = document.querySelector('.ff-toggle-btn.selected');
+  const msgEl = document.getElementById('ff-msg');
+  if (!selected) {
+    msgEl.textContent = 'Choose whether this needs follow-up or not.';
+    msgEl.className = 'ff-msg err';
+    return;
+  }
+  const submitBtn = document.getElementById('ff-submit');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting…';
+  fetch('/api/feedback', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      plate: plate,
+      comment: document.getElementById('ff-comment').value.trim(),
+      reportedBy: document.getElementById('ff-name').value.trim(),
+      requiresFollowup: selected.dataset.value === 'true',
+    }),
+  })
+    .then(r => r.json().then(body => ({ok: r.ok, body})))
+    .then(({ok, body}) => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Feedback';
+      if (!ok) {
+        msgEl.textContent = body.error || 'Could not submit feedback.';
+        msgEl.className = 'ff-msg err';
+        return;
+      }
+      msgEl.textContent = 'Feedback saved.';
+      msgEl.className = 'ff-msg ok';
+      document.getElementById('ff-comment').value = '';
+      document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
+      loadFeedbackForVehicle(plate, false);
+    })
+    .catch(() => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Feedback';
+      msgEl.textContent = 'Could not reach the server.';
+      msgEl.className = 'ff-msg err';
+    });
+});
 function closeDrillDown() { document.getElementById('drill-backdrop').classList.remove('open'); }
 document.getElementById('drill-close').addEventListener('click', closeDrillDown);
 document.getElementById('drill-backdrop').addEventListener('click', (e) => {
   if (e.target.id === 'drill-backdrop') closeDrillDown();
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrillDown(); });
+
+// Every row shape in this app (integrity rows, tamper rows, quality
+// rows) carries a "plate" field - click any table row anywhere to
+// drill into that exact vehicle/case, reusing whatever columns the
+// table itself already uses. Settings/SIMPLE_COLS rows have no plate,
+// so they're naturally skipped, nothing special-cased here.
+function _wireRowClicks(table, data, columns) {
+  if (!data.length || !('plate' in data[0])) return;
+  const trs = table.querySelectorAll('tbody tr');
+  trs.forEach((tr, i) => {
+    const row = data[i];
+    if (!row || !row.plate) return;
+    tr.style.cursor = 'pointer';
+    tr.title = 'Click for the full record and feedback history';
+    tr.addEventListener('click', () => {
+      openDrillDown(row.plate, 'Full record.', columns, [row], null, row.plate);
+    });
+  });
+}
 
 function renderTable(tableId, rows, columns, countElId) {
   const table = document.getElementById(tableId);
@@ -1651,6 +1875,7 @@ function renderTable(tableId, rows, columns, countElId) {
         draw(sorted);
       });
     });
+    _wireRowClicks(table, data, columns);
   }
   draw(rows);
   table._rows = rows; table._columns = columns;
@@ -1668,6 +1893,7 @@ document.getElementById('global-search').addEventListener('input', (e) => {
   let thead = '<thead><tr>' + cols.map(c => '<th data-key="' + c.key + '">' + c.label + '</th>').join('') + '</tr></thead>';
   let tbody = '<tbody>' + filtered.map(r => '<tr>' + cols.map(c => cellHTML(c, r)).join('') + '</tr>').join('') + '</tbody>';
   table.innerHTML = thead + tbody;
+  _wireRowClicks(table, filtered, cols);
 });
 
 // ---- Column definitions (identical to before) ----
@@ -1711,6 +1937,11 @@ const QUALITY_COLS = [
   {key:'arrivalDate', label:'Arrival Date'}, {key:'arrivalTime', label:'Arrival Time'}, {key:'rawEnd', label:'Raw End Coordinate'},
   {key:'nextDate', label:'Next Departure Date'}, {key:'nextTime', label:'Next Departure Time'}, {key:'rawStart', label:'Raw Start Coordinate'},
 ];
+const KNOWN_ISSUE_COLS = [
+  {key:'plate', label:'Plate'}, {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Last Position Time'},
+  {key:'feedback', label:'Reported Reason'}, {key:'reportedBy', label:'Reported By'}, {key:'feedbackDate', label:'Reported On'},
+  {key:'location', label:'Last Known Location'},
+];
 const SIMPLE_COLS = [{key:'plate', label:'Plate'}, {key:'status', label:'Current Status'}];
 const SETTINGS_COLS = [{key:'setting', label:'Setting'}, {key:'value', label:'Value Used For This Report'}];
 
@@ -1720,6 +1951,7 @@ renderTable('critical-table', DATA.critical, roleIntegrityCols, 'critical-count'
 renderTable('pending-table', DATA.pending, roleIntegrityCols, 'pending-count');
 renderTable('border-table', DATA.border, INTEGRITY_COLS, 'border-count');
 renderTable('healthy-table', DATA.healthy, HEALTHY_COLS, 'healthy-count');
+renderTable('known-table', DATA.knownIssues || [], KNOWN_ISSUE_COLS, 'known-count');
 renderTable('priority-table', DATA.doubleFlagged, PRIORITY_COLS);
 renderTable('tconfirmed-table', DATA.tamperConfirmed, TAMPER_COLS, 'tconfirmed-count');
 renderTable('tunconfirmed-table', DATA.tamperUnconfirmed, TAMPER_COLS, 'tunconfirmed-count');
@@ -1911,7 +2143,7 @@ document.querySelectorAll('#critical-cards .asset-card').forEach((cardEl, i) => 
   cardEl.addEventListener('click', () => {
     const r = DATA.criticalCards[i];
     const footLink = document.querySelector('.nav-item[data-panel="p-critical"]') ? {label: 'View Critical Assets', panel: 'p-critical'} : null;
-    openDrillDown(r.plate, 'Full record for this asset (' + r.severity + ').', roleIntegrityCols, [r], footLink);
+    openDrillDown(r.plate, 'Full record for this asset (' + r.severity + ').', roleIntegrityCols, [r], footLink, r.plate);
   });
 });
 
@@ -1941,7 +2173,7 @@ document.querySelectorAll('#tamper-cards .route-card').forEach((cardEl, i) => {
   cardEl.addEventListener('click', () => {
     const c = DATA.tamperCards[i];
     const footLink = document.querySelector('.nav-item[data-panel="p-tconfirmed"]') ? {label: 'View Confirmed Cases', panel: 'p-tconfirmed'} : null;
-    openDrillDown(c.Plate, 'Full confirmed tampering case (' + c.DistanceKm + ' km gap).', TAMPER_COLS, [tamperCardToRow(c)], footLink);
+    openDrillDown(c.Plate, 'Full confirmed tampering case (' + c.DistanceKm + ' km gap).', TAMPER_COLS, [tamperCardToRow(c)], footLink, c.Plate);
   });
 });
 

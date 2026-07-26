@@ -27,21 +27,31 @@ import os
 import json
 from datetime import datetime
 
-FEEDBACK_HEADERS = ["Plate", "Comment", "Status", "DateAdded", "AddedBy"]
+FEEDBACK_HEADERS = ["Plate", "Comment", "RequiresFollowup", "Status", "DateAdded", "AddedBy", "Role"]
 
 CLOSED_KEYWORDS = ("sold", "decommission", "written off", "write off", "scrapped")
 IGNORE_KEYWORDS = ("monitoring", "fine", "no action", "parked", "ignore")
 PENDING_KEYWORDS = ("workshop", "garage", "repair", "removed", "awaiting")
 
 
-def infer_status(comment: str) -> str:
+def infer_status(comment: str, requires_followup=None) -> str:
+    """
+    RequiresFollowup (an explicit choice made when the feedback is
+    submitted, see add_feedback()) is the primary signal now, not
+    guesswork from wording. Keyword inference only fills in a more
+    specific label, and only ever runs on top of an explicit "yes".
+    """
     text = (comment or "").lower()
+    if requires_followup is False:
+        return "Known Issue - No Follow-up Needed"
     if any(k in text for k in CLOSED_KEYWORDS):
         return "Closed - Do Not Chase"
     if any(k in text for k in IGNORE_KEYWORDS):
         return "Acknowledged - Monitoring"
     if any(k in text for k in PENDING_KEYWORDS):
         return "Pending - In Workshop"
+    if requires_followup is True:
+        return "Follow-up Requested"
     return "Noted"
 
 
@@ -82,13 +92,42 @@ def _get_or_create_feedback_tab(client, sheet_id):
     except Exception:
         ws = sh.add_worksheet(title="Feedback", rows=1000, cols=len(FEEDBACK_HEADERS))
         ws.append_row(FEEDBACK_HEADERS)
+        return ws
+    # Migrate an older header (from before RequiresFollowup/Role existed)
+    # to the current schema. Only ever touches row 1 - existing data rows
+    # are never rewritten, older rows just read back with those two
+    # fields blank (_parse_bool below treats that as "not specified").
+    if ws.row_values(1) != FEEDBACK_HEADERS:
+        ws.update("A1", [FEEDBACK_HEADERS])
     return ws
+
+
+def _parse_bool(value):
+    text = str(value).strip().lower()
+    if text in ("yes", "true", "1"):
+        return True
+    if text in ("no", "false", "0"):
+        return False
+    return None
+
+
+def _parse_date(date_str):
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    return datetime.min
 
 
 def load_feedback():
     """
-    Returns {normalized_plate: {"comment":..., "status":..., "date":...}}
-    exactly like the old CSV version, most recent comment per plate wins.
+    Returns {normalized_plate: {"latest": {...}, "history": [...]}}.
+    The Sheet is append-only (rows are never edited or deleted here), so
+    "history" is the complete, permanent trail for that plate, oldest
+    first - "latest" is just history[-1], kept separate so
+    classify_fleet() and the dashboard's "Customer Feedback" column
+    don't each need to know how to find the newest entry themselves.
     """
     import sys
     import os
@@ -99,32 +138,36 @@ def load_feedback():
     ws = _get_or_create_feedback_tab(client, sheet_id)
     rows = ws.get_all_records()  # list of dicts keyed by header row
 
-    feedback = {}
+    by_plate = {}
     for row in rows:
         plate = normalize_plate(str(row.get("Plate", "")))
         if not plate:
             continue
         comment = str(row.get("Comment", "")).strip()
-        date_str = str(row.get("DateAdded", "")).strip()
-        try:
-            date_added = datetime.strptime(date_str, "%d/%m/%Y") if date_str else datetime.min
-        except ValueError:
-            date_added = datetime.min
-        existing = feedback.get(plate)
-        if existing is None or date_added >= existing["date"]:
-            feedback[plate] = {
-                "comment": comment,
-                "status": row.get("Status") or infer_status(comment),
-                "date": date_added,
-            }
-    return feedback
+        requires_followup = _parse_bool(row.get("RequiresFollowup"))
+        entry = {
+            "comment": comment,
+            "status": row.get("Status") or infer_status(comment, requires_followup),
+            "requiresFollowup": requires_followup,
+            "date": _parse_date(str(row.get("DateAdded", "")).strip()),
+            "addedBy": str(row.get("AddedBy", "")).strip(),
+            "role": str(row.get("Role", "")).strip(),
+        }
+        by_plate.setdefault(plate, []).append(entry)
+
+    result = {}
+    for plate, entries in by_plate.items():
+        entries.sort(key=lambda e: e["date"])
+        result[plate] = {"latest": entries[-1], "history": entries}
+    return result
 
 
-def add_feedback(plate: str, comment: str, added_by: str = ""):
+def add_feedback(plate: str, comment: str, added_by: str = "", requires_followup=None, role: str = ""):
     """Called from the dashboard's POST /api/feedback route."""
     client, sheet_id = _get_client()
     ws = _get_or_create_feedback_tab(client, sheet_id)
+    followup_text = "" if requires_followup is None else ("Yes" if requires_followup else "No")
     ws.append_row([
-        plate, comment, infer_status(comment),
-        datetime.now().strftime("%d/%m/%Y"), added_by,
+        plate, comment, followup_text, infer_status(comment, requires_followup),
+        datetime.now().strftime("%d/%m/%Y %H:%M"), added_by, role,
     ])

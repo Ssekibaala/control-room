@@ -56,6 +56,8 @@ def _integrity_row(plate, info):
         "border": "Yes" if info["border_flag"] else "No",
         "borderDetail": f"{border[0]} ({border[1]}) {border[2]}km" if border else "",
         "feedback": f'{fb["status"]}: {fb["comment"]}' if fb else "",
+        "reportedBy": fb.get("addedBy", "") if fb else "",
+        "feedbackDate": fb["date"].strftime("%d %b %Y, %H:%M") if fb and fb.get("date") else "",
         "action": info["action"], "reasons": "; ".join(info["reasons"]),
         "location": info.get("last_location") or "",
     }
@@ -96,6 +98,11 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
     online = [p for p, v in results.items() if v["status"] == "Online"]
     escalations = [p for p, v in results.items() if v["status"] == "Technical Escalation"]
     pending = [p for p, v in results.items() if v["status"] == "Pending Customer Confirmation"]
+    # An explicit "no follow-up needed" from the client (classifier.py's
+    # known_issue check) already keeps these out of escalations/pending
+    # by construction (their status is "Known Issue", not "Technical
+    # Escalation"), so they never inflate the active-work counts below.
+    known_issues = [p for p, v in results.items() if v["status"] == "Known Issue"]
     border_plates = [p for p, v in results.items() if v["border_flag"]]
 
     sev_counts = {"Critical - Long-term Fault": 0, "High - Escalate This Week": 0, "Elevated - Monitor": 0}
@@ -137,6 +144,7 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
             "tamperConfirmed": len(confirmed), "tamperUnconfirmed": len(unconfirmed),
             "tamperGapsChecked": tamper_summary.get("gaps_checked", 0), "nullGpsExcluded": tamper_summary.get("null_gps_excluded", 0),
             "doubleFlagged": len(double_flagged), "recovered": len(recovered), "newlyOffline": len(newly_offline),
+            "knownIssues": len(known_issues),
         },
         "sevCounts": sev_counts,
         "severityBands": severity_bands,
@@ -148,6 +156,7 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
         "pending": [_integrity_row(p, results[p]) for p in sorted(pending, key=lambda p: -results[p]["days_silent"])],
         "border": [_integrity_row(p, results[p]) for p in border_plates],
         "healthy": [_integrity_row(p, results[p]) for p in sorted(online)],
+        "knownIssues": [_integrity_row(p, results[p]) for p in sorted(known_issues, key=lambda p: -results[p]["days_silent"])],
         "full": [_integrity_row(p, results[p]) for p in sorted(results.keys(), key=lambda p: -results[p]["days_silent"])],
         "recoveredList": [{"plate": p, "status": "Online"} for p in recovered],
         "newlyOfflineList": [{"plate": p, "status": results.get(p, {}).get("status", "")} for p in newly_offline],

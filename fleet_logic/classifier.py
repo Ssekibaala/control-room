@@ -65,6 +65,9 @@ def _investigation_reasons(days_silent, platform_status, feedback, has_border_ri
 
 
 def _recommended_action(status, days_silent, has_border_risk, feedback, settings):
+    if status == "Known Issue":
+        who = (feedback or {}).get("addedBy") or "client"
+        return f"No action needed - {who} confirmed this is a known issue, no follow-up requested"
     if feedback and feedback["status"] == "Closed - Do Not Chase":
         return "Close - customer confirmed, no action needed"
     if feedback and feedback["status"] == "Pending - In Workshop":
@@ -108,7 +111,11 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
         stalest = min((r.last_report_time for r in useful_reports if r.last_report_time), default=None)
         days_silent = round((now - stalest).total_seconds() / 86400, 1) if stalest else None
 
-        fb = feedback.get(plate)
+        # feedback is {plate: {"latest": {...}, "history": [...]}} (see
+        # sheets_store.load_feedback()); classification only ever looks
+        # at the latest entry, the full trail is a dashboard concern.
+        fb_entry = feedback.get(plate)
+        fb = fb_entry["latest"] if fb_entry else None
         is_risk, risk_detail = border_risk(
             is_offline=all_offline,
             days_offline=days_silent or 0,
@@ -138,6 +145,19 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
         else:
             severity = "Awaiting Confirmation"
             status = "Pending Customer Confirmation"
+
+        # An explicit "no follow-up needed" (a deliberate choice made
+        # when the feedback was submitted, not guessed from wording -
+        # see sheets_store.infer_status()) pulls this out of the active
+        # work queue entirely, however long it's been offline. A known,
+        # explained absence (accident, sold, written off...) isn't a
+        # fault to chase. "requires follow-up = yes" leaves the normal
+        # classification untouched, the feedback just rides along as
+        # context (see result["feedback"] below).
+        known_issue = fb is not None and fb.get("requiresFollowup") is False
+        if known_issue:
+            status, severity = "Known Issue", "No Follow-up Needed"
+            is_risk, risk_detail = False, None  # explained, not a genuine border-crossing risk to chase
 
         action = _recommended_action(status, days_silent, is_risk, fb, settings)
         reasons = _investigation_reasons(days_silent, platform_status, fb, is_risk, len(offline_platforms))

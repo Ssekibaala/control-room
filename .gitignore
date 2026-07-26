@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .env
 data/_incoming/
+data/_refresh_lock.json
 .claude/
 
 # database/users.json and data/fleet_today.json are intentionally
