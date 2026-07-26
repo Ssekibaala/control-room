@@ -102,6 +102,71 @@ def _get_or_create_feedback_tab(client, sheet_id):
     return ws
 
 
+USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "CreatedAt"]
+
+
+def _get_or_create_users_tab(client, sheet_id):
+    sh = client.open_by_key(sheet_id)
+    try:
+        ws = sh.worksheet("Users")
+    except Exception:
+        ws = sh.add_worksheet(title="Users", rows=200, cols=len(USER_HEADERS))
+        ws.append_row(USER_HEADERS)
+        return ws
+    if ws.row_values(1) != USER_HEADERS:
+        ws.update("A1", [USER_HEADERS])
+    return ws
+
+
+def load_users_sheet():
+    """
+    Every account, keyed by username. Accounts live here rather than in
+    a local JSON file because Render's filesystem is ephemeral: every
+    deploy re-clones the repo, so a file-backed account list silently
+    reverts to whatever was committed and every last-login stamp is
+    lost. The Sheet survives deploys, restarts and redeploys.
+    """
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    result = {}
+    for row in ws.get_all_records():
+        username = str(row.get("Username", "")).strip()
+        if not username:
+            continue
+        clients_raw = str(row.get("Clients", "")).strip()
+        result[username] = {
+            "password_hash": str(row.get("PasswordHash", "")).strip(),
+            "role": str(row.get("Role", "")).strip(),
+            "clients": [c.strip() for c in clients_raw.split(",") if c.strip()],
+            "last_login": str(row.get("LastLogin", "")).strip(),
+            "created_at": str(row.get("CreatedAt", "")).strip(),
+        }
+    return result
+
+
+def add_user_sheet(username, password_hash, role, clients=None):
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    ws.append_row([
+        username, password_hash, role, ", ".join(clients or []), "",
+        datetime.now().strftime("%d/%m/%Y %H:%M"),
+    ])
+
+
+def record_login_sheet(username):
+    """
+    Stamps LastLogin in place for one account. Updates only that single
+    cell, so a concurrent write to another user's row can't clobber it.
+    """
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return
+    ws.update_cell(cell.row, USER_HEADERS.index("LastLogin") + 1,
+                   datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+
 def _parse_bool(value):
     text = str(value).strip().lower()
     if text in ("yes", "true", "1"):

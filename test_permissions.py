@@ -13,9 +13,26 @@ def login(client, username, password):
     return client.post("/api/login", json={"username": username, "password": password})
 
 
+def _reset_role_matrix():
+    """Back to the shipped defaults. Run at BOTH ends of the suite: a
+    previous run that died mid-way (or a save made through the UI while
+    developing) leaves database/role_panels.json behind, and every
+    client-visibility assertion below is written against the defaults -
+    so without this the suite reports leaks that are really just
+    yesterday's settings."""
+    import os
+    import permissions as perms
+    path = os.path.join(os.path.dirname(__file__), "database", "role_panels.json")
+    if os.path.exists(path):
+        os.remove(path)
+    perms.PANEL_ACCESS.clear()
+    perms.PANEL_ACCESS.update(perms._build_panel_access())
+
+
 def run():
     client = app.test_client()
     failures = []
+    _reset_role_matrix()
 
     print("=== Wrong password is rejected ===")
     r = login(client, "justin", "wrong-password")
@@ -271,14 +288,8 @@ def run():
             failures.append(f"client can {label}")
     client.post("/api/logout")
 
-    # Leave the matrix exactly as it was found: back to shipped defaults.
-    import os
-    override_path = os.path.join(os.path.dirname(__file__), "database", "role_panels.json")
-    if os.path.exists(override_path):
-        os.remove(override_path)
-        perms.PANEL_ACCESS.clear()
-        perms.PANEL_ACCESS.update(perms._build_panel_access())
-        print("  (reset role matrix back to shipped defaults)")
+    _reset_role_matrix()
+    print("  (reset role matrix back to shipped defaults)")
 
     print()
     print("=== Logged out: no access at all ===")

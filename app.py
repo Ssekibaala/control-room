@@ -107,14 +107,22 @@ def api_list_users():
         "users": [
             {
                 "username": name,
-                "role": info["role"],
+                "role": info.get("role", ""),
+                # A user can be assigned more than one client, so this is
+                # always a list even when there's only one today.
+                "clients": info.get("clients", []),
                 # Blank for anyone who hasn't signed in since last-login
                 # tracking was added - the UI shows "Never" rather than
                 # inventing a date that was never recorded.
                 "lastLogin": info.get("last_login", ""),
+                "createdAt": info.get("created_at", ""),
             }
             for name, info in sorted(all_users.items())
         ],
+        # Tells the UI whether accounts are in the durable store or the
+        # ephemeral local fallback, so it can warn rather than quietly
+        # letting someone create accounts that a deploy will erase.
+        "durable": users_store._sheets_available(),
     })
 
 
@@ -135,6 +143,10 @@ def api_create_user():
     username = (body.get("username") or "").strip()
     role = (body.get("role") or "").strip()
     password = body.get("password") or ""
+    clients_raw = body.get("clients") or []
+    if isinstance(clients_raw, str):
+        clients_raw = [c.strip() for c in clients_raw.split(",")]
+    clients = [str(c).strip() for c in clients_raw if str(c).strip()]
 
     if not username or not role or not password:
         return jsonify({"error": "'username', 'role', and 'password' are all required"}), 400
@@ -145,8 +157,11 @@ def api_create_user():
     if username in users_store.load_users():
         return jsonify({"error": f"'{username}' already has an account"}), 409
 
-    users_store.add_user(username, role, password)
-    return jsonify({"username": username, "role": role}), 201
+    try:
+        users_store.add_user(username, role, password, clients)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the account: {e}"}), 503
+    return jsonify({"username": username, "role": role, "clients": clients}), 201
 
 
 @app.route("/api/role-panels", methods=["GET"])
@@ -453,6 +468,13 @@ def index():
         can_export_integrity=role in EXPORT_ACCESS["integrity_xlsx"],
         can_export_tampering=role in EXPORT_ACCESS["tampering_xlsx"],
         can_manage_users=role in MANAGE_USERS_ROLES,
+        # Built from the sheet ID rather than stored as a second env var,
+        # so there's only ever one place the spreadsheet is identified.
+        # Empty when Sheets isn't configured, and the button hides itself.
+        sheet_url=(
+            f"https://docs.google.com/spreadsheets/d/{os.environ['FEEDBACK_SHEET_ID']}/edit"
+            if os.environ.get("FEEDBACK_SHEET_ID") else ""
+        ),
     )
 
 

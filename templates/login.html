@@ -27,10 +27,30 @@
       radial-gradient(circle at 85% 92%, rgba(139,92,246,0.28), transparent 48%),
       linear-gradient(160deg, #0A0A12, #050507);
   }
+  /* Wallpaper: a route/telemetry map drawn in SVG rather than a stock
+     photo - it stays crisp at any size, adds no network request, and
+     is actually on-topic for a fleet product. Sits under the grid. */
+  .brand-wallpaper { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; opacity:0.5; }
+  .brand-wallpaper .route { fill:none; stroke-linecap:round; stroke-linejoin:round; }
+  .brand-wallpaper .route-dash { stroke-dasharray:5 11; animation:routeFlow 5s linear infinite; }
+  @keyframes routeFlow { to { stroke-dashoffset:-64; } }
+  .brand-wallpaper .node { animation:nodePulse 3.4s ease-in-out infinite; transform-box:fill-box; transform-origin:center; }
+  .brand-wallpaper .node:nth-of-type(2) { animation-delay:0.9s; }
+  .brand-wallpaper .node:nth-of-type(3) { animation-delay:1.8s; }
+  .brand-wallpaper .node:nth-of-type(4) { animation-delay:2.6s; }
+  @keyframes nodePulse { 0%,100%{opacity:0.35;transform:scale(1);} 50%{opacity:1;transform:scale(1.5);} }
   .brand-panel::before {
     content:""; position:absolute; inset:0; opacity:0.5; pointer-events:none;
     background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
     background-size:44px 44px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%, #000 40%, transparent 90%);
+  }
+  /* Glow pool behind the headline so text never sits on a busy line. */
+  .brand-panel::after {
+    content:""; position:absolute; left:-10%; top:28%; width:80%; height:52%; pointer-events:none;
+    background:radial-gradient(ellipse at center, rgba(5,5,10,0.92), transparent 68%);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .brand-wallpaper .route-dash, .brand-wallpaper .node { animation:none; }
   }
   .partner-badge { display:inline-flex; align-items:center; gap:9px; position:relative; z-index:1;
     background:#fff; border-radius:12px; padding:8px 16px 8px 10px; width:fit-content; margin-bottom:28px;
@@ -104,6 +124,34 @@
 <body>
 
 <div class="brand-panel">
+  <svg class="brand-wallpaper" viewBox="0 0 900 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="routeA" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#3B82F6" stop-opacity="0"/>
+        <stop offset="45%" stop-color="#3B82F6" stop-opacity="0.85"/>
+        <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="routeB" x1="1" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2DD4A7" stop-opacity="0"/>
+        <stop offset="50%" stop-color="#2DD4A7" stop-opacity="0.6"/>
+        <stop offset="100%" stop-color="#2DD4A7" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <g stroke="rgba(255,255,255,0.10)" stroke-width="1.1">
+      <path class="route" d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210"/>
+      <path class="route" d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490"/>
+      <path class="route" d="M120 -40 C 180 200, 90 380, 200 560 S 330 820, 300 940"/>
+      <path class="route" d="M640 -40 C 700 220, 590 400, 690 600 S 800 830, 760 940"/>
+    </g>
+    <path class="route route-dash" d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210"
+          stroke="url(#routeA)" stroke-width="2.4"/>
+    <path class="route route-dash" d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490"
+          stroke="url(#routeB)" stroke-width="2"/>
+    <circle class="node" cx="470" cy="280" r="4" fill="#3B82F6"/>
+    <circle class="node" cx="200" cy="560" r="3.4" fill="#8B5CF6"/>
+    <circle class="node" cx="690" cy="600" r="3.4" fill="#2DD4A7"/>
+    <circle class="node" cx="760" cy="180" r="3" fill="#3B82F6"/>
+  </svg>
   <div class="partner-badge">
     <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions">
     <div class="divider"></div>

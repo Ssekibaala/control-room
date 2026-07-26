@@ -114,6 +114,15 @@
   .brand-name { font-family:-apple-system,'Manrope'; font-weight:700; font-size:14px; white-space:nowrap; }
   .brand-sub { font-size:11px; color:var(--text-tertiary); white-space:nowrap; }
 
+  /* Teletrac mark sits on white so the logo's own colours stay true -
+     it's a third-party brand, not something to recolour to our theme. */
+  .powered-strip { display:flex; align-items:center; gap:10px; padding:10px var(--sp-2); border-bottom:1px solid var(--divider); }
+  .powered-logo { height:22px; width:auto; background:#fff; border-radius:6px; padding:3px 6px; flex-shrink:0; }
+  .powered-caption { font-size:10px; color:var(--text-tertiary); line-height:1.3; white-space:nowrap; }
+  .sidebar.collapsed .powered-strip { justify-content:center; padding:10px 6px; }
+  .sidebar.collapsed .powered-caption { display:none; }
+  .sidebar.collapsed .powered-logo { height:18px; padding:2px 3px; }
+
   .quick-stats { display:flex; justify-content:space-around; padding:var(--sp-2); border-bottom:1px solid var(--divider); }
   .qs-item { display:flex; flex-direction:column; align-items:center; gap:2px; }
   .qs-num { font-family:'JetBrains Mono'; font-weight:700; font-size:17px; color:var(--text-primary); }
@@ -269,7 +278,15 @@
 
   /* ---- Manage Users panel ---- */
   .user-form-submit { width:100%; margin-top:4px; }
-  .users-list-row { display:grid; grid-template-columns:1fr 160px 110px; align-items:center; gap:12px;
+  .ff-optional { font-weight:500; font-size:10.5px; color:var(--text-tertiary); text-transform:none; letter-spacing:0; }
+  .ff-hint { font-size:10.5px; color:var(--text-tertiary); margin-top:5px; line-height:1.45; }
+  .u-clients { display:flex; flex-wrap:wrap; gap:5px; }
+  .client-tag { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:6px;
+    background:var(--hover-surface); border:1px solid var(--border); color:var(--text-secondary); }
+  .u-none { font-size:11px; color:var(--text-tertiary); font-style:italic; }
+  .sheet-link { text-decoration:none; width:fit-content; }
+  .btn-icon-trail { margin-right:0; margin-left:6px; opacity:0.6; }
+  .users-list-row { display:grid; grid-template-columns:1fr 1fr 150px 110px; align-items:center; gap:12px;
     padding:11px 4px; border-bottom:1px solid var(--divider); }
   .users-list-row:last-child { border-bottom:none; }
   .users-list-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
@@ -426,36 +443,60 @@
   .chart-subhead { display:block; font-size:11px; font-weight:500; color:var(--text-tertiary); margin-top:3px; }
 
   /* ---- Tampering Summary: severity-band comparison rows ---- */
+  /* .chart-body centres a single chart as a flex row; these two cards
+     stack several blocks instead, so they need column flow or the
+     headline and the bars end up side by side. */
   .tamper-chart-card { min-height:0; }
-  .sevband-chart { width:100%; display:flex; flex-direction:column; gap:18px; }
-  .sevband-row { display:grid; grid-template-columns:130px 1fr; gap:16px; align-items:center;
-    padding:12px; border-radius:12px; border:1px solid transparent; cursor:pointer;
-    transition:background-color 0.15s, border-color 0.15s, transform 0.1s; }
+  .tamper-chart-card .chart-body { flex-direction:column; align-items:stretch; justify-content:flex-start; }
+  /* Headline: the one number and the proven share, read before anything
+     else on the card. */
+  .sevband-summary { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 14px; margin-bottom:var(--sp-3);
+    padding-bottom:var(--sp-2); border-bottom:1px solid var(--divider); }
+  .sevband-headline { display:flex; align-items:baseline; gap:8px; }
+  .sevband-headline-num { font-family:'JetBrains Mono'; font-size:30px; font-weight:700; color:var(--text-primary); line-height:1; }
+  .sevband-headline-label { font-size:11.5px; color:var(--text-tertiary); }
+  .sevband-headline-split { display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--text-secondary); white-space:nowrap; }
+  .sevband-proven { color:var(--text-primary); font-weight:600; }
+  .sevband-sep { color:var(--text-tertiary); }
+  .sevband-pctpill { font-family:'JetBrains Mono'; font-size:10.5px; font-weight:700; padding:2.5px 9px;
+    border-radius:20px; background:var(--danger-surface); color:var(--danger); margin-left:4px; }
+
+  /* One bar per band: proven and suspected are segments of the same
+     track, so the split reads as a proportion rather than two lengths
+     the eye has to compare. Track width encodes band volume. */
+  .sevband-chart { width:100%; display:flex; flex-direction:column; gap:6px; }
+  .sevband-row { display:flex; flex-direction:column; gap:8px; padding:11px 12px; border-radius:12px;
+    border:1px solid transparent; cursor:pointer; transition:background-color 0.15s, border-color 0.15s, transform 0.1s; }
   .sevband-row:hover { background:var(--hover-surface); border-color:var(--border); }
-  .sevband-row:active { transform:scale(0.99); }
-  .sevband-label { display:flex; flex-direction:column; gap:3px; }
-  .sevband-dot { width:9px; height:9px; border-radius:3px; margin-bottom:2px; }
+  .sevband-row:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+  .sevband-row:active { transform:scale(0.995); }
+  .sevband-top { display:flex; align-items:center; gap:8px; }
+  .sevband-dot { width:9px; height:9px; border-radius:3px; flex-shrink:0; }
   .sevband-name { font-size:13px; font-weight:700; color:var(--text-primary); }
-  .sevband-rule { font-size:10.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; }
-  .sevband-bars { display:flex; flex-direction:column; gap:8px; }
-  .sevband-bar-line { display:grid; grid-template-columns:78px 1fr 34px; align-items:center; gap:10px; }
-  .sevband-tag { font-size:10px; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:0.4px; }
-  .sevband-track { background:var(--divider); border-radius:5px; height:9px; overflow:hidden; }
-  .sevband-fill { height:100%; border-radius:5px; transition:width 0.6s cubic-bezier(.16,1,.3,1); }
-  .sevband-fill.faded { opacity:0.4; }
-  .sevband-value { font-family:'JetBrains Mono'; font-size:12px; font-weight:700; text-align:right; }
+  .sevband-rule { font-size:10.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; white-space:nowrap; }
+  .sevband-total { margin-left:auto; font-family:'JetBrains Mono'; font-size:15px; font-weight:700; }
+  .sevband-track { display:flex; background:var(--divider); border-radius:5px; height:10px; overflow:hidden;
+    min-width:6%; transition:width 0.6s cubic-bezier(.16,1,.3,1); }
+  .sevband-seg { height:100%; transition:width 0.6s cubic-bezier(.16,1,.3,1); }
+  .sevband-seg.faded { opacity:0.28; }
+  .sevband-foot { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--text-tertiary); white-space:nowrap; }
+  .sevband-foot b { font-family:'JetBrains Mono'; font-weight:700; }
+  .sevband-foot-sep { opacity:0.5; }
   /* ---- Tampering Summary: evidence-behind-the-gaps breakdown ---- */
-  .evidence-block { margin-top:var(--sp-3); padding-top:var(--sp-3); border-top:1px solid var(--divider); }
-  .evidence-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
-    color:var(--text-tertiary); font-weight:600; margin-bottom:12px; }
+  /* Full-width card of its own: at half width the phrases wrapped three
+     words to a line, which is what made the old layout unreadable. */
+  .evidence-block { display:flex; flex-direction:column; }
   .evidence-stack { display:flex; height:10px; border-radius:5px; overflow:hidden; gap:2px; margin-bottom:14px; }
   .evidence-seg { height:100%; }
   .evidence-seg.danger, .evidence-dot.danger { background:var(--danger); }
   .evidence-seg.warning, .evidence-dot.warning { background:var(--warning); }
   .evidence-seg.muted, .evidence-dot.muted { background:var(--text-tertiary); opacity:0.45; }
-  .evidence-row { display:grid; grid-template-columns:10px 1fr 40px 40px; align-items:center; gap:10px; padding:6px 0; }
+  .evidence-row { display:grid; grid-template-columns:10px 1fr auto 44px; align-items:center; gap:12px;
+    padding:8px 8px; margin:0 -8px; border-radius:9px; cursor:pointer; transition:background-color 0.15s; }
+  .evidence-row:hover { background:var(--hover-surface); }
+  .evidence-row:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
   .evidence-dot { width:9px; height:9px; border-radius:3px; }
-  .evidence-label { font-size:12px; color:var(--text-primary); display:flex; flex-direction:column; gap:1px; }
+  .evidence-label { font-size:12px; color:var(--text-primary); display:flex; flex-direction:column; gap:1px; min-width:0; }
   .evidence-note { font-size:10.5px; color:var(--text-tertiary); }
   .evidence-count { font-family:'JetBrains Mono'; font-size:12.5px; font-weight:700; color:var(--text-primary); text-align:right; }
   .evidence-pct { font-family:'JetBrains Mono'; font-size:11px; color:var(--text-tertiary); text-align:right; }
@@ -738,6 +779,12 @@
       </div>
     </div>
 
+    <div class="powered-strip">
+      <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
+           alt="Teletrac Fleet Solutions" class="powered-logo">
+      <span class="powered-caption">Live data from Teletrac</span>
+    </div>
+
     <div class="quick-stats">
       <div class="qs-item"><span class="qs-num" id="qs-health">0%</span><span class="qs-label">Health</span></div>
       <div class="qs-item"><span class="qs-num" id="qs-total">0</span><span class="qs-label">Assets</span></div>
@@ -971,6 +1018,11 @@
               <option value="technician">Technician &mdash; full operational access, no settings</option>
               <option value="client">Client &mdash; fleet health &amp; feedback only</option>
             </select>
+          </div>
+          <div class="ff-row">
+            <label for="uf-clients">Client(s) <span class="ff-optional">optional</span></label>
+            <input type="text" id="uf-clients" placeholder="e.g. Globe Trotters, Acme Haulage" autocomplete="off">
+            <div class="ff-hint">Separate multiple clients with commas. Leave blank for whole-fleet access.</div>
           </div>
           <div class="ff-row">
             <label for="uf-password">Password</label>
@@ -1222,6 +1274,22 @@
           <table id="settings-table"></table>
           <p class="settings-note">Edit settings.ini next to the EXE and re-run to change these values. No code changes needed.</p>
         </div>
+        {% if sheet_url %}
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Data Store</h3>
+            <span class="chart-subhead">Accounts and every feedback comment live in this Google Sheet &mdash;
+              it survives redeploys, and Sheets keeps its own revision history.</span>
+          </div>
+          <a class="btn-secondary sheet-link" href="{{ sheet_url }}" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
+            Open the Google Sheet
+            <svg viewBox="0 0 24 24" class="btn-icon-inline btn-icon-trail"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
+          </a>
+          <p class="settings-note">Opens in a new tab. Anyone you want to read it directly still needs to be
+            shared on the Sheet itself &mdash; this button only saves you passing the link around.</p>
+        </div>
+        {% endif %}
       </section>
 {% endif %}
 
@@ -1231,6 +1299,11 @@
           Every account is assigned exactly one role, and that role decides what they can see &mdash; admin and
           technician get the full operational picture including tampering data, client sees fleet health and
           feedback only. Create accounts for your team here instead of needing shell access.
+        </div>
+        <div class="callout danger" id="users-storage-warning" style="display:none">
+          <strong>Accounts are not being saved durably.</strong> Google Sheets isn't configured, so accounts are
+          written to a local file that Render replaces on every deploy &mdash; anything created here will be lost.
+          Set <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and <code>FEEDBACK_SHEET_ID</code> to fix this.
         </div>
         <div class="panel-card">
           <div class="panel-card-head users-head">
@@ -1309,6 +1382,14 @@
             </div>
             <div class="chart-body" id="chart-topvehicles"></div>
           </div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Evidence Behind These Gaps</h3>
+            <span class="chart-subhead">What the power log shows for each flagged gap &mdash; the record that
+              separates a proven case from a suspected one. Click a row for those cases.</span>
+          </div>
+          <div id="chart-evidence"></div>
         </div>
         <div class="panel-card">
           <div class="panel-card-head"><h3>Method</h3></div>
@@ -1601,12 +1682,16 @@ const TOUR_PANELS_ALL = [
 // Restricted to whatever this role is actually allowed to open, so
 // auto-tour can never surface a panel the sidebar itself is hiding.
 const TOUR_PANELS = TOUR_PANELS_ALL.filter(([id]) => !ALLOWED_PANELS || ALLOWED_PANELS.includes(id));
-const SPEED_PRESETS = [0.5, 1, 1.5, 2];
-let speedIndex = 1; // start at 1x
-const BASE_PX_PER_SEC = 55;      // how fast content scrolls at 1x
-const MIN_DWELL_MS = 5000;       // shortest time on any panel, even with nothing to scroll
-const MAX_DWELL_MS = 22000;      // longest time on any one panel, even if content is very long
-const HOLD_AFTER_SCROLL_MS = 1800; // pause at the bottom before moving on
+// Starts slow on purpose: the tour is for reading, and speeding up is
+// one click away, whereas content that has already scrolled past can't
+// be got back without stopping the tour. 1x is the new baseline and the
+// presets run upward from it.
+const SPEED_PRESETS = [1, 1.5, 2, 3];
+let speedIndex = 0; // start at the slowest
+const BASE_PX_PER_SEC = 32;      // how fast content scrolls at 1x
+const MIN_DWELL_MS = 7500;       // shortest time on any panel, even with nothing to scroll
+const MAX_DWELL_MS = 30000;      // longest time on any one panel, even if content is very long
+const HOLD_AFTER_SCROLL_MS = 2600; // pause at the bottom before moving on
 
 let tourIndex = -1, tourTimer = null, tourRAF = null, isTouring = false;
 
@@ -1658,8 +1743,12 @@ function tourStep() {
   requestAnimationFrame(() => {
     const target = findScrollTarget(panelId);
     const speed = BASE_PX_PER_SEC * currentSpeed();
-    const scrollMs = target ? Math.min(Math.max((target.maxScroll / speed) * 1000, 0), MAX_DWELL_MS - HOLD_AFTER_SCROLL_MS) : 0;
-    const dwellMs = Math.max(MIN_DWELL_MS, scrollMs + HOLD_AFTER_SCROLL_MS);
+    // The floor and the end-pause scale with the speed setting too,
+    // otherwise a panel with nothing to scroll would sit for the same
+    // 7.5s at 3x as at 1x and the speed button would look broken.
+    const hold = HOLD_AFTER_SCROLL_MS / currentSpeed();
+    const scrollMs = target ? Math.min(Math.max((target.maxScroll / speed) * 1000, 0), MAX_DWELL_MS - hold) : 0;
+    const dwellMs = Math.max(MIN_DWELL_MS / currentSpeed(), scrollMs + hold);
 
     const fill = document.getElementById('tour-progress-fill');
     fill.style.transition = 'none';
@@ -1887,16 +1976,20 @@ if (usersForm) {
     if (countEl) countEl.textContent = list.length + ' account' + (list.length === 1 ? '' : 's');
     if (!list.length) { el.innerHTML = '<div class="activity-empty">No accounts yet.</div>'; return; }
     const head = '<div class="users-list-row users-list-head">' +
-      '<span>Account</span><span>Last signed in</span><span>Role</span></div>';
-    el.innerHTML = head + list.map(u =>
-      '<div class="users-list-row">' +
+      '<span>Account</span><span>Client(s)</span><span>Last signed in</span><span>Role</span></div>';
+    el.innerHTML = head + list.map(u => {
+      const clients = (u.clients || []);
+      return '<div class="users-list-row">' +
         '<span class="u-name">' + escapeHTML(u.username) +
           (u.username === CURRENT_USERNAME ? '<span class="u-you">(you)</span>' : '') + '</span>' +
+        '<span class="u-clients">' + (clients.length
+          ? clients.map(c => '<span class="client-tag">' + escapeHTML(c) + '</span>').join('')
+          : '<span class="u-none">All / unassigned</span>') + '</span>' +
         '<span class="u-lastlogin' + (u.lastLogin ? '' : ' never') + '">' +
           escapeHTML(u.lastLogin || 'Never') + '</span>' +
         '<span class="role-pill ' + escapeHTML(u.role) + '">' + escapeHTML(u.role) + '</span>' +
-      '</div>'
-    ).join('');
+      '</div>';
+    }).join('');
   }
 
   // ---- Roles & Visibility modal ----
@@ -1995,6 +2088,11 @@ if (usersForm) {
         renderUsersList(list);
         const navBadge = document.getElementById('users-nav-badge');
         if (navBadge) navBadge.textContent = list.length;
+        // Accounts written to the local file instead of the Sheet don't
+        // survive a redeploy on Render, so say so rather than letting
+        // someone create accounts that quietly vanish.
+        const warn = document.getElementById('users-storage-warning');
+        if (warn) warn.style.display = data.durable ? 'none' : '';
       })
       .catch(() => {
         document.getElementById('users-list').innerHTML = '<div class="activity-empty">Could not load accounts.</div>';
@@ -2026,7 +2124,7 @@ if (usersForm) {
     submitBtn.textContent = 'Creating…';
     fetch('/api/users', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username, role, password}),
+      body: JSON.stringify({username, role, password, clients: document.getElementById('uf-clients').value}),
     })
       .then(r => r.json().then(body => ({ok: r.ok, body})))
       .then(({ok, body}) => {
@@ -2038,8 +2136,27 @@ if (usersForm) {
           return;
         }
         usersForm.reset();
-        fetchUsers();
         closeCreateUser();
+        // A Sheets append isn't readable back instantly - refetching
+        // immediately raced the write and showed a list without the
+        // account that was just created. Retry until it appears (or a
+        // few tries pass), rather than leaving a confusing stale list.
+        (function refetchUntilPresent(attempt) {
+          fetch('/api/users')
+            .then(r => r.json())
+            .then(data => {
+              const list = data.users || [];
+              const present = list.some(u => u.username === body.username);
+              if (present || attempt >= 4) {
+                renderUsersList(list);
+                const navBadge = document.getElementById('users-nav-badge');
+                if (navBadge) navBadge.textContent = list.length;
+              } else {
+                setTimeout(() => refetchUntilPresent(attempt + 1), 900);
+              }
+            })
+            .catch(() => fetchUsers());
+        })(0);
       })
       .catch(() => {
         submitBtn.disabled = false;
@@ -2634,30 +2751,52 @@ function drillIntoBucket(label) {
   if (!sevEl) return; // panel not rendered for this role at all, nothing to draw
   const bands = DATA.severityBands;
   if (!bands.length) { sevEl.innerHTML = '<div class="chart-empty">No data.</div>'; return; }
-  const max = Math.max(...bands.map(b => Math.max(b.confirmed, b.unconfirmed)), 1);
+  // Each band is ONE bar with confirmed/unconfirmed as segments, so the
+  // proven-vs-suspected split reads as a proportion at a glance. Bars
+  // are scaled against the biggest band's total, so band-to-band volume
+  // stays comparable instead of every row filling its own track.
+  const bandTotal = b => b.confirmed + b.unconfirmed;
+  const maxTotal = Math.max(...bands.map(bandTotal), 1);
+  const grandTotal = bands.reduce((s, b) => s + bandTotal(b), 0);
+  const grandConfirmed = bands.reduce((s, b) => s + b.confirmed, 0);
+  const provenPct = grandTotal ? Math.round((grandConfirmed / grandTotal) * 100) : 0;
+
+  const summaryHTML =
+    '<div class="sevband-summary">' +
+      '<div class="sevband-headline">' +
+        '<span class="sevband-headline-num">' + grandTotal.toLocaleString() + '</span>' +
+        '<span class="sevband-headline-label">flagged gaps</span>' +
+      '</div>' +
+      '<div class="sevband-headline-split">' +
+        '<span class="sevband-proven">' + grandConfirmed + ' proven</span>' +
+        '<span class="sevband-sep">/</span>' +
+        '<span class="sevband-suspect">' + (grandTotal - grandConfirmed) + ' suspected</span>' +
+        '<span class="sevband-pctpill">' + provenPct + '% proven</span>' +
+      '</div>' +
+    '</div>';
 
   const rows = bands.map(b => {
     const color = sevColor(b.severity);
-    const wc = Math.max(Math.round((b.confirmed/max)*100), b.confirmed > 0 ? 3 : 0);
-    const wu = Math.max(Math.round((b.unconfirmed/max)*100), b.unconfirmed > 0 ? 3 : 0);
+    const total = bandTotal(b);
+    const share = (total / maxTotal) * 100;              // this band vs the biggest band
+    const cShare = total ? (b.confirmed / total) * 100 : 0;  // proven share within the band
     return '<div class="sevband-row" data-severity="' + escapeHTML(b.severity) + '" tabindex="0" role="button" ' +
-        'title="' + escapeHTML(b.severity) + ' (' + escapeHTML(b.rule) + '): ' + b.confirmed + ' confirmed, ' + b.unconfirmed + ' unconfirmed &mdash; click for the full case list">' +
-      '<div class="sevband-label">' +
+        'title="' + escapeHTML(b.severity) + ' (' + escapeHTML(b.rule) + '): ' + b.confirmed +
+        ' proven, ' + b.unconfirmed + ' suspected — click for the full case list">' +
+      '<div class="sevband-top">' +
         '<span class="sevband-dot" style="background:' + color + '"></span>' +
         '<span class="sevband-name">' + escapeHTML(b.severity) + '</span>' +
         '<span class="sevband-rule">' + escapeHTML(b.rule) + '</span>' +
+        '<span class="sevband-total" style="color:' + color + '">' + total + '</span>' +
       '</div>' +
-      '<div class="sevband-bars">' +
-        '<div class="sevband-bar-line">' +
-          '<span class="sevband-tag">Confirmed</span>' +
-          '<div class="sevband-track"><div class="sevband-fill" style="width:' + wc + '%;background:' + color + '"></div></div>' +
-          '<span class="sevband-value" style="color:' + color + '">' + b.confirmed + '</span>' +
-        '</div>' +
-        '<div class="sevband-bar-line">' +
-          '<span class="sevband-tag">Unconfirmed</span>' +
-          '<div class="sevband-track"><div class="sevband-fill faded" style="width:' + wu + '%;background:' + color + '"></div></div>' +
-          '<span class="sevband-value" style="color:' + color + '">' + b.unconfirmed + '</span>' +
-        '</div>' +
+      '<div class="sevband-track" style="width:' + Math.max(share, 6) + '%">' +
+        '<div class="sevband-seg" style="width:' + cShare + '%;background:' + color + '"></div>' +
+        '<div class="sevband-seg faded" style="width:' + (100 - cShare) + '%;background:' + color + '"></div>' +
+      '</div>' +
+      '<div class="sevband-foot">' +
+        '<span><b style="color:' + color + '">' + b.confirmed + '</b> proven</span>' +
+        '<span class="sevband-foot-sep">·</span>' +
+        '<span>' + b.unconfirmed + ' suspected</span>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -2679,15 +2818,15 @@ function drillIntoBucket(label) {
     return {...e, n, pct};
   }).filter(e => e.n > 0);
 
-  const evidenceHTML = !evidenceRows.length ? '' :
+  const evidenceHTML = !evidenceRows.length ? '<div class="chart-empty">No data.</div>' :
     '<div class="evidence-block">' +
-      '<div class="evidence-head">Evidence Behind These Gaps</div>' +
       '<div class="evidence-stack">' +
         evidenceRows.map(e => '<div class="evidence-seg ' + e.cls + '" style="width:' + e.pct + '%" ' +
           'title="' + escapeHTML(e.label) + ': ' + e.n + '"></div>').join('') +
       '</div>' +
       evidenceRows.map(e =>
-        '<div class="evidence-row">' +
+        '<div class="evidence-row" data-match="' + escapeHTML(e.match) + '" tabindex="0" role="button" ' +
+            'title="' + escapeHTML(e.label) + ' — click for the ' + e.n + ' cases">' +
           '<span class="evidence-dot ' + e.cls + '"></span>' +
           '<span class="evidence-label">' + escapeHTML(e.label) +
             '<span class="evidence-note">' + escapeHTML(e.note) + '</span></span>' +
@@ -2696,13 +2835,26 @@ function drillIntoBucket(label) {
         '</div>').join('') +
     '</div>';
 
-  sevEl.innerHTML = '<div class="sevband-chart">' + rows + '</div>' + evidenceHTML;
+  sevEl.innerHTML = summaryHTML + '<div class="sevband-chart">' + rows + '</div>';
+  const evEl = document.getElementById('chart-evidence');
+  if (evEl) evEl.innerHTML = evidenceHTML;
 
   sevEl.querySelectorAll('.sevband-row').forEach(row => {
     const activate = () => {
       const severity = row.dataset.severity;
-      const cases = [...DATA.tamperConfirmed, ...DATA.tamperUnconfirmed].filter(c => c.severity === severity);
+      const cases = allCases.filter(c => c.severity === severity);
       openDrillDown(severity + ' Severity', 'Every confirmed and unconfirmed case in this distance band.', TAMPER_COLS, cases,
+        {panel: 'p-tconfirmed', label: 'Open Confirmed Cases'});
+    };
+    row.addEventListener('click', activate);
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+  });
+
+  document.querySelectorAll('#chart-evidence .evidence-row').forEach(row => {
+    const activate = () => {
+      const label = row.querySelector('.evidence-label').childNodes[0].textContent.trim();
+      const cases = allCases.filter(c => (c.powerEvent || '').includes(row.dataset.match));
+      openDrillDown(label, 'Every flagged gap with this power-event evidence.', TAMPER_COLS, cases,
         {panel: 'p-tconfirmed', label: 'Open Confirmed Cases'});
     };
     row.addEventListener('click', activate);
