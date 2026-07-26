@@ -33,7 +33,7 @@ from users import verify_login
 import permissions
 from permissions import (
     filter_payload_for_role, allowed_panels, EXPORT_ACCESS,
-    MANAGE_USERS_ROLES, ROLES, PANEL_LABELS, CLIENT_FORBIDDEN_PANELS,
+    MANAGE_USERS_ROLES, ROLES, PANEL_LABELS, LockoutError,
 )
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
@@ -152,11 +152,9 @@ def api_create_user():
 @app.route("/api/role-panels", methods=["GET"])
 @login_required
 def api_role_panels():
-    """The current panel->roles matrix, plus which cells the editor must
-    render as locked (client can never hold a tampering panel, admin can
-    never lose Manage Users) so the UI shows the same rules the server
-    enforces rather than letting someone tick a box that silently
-    won't stick."""
+    """The current panel->roles matrix. Every cell is freely tickable -
+    the only rule the server still enforces is that Manage Users can't
+    be taken away from every role at once, which is checked on save."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
     return jsonify({
@@ -166,9 +164,6 @@ def api_role_panels():
                 "id": panel,
                 "label": PANEL_LABELS.get(panel, panel),
                 "roles": list(roles),
-                "lockedFor": (
-                    ["client"] if panel in CLIENT_FORBIDDEN_PANELS else []
-                ) + (["admin"] if panel == "p-users" else []),
             }
             for panel, roles in permissions.PANEL_ACCESS.items()
         ],
@@ -188,6 +183,8 @@ def api_save_role_panels():
 
     try:
         updated = permissions.save_panel_access(new_access)
+    except LockoutError as e:
+        return jsonify({"error": str(e)}), 400
     except OSError as e:
         return jsonify({"error": f"Could not save role settings: {e}"}), 503
 

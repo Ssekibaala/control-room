@@ -43,16 +43,38 @@ PANEL_LABELS = {
     "p-tquality": "Data Quality Log",
 }
 
-# Panels that can never be granted to a client, no matter what someone
-# ticks in the Roles editor. These carry tampering evidence and internal
-# investigation notes - the whole reason filter_payload_for_role()
-# exists. Making them toggleable would let a UI click undo the security
-# boundary the rest of this file enforces, so the editor refuses them
-# server-side rather than trusting the checkbox.
-CLIENT_FORBIDDEN_PANELS = {
-    "p-border", "p-priority", "p-tsummary", "p-tconfirmed",
-    "p-tunconfirmed", "p-tquality", "p-settings", "p-users", "p-full",
+# Which data sections each panel needs to render. This is what makes
+# the Roles & Visibility matrix the single source of truth: a section is
+# stripped from a role's response only when that role can't open any
+# panel that needs it. Before this, panel access and data filtering were
+# two separate hardcoded lists, so granting a role a panel in the editor
+# produced a visible-but-empty panel - the nav said yes, the payload
+# still said no.
+PANEL_SECTIONS = {
+    "p-full":         {"full"},
+    "p-border":       {"border"},
+    "p-settings":     {"settingsRows"},
+    "p-priority":     {"doubleFlagged"},
+    "p-tsummary":     {"severityBands", "topVehicles", "tamperCards"},
+    "p-tconfirmed":   {"tamperConfirmed"},
+    "p-tunconfirmed": {"tamperUnconfirmed"},
+    "p-tquality":     {"qualityLog"},
 }
+
+# Same idea for the KPI counters that belong to a specific panel: shown
+# only if the role can open the panel those numbers come from.
+PANEL_KPI_KEYS = {
+    "p-border":       {"border"},
+    "p-priority":     {"doubleFlagged"},
+    "p-tsummary":     {"tamperGapsChecked", "nullGpsExcluded"},
+    "p-tconfirmed":   {"tamperConfirmed"},
+    "p-tunconfirmed": {"tamperUnconfirmed"},
+}
+
+# The raw xlsx blobs are never sent to anyone in the JSON payload,
+# regardless of role or panel - /api/export/<name> serves them from disk
+# on demand, gated separately by EXPORT_ACCESS.
+NEVER_SENT_SECTIONS = {"xlsxB64", "tamperB64"}
 
 _DEFAULT_PANEL_ACCESS = {
     "p-exec":          ("admin", "technician", "client"),
@@ -97,13 +119,6 @@ def _build_panel_access():
     for panel, default_roles in _DEFAULT_PANEL_ACCESS.items():
         roles = overrides.get(panel, list(default_roles))
         clean = [r for r in ROLES if r in roles]
-        if panel in CLIENT_FORBIDDEN_PANELS:
-            clean = [r for r in clean if r != "client"]
-        # p-users is what grants access to this editor itself. If every
-        # role loses it, nobody can ever get back in to fix it, so admin
-        # is pinned on unconditionally.
-        if panel == "p-users" and "admin" not in clean:
-            clean.append("admin")
         access[panel] = tuple(clean)
     return access
 
@@ -111,18 +126,29 @@ def _build_panel_access():
 PANEL_ACCESS = _build_panel_access()
 
 
+class LockoutError(ValueError):
+    """Raised when a save would leave nobody able to reach this editor."""
+
+
 def save_panel_access(new_access: dict):
     """
     Persists a full panel->roles map from the Roles & Visibility editor
-    and reloads PANEL_ACCESS in place. Sanitising happens in
-    _build_panel_access(), so whatever gets written here is re-checked
-    against CLIENT_FORBIDDEN_PANELS on the way back out - a client can
-    never end up with a tampering panel even if the request said so.
+    and reloads PANEL_ACCESS in place. Every panel is freely assignable
+    to every role - the one refusal is stripping p-users from all three
+    roles at once, which would make the editor permanently unreachable
+    with no way back short of editing JSON on the server (and on Render's
+    free tier there's no shell to do it from). Leaving it with at least
+    one role keeps every other combination available.
     """
     cleaned = {
         panel: [r for r in ROLES if r in new_access.get(panel, [])]
         for panel in _DEFAULT_PANEL_ACCESS
     }
+    if not cleaned.get("p-users"):
+        raise LockoutError(
+            "At least one role must keep Manage Users, otherwise nobody "
+            "can reach this editor again to undo the change."
+        )
     os.makedirs(os.path.dirname(_OVERRIDES_PATH), exist_ok=True)
     with open(_OVERRIDES_PATH, "w") as f:
         json.dump(cleaned, f, indent=2)
@@ -136,25 +162,6 @@ def save_panel_access(new_access: dict):
 # open. Internal reasoning and cross-referenced tampering evidence
 # never reaches a client response, full stop.
 CLIENT_ROW_FIELD_BLOCKLIST = {"reasons", "borderDetail"}
-
-# Top-level data sections never sent to a client role, regardless of
-# panel visibility, this is the belt-and-suspenders check applied at
-# serialization time, not just at nav-render time.
-CLIENT_BLOCKED_SECTIONS = {
-    "tamperConfirmed", "tamperUnconfirmed", "qualityLog", "severityBands",
-    "topVehicles", "doubleFlagged", "tamperCards", "settingsRows",
-    "border", "full", "xlsxB64", "tamperB64",
-}
-
-# Even inside sections a client IS allowed (like "kpi"), these specific
-# keys are counts that would tell them tampering activity exists at
-# all, even without case detail. Blocked too, same principle as the
-# section-level list above: not client-facing until your team has
-# verified it.
-CLIENT_BLOCKED_KPI_KEYS = {
-    "tamperConfirmed", "tamperUnconfirmed", "tamperGapsChecked",
-    "nullGpsExcluded", "doubleFlagged", "border",
-}
 
 EXPORT_ACCESS = {
     "integrity_xlsx": ("admin", "technician"),
@@ -170,22 +177,55 @@ def allowed_panels(role):
     return [p for p, roles in PANEL_ACCESS.items() if role in roles]
 
 
+def blocked_sections_for(role):
+    """Sections this role can't reach, derived from the panel matrix:
+    a section is blocked only when no panel needing it is open to them."""
+    open_panels = set(allowed_panels(role))
+    blocked = set()
+    for panel, sections in PANEL_SECTIONS.items():
+        if panel not in open_panels:
+            blocked |= sections
+    # A section stays visible if ANY open panel needs it, so re-allow
+    # anything another granted panel legitimately requires.
+    for panel in open_panels:
+        blocked -= PANEL_SECTIONS.get(panel, set())
+    return blocked | NEVER_SENT_SECTIONS
+
+
+def blocked_kpi_keys_for(role):
+    open_panels = set(allowed_panels(role))
+    blocked = set()
+    for panel, keys in PANEL_KPI_KEYS.items():
+        if panel not in open_panels:
+            blocked |= keys
+    for panel in open_panels:
+        blocked -= PANEL_KPI_KEYS.get(panel, set())
+    return blocked
+
+
 def filter_payload_for_role(data: dict, role: str) -> dict:
     """Returns a NEW dict safe to serialize and send to this role.
     Never mutates the original. This is the one function every route
-    must call before jsonify()-ing dashboard data."""
-    if role == "admin" or role == "technician":
-        return data
+    must call before jsonify()-ing dashboard data.
 
-    filtered = {k: v for k, v in data.items() if k not in CLIENT_BLOCKED_SECTIONS}
+    What gets stripped now follows the Roles & Visibility matrix rather
+    than a separate hardcoded client list, so ticking a panel in the
+    editor actually delivers that panel's data instead of rendering it
+    empty. The raw xlsx blobs are the one unconditional exclusion."""
+    filtered = {k: v for k, v in data.items() if k not in blocked_sections_for(role)}
 
-    if "kpi" in filtered:
-        filtered["kpi"] = {k: v for k, v in filtered["kpi"].items() if k not in CLIENT_BLOCKED_KPI_KEYS}
+    blocked_kpis = blocked_kpi_keys_for(role)
+    if blocked_kpis and "kpi" in filtered:
+        filtered["kpi"] = {k: v for k, v in filtered["kpi"].items() if k not in blocked_kpis}
 
-    for section_key in ("critical", "healthy", "pending", "criticalCards", "knownIssues"):
-        if section_key in filtered and isinstance(filtered[section_key], list):
-            filtered[section_key] = [
-                {k: v for k, v in row.items() if k not in CLIENT_ROW_FIELD_BLOCKLIST}
-                for row in filtered[section_key]
-            ]
+    # Internal investigation reasoning stays out of client responses
+    # regardless of panel grants - these are free-text notes your team
+    # writes for itself, not a panel that can be handed over.
+    if role == "client":
+        for section_key in ("critical", "healthy", "pending", "criticalCards", "knownIssues", "full"):
+            if section_key in filtered and isinstance(filtered[section_key], list):
+                filtered[section_key] = [
+                    {k: v for k, v in row.items() if k not in CLIENT_ROW_FIELD_BLOCKLIST}
+                    for row in filtered[section_key]
+                ]
     return filtered

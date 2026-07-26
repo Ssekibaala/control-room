@@ -310,8 +310,6 @@
   .roles-check input:checked + .roles-box::after { content:""; position:absolute; left:5.5px; top:2px;
     width:4px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg); }
   .roles-check:hover .roles-box { border-color:var(--primary); }
-  .roles-check.locked { cursor:not-allowed; opacity:0.35; }
-  .roles-check.locked:hover .roles-box { border-color:var(--border); }
   .roles-actions { display:flex; align-items:center; justify-content:space-between; gap:16px;
     margin-top:var(--sp-3); padding-top:var(--sp-2); border-top:1px solid var(--divider); }
   .roles-hint { font-size:11.5px; color:var(--text-tertiary); }
@@ -797,18 +795,6 @@
           <span>Known Issues</span><span class="nav-count">0</span>
         </button>
 {% endif %}
-        {% if 'p-settings' in allowed_panels %}
-<button class="nav-item" data-panel="p-settings" data-label="Settings">
-          <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-          <span>Settings</span>
-        </button>
-{% endif %}
-        {% if 'p-users' in allowed_panels %}
-<button class="nav-item" data-panel="p-users" data-label="Manage Users">
-          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          <span>Manage Users</span><span class="nav-count" id="users-nav-badge">0</span>
-        </button>
-{% endif %}
       </nav>
 
       <div class="nav-group-label">Cross-Analysis</div>
@@ -854,6 +840,24 @@
         </button>
 {% endif %}
       </nav>
+
+      {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels %}
+      <div class="nav-group-label">Settings</div>
+      <nav class="nav-group">
+        {% if 'p-settings' in allowed_panels %}
+<button class="nav-item" data-panel="p-settings" data-label="Settings">
+          <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          <span>Report Configuration</span>
+        </button>
+{% endif %}
+        {% if 'p-users' in allowed_panels %}
+<button class="nav-item" data-panel="p-users" data-label="Manage Users">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Manage Users</span><span class="nav-count" id="users-nav-badge">0</span>
+        </button>
+{% endif %}
+      </nav>
+      {% endif %}
 
       <div class="nav-group-label" id="recent-label" style="display:none">Recently Viewed</div>
       <nav class="nav-group" id="recent-group"></nav>
@@ -1922,22 +1926,19 @@ if (usersForm) {
     const rows = data.panels.map(p =>
       '<div class="roles-row" data-panel="' + escapeHTML(p.id) + '">' +
         '<div class="roles-panel-name">' + escapeHTML(p.label) + '</div>' +
-        roles.map(r => {
-          const locked = p.lockedFor.includes(r);
-          const on = p.roles.includes(r);
-          return '<div class="roles-cell">' +
-            '<label class="roles-check' + (locked ? ' locked' : '') + '"' +
-              (locked ? ' title="Locked by design &mdash; this cannot be changed here."' : '') + '>' +
+        roles.map(r =>
+          '<div class="roles-cell">' +
+            '<label class="roles-check">' +
               '<input type="checkbox" data-role="' + escapeHTML(r) + '"' +
-                (on ? ' checked' : '') + (locked ? ' disabled' : '') + '>' +
+                (p.roles.includes(r) ? ' checked' : '') + '>' +
               '<span class="roles-box"></span>' +
-            '</label></div>';
-        }).join('') +
+            '</label></div>'
+        ).join('') +
       '</div>'
     ).join('');
     el.innerHTML = head + rows +
       '<div class="roles-actions">' +
-        '<span class="roles-hint">Changes apply the next time each person reloads the dashboard.</span>' +
+        '<span class="roles-hint">Changes apply the next time each person reloads the dashboard. Data follows the ticks &mdash; granting a panel sends its data too.</span>' +
         '<button class="btn-primary" id="roles-save">Save Role Settings</button>' +
       '</div>';
 

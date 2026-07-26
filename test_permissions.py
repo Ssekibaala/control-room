@@ -193,6 +193,94 @@ def run():
         failures.append("logged-out user can read the global activity feed")
 
     print()
+    print("=== Roles & Visibility editor drives the actual payload ===")
+    import permissions as perms
+
+    login(client, "justin", "TestPass123!")
+    r = client.get("/api/role-panels")
+    print(f"  [{'PASS' if r.status_code == 200 else 'FAIL'}] admin can read the role matrix (status {r.status_code})")
+    if r.status_code != 200:
+        failures.append("admin cannot read role matrix")
+
+    # Granting a panel must deliver that panel's DATA too, not just show
+    # an empty nav item - this is the whole point of the matrix being the
+    # single source of truth rather than two lists that can disagree.
+    granted = {p: list(roles) for p, roles in perms.PANEL_ACCESS.items()}
+    granted["p-tconfirmed"] = ["admin", "technician", "client"]
+    r = client.post("/api/role-panels", json={"panels": granted})
+    print(f"  [{'PASS' if r.status_code == 200 else 'FAIL'}] granting client a tampering panel is accepted (status {r.status_code})")
+    if r.status_code != 200:
+        failures.append("role matrix save rejected a legitimate grant")
+    client.post("/api/logout")
+
+    login(client, "gtl-client", "TestPass123!")
+    granted_data = client.get("/api/dashboard-data").get_json()
+    got_rows = len(granted_data.get("tamperConfirmed", []))
+    print(f"  [{'PASS' if got_rows > 0 else 'FAIL'}] client now actually receives tamperConfirmed data ({got_rows} rows)")
+    if got_rows == 0:
+        failures.append("granted panel delivered no data - matrix and payload disagree")
+    still_blocked = "tamperUnconfirmed" not in granted_data
+    print(f"  [{'PASS' if still_blocked else 'FAIL'}] panels NOT granted stay blocked (tamperUnconfirmed absent)")
+    if not still_blocked:
+        failures.append("ungranted panel leaked data")
+    no_blob = "xlsxB64" not in granted_data and "tamperB64" not in granted_data
+    print(f"  [{'PASS' if no_blob else 'FAIL'}] raw xlsx blobs still never sent, whatever the matrix says")
+    if not no_blob:
+        failures.append("xlsx blob leaked into JSON payload")
+    client.post("/api/logout")
+
+    # Revoking must take the data away again, symmetrically.
+    login(client, "justin", "TestPass123!")
+    revoked = {p: list(roles) for p, roles in perms.PANEL_ACCESS.items()}
+    revoked["p-tconfirmed"] = ["admin", "technician"]
+    client.post("/api/role-panels", json={"panels": revoked})
+    client.post("/api/logout")
+    login(client, "gtl-client", "TestPass123!")
+    revoked_data = client.get("/api/dashboard-data").get_json()
+    gone = "tamperConfirmed" not in revoked_data
+    print(f"  [{'PASS' if gone else 'FAIL'}] revoking the panel removes its data again")
+    if not gone:
+        failures.append("revoked panel still sending data")
+    client.post("/api/logout")
+
+    # The one refusal left: stripping Manage Users from every role would
+    # make the editor permanently unreachable.
+    login(client, "justin", "TestPass123!")
+    lockout = {p: list(roles) for p, roles in perms.PANEL_ACCESS.items()}
+    lockout["p-users"] = []
+    r = client.post("/api/role-panels", json={"panels": lockout})
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] refuses to leave nobody with Manage Users (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("editor allowed an unrecoverable lockout")
+
+    r = client.get("/api/users")
+    print(f"  [{'PASS' if r.status_code == 200 else 'FAIL'}] user list readable by admin (status {r.status_code})")
+    has_last_login = all("lastLogin" in u for u in r.get_json().get("users", []))
+    print(f"  [{'PASS' if has_last_login else 'FAIL'}] every account reports a lastLogin field")
+    if not has_last_login:
+        failures.append("lastLogin missing from user list")
+    client.post("/api/logout")
+
+    login(client, "gtl-client", "TestPass123!")
+    r1 = client.get("/api/users")
+    r2 = client.get("/api/role-panels")
+    r3 = client.post("/api/users", json={"username": "x", "role": "admin", "password": "12345678"})
+    for resp, label in ((r1, "list users"), (r2, "read role matrix"), (r3, "create a user")):
+        print(f"  [{'PASS' if resp.status_code == 403 else 'FAIL'}] client cannot {label} (status {resp.status_code})")
+        if resp.status_code != 403:
+            failures.append(f"client can {label}")
+    client.post("/api/logout")
+
+    # Leave the matrix exactly as it was found: back to shipped defaults.
+    import os
+    override_path = os.path.join(os.path.dirname(__file__), "database", "role_panels.json")
+    if os.path.exists(override_path):
+        os.remove(override_path)
+        perms.PANEL_ACCESS.clear()
+        perms.PANEL_ACCESS.update(perms._build_panel_access())
+        print("  (reset role matrix back to shipped defaults)")
+
+    print()
     print("=== Logged out: no access at all ===")
     client.post("/api/logout")
     r = client.get("/api/dashboard-data")
