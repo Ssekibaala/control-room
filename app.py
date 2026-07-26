@@ -168,7 +168,12 @@ def api_import():
 def index():
     if "username" not in session:
         return redirect(url_for("login_page"))
-    return render_template("dashboard.html", allowed_panels=allowed_panels(session["role"]))
+    role = session["role"]
+    return render_template(
+        "dashboard.html", allowed_panels=allowed_panels(role),
+        can_export_integrity=role in EXPORT_ACCESS["integrity_xlsx"],
+        can_export_tampering=role in EXPORT_ACCESS["tampering_xlsx"],
+    )
 
 
 @app.route("/login")
