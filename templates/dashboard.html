@@ -34,7 +34,7 @@
     --blur: blur(26px) saturate(1.9);
 
     --sp-1:8px; --sp-2:16px; --sp-3:24px; --sp-4:32px; --sp-6:48px;
-    --sidebar-w:252px; --sidebar-w-collapsed:64px;
+    --sidebar-w:252px; --sidebar-w-collapsed:72px;
     --radius-sm:10px; --radius-md:14px; --radius-lg:20px;
 
     color-scheme: dark;
@@ -152,8 +152,8 @@
      icon instead, a standard icon-only-nav pattern. */
   .sidebar.collapsed .nav-item { justify-content:center; overflow:visible; }
   .sidebar.collapsed .nav-count {
-    position:absolute; top:3px; right:3px; margin-left:0;
-    min-width:15px; height:15px; padding:0 3px; font-size:8.5px; font-weight:700;
+    position:absolute; top:1px; right:0px; margin-left:0;
+    min-width:18px; height:18px; padding:0 4px; font-size:10.5px; font-weight:700;
     display:flex; align-items:center; justify-content:center; line-height:1;
     box-shadow:0 0 0 2px var(--sidebar-bg);
   }
@@ -220,6 +220,24 @@
   .cmdk-foot kbd { font-family:'JetBrains Mono'; font-size:9.5px; background:var(--hover-surface); border:1px solid var(--border);
     border-radius:4px; padding:1px 5px; }
 
+  /* ============ DRILL-DOWN MODAL ============ */
+  .drill-backdrop { display:none; position:fixed; inset:0; z-index:250; background:rgba(5,5,10,0.6);
+    backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); align-items:center; justify-content:center; padding:24px; }
+  .drill-backdrop.open { display:flex; }
+  .drill-box { width:100%; max-width:960px; max-height:82vh; display:flex; flex-direction:column; background:var(--card-bg);
+    border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow-3); overflow:hidden;
+    animation:popIn 0.15s cubic-bezier(.16,1,.3,1); }
+  .drill-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:20px 22px;
+    border-bottom:1px solid var(--divider); flex-shrink:0; }
+  .drill-title { font-size:17px; font-weight:700; letter-spacing:-0.01em; }
+  .drill-subtitle { font-size:12.5px; color:var(--text-tertiary); margin-top:4px; }
+  .drill-body { overflow:auto; padding:0; }
+  .drill-body table { font-size:12px; }
+  .drill-body thead th { position:sticky; top:0; z-index:1; }
+  .drill-foot { padding:12px 22px; border-top:1px solid var(--divider); font-size:11.5px; color:var(--text-tertiary);
+    display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+  .drill-foot .btn-primary { padding:7px 13px; font-size:11.5px; }
+
   .icon-btn { position:relative; background:var(--hover-surface); border:1px solid var(--border); border-radius:12px;
     width:34px; height:34px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-secondary);
     transition:color 0.15s, transform 0.12s, border-color 0.15s; }
@@ -254,6 +272,18 @@
     padding:11px 14px; font-size:12.5px; cursor:pointer; border-bottom:1px solid var(--divider); }
   .export-menu button:last-child { border-bottom:none; }
   .export-menu button:hover { background:var(--hover-surface); }
+
+  .notif-menu { min-width:280px; padding:6px; }
+  .notif-menu-title { font-size:10px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-tertiary);
+    font-weight:700; padding:8px 10px 6px; }
+  .notif-menu button.notif-row { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    border-bottom:none; border-radius:9px; padding:10px 10px; }
+  .notif-row-count { font-family:'JetBrains Mono'; font-weight:700; padding:2px 8px; border-radius:10px; font-size:11.5px; flex-shrink:0; }
+  .notif-row.danger .notif-row-count { background:var(--danger-surface); color:var(--danger); }
+  .notif-row.warn .notif-row-count { background:var(--warning-surface); color:var(--warning); }
+  .notif-row.investigation .notif-row-count { background:var(--investigation-surface); color:var(--investigation); }
+  .notif-empty { padding:20px 14px; text-align:center; color:var(--text-tertiary); font-size:12.5px; }
+
   .avatar { width:32px; height:32px; border-radius:50%; background:var(--grad-invest); color:#fff;
     display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-size:10px; font-weight:700; }
 
@@ -477,7 +507,7 @@
       transform:translateX(-100%); transition:transform 0.3s cubic-bezier(.16,1,.3,1); box-shadow:var(--shadow-3);
     }
     .sidebar.mobile-open { transform:translateX(0); }
-    .sidebar.collapsed { width:280px; }
+    .sidebar.collapsed { width:var(--sidebar-w); }
     .sidebar.collapsed .brand-text, .sidebar.collapsed .nav-item span:not(.nav-count),
     .sidebar.collapsed .nav-group-label, .sidebar.collapsed .quick-stats { display:flex; }
     .sidebar.collapsed .nav-group-label { display:block; }
@@ -682,6 +712,24 @@
     </div>
   </div>
 
+  <div class="drill-backdrop" id="drill-backdrop">
+    <div class="drill-box" role="dialog" aria-modal="true" aria-label="Record detail">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title" id="drill-title"></div>
+          <div class="drill-subtitle" id="drill-subtitle"></div>
+        </div>
+        <button class="icon-btn" id="drill-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body">
+        <table id="drill-table"></table>
+      </div>
+      <div class="drill-foot" id="drill-foot"></div>
+    </div>
+  </div>
+
   <div class="main">
     <header class="topbar">
       <div class="topbar-left">
@@ -705,10 +753,13 @@
           <svg viewBox="0 0 24 24" class="search-icon"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input type="text" id="global-search" placeholder="Search plate, location, action...">
         </div>
-        <button class="icon-btn" id="notif-btn" title="Active alerts">
-          <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
-          <span class="notif-badge" id="notif-badge">0</span>
-        </button>
+        <div class="export-wrap">
+          <button class="icon-btn" id="notif-btn" title="Active alerts, click for a breakdown">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span class="notif-badge" id="notif-badge">0</span>
+          </button>
+          <div class="export-menu notif-menu" id="notif-menu"></div>
+        </div>
         <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark mode" aria-label="Toggle theme">
           <div class="knob"><svg id="theme-icon" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.4 5.4 0 0 1 12 3z"/></svg></div>
         </button>
@@ -740,10 +791,11 @@
       {% if 'p-exec' in allowed_panels %}
 <section id="p-exec" class="panel active">
         <div class="kpi-row">
-          <div class="kpi-card primary">
+          <div class="kpi-card primary clickable" id="kpi-card-health" style="cursor:pointer" title="Click to see what makes up this percentage">
             <div class="kpi-head"><span class="kpi-label">Fleet Health</span><span class="kpi-status-pill good">Nominal</span></div>
             <div class="kpi-main"><span class="kpi-num" id="kpi-num-health" data-count="0">0</span><span class="kpi-unit">%</span></div>
             <div class="kpi-foot" id="kpi-health-foot">First day of monitoring</div>
+            <div class="kpi-goto">View breakdown <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
           </div>
           <div class="kpi-card clickable" data-goto="p-full" data-goto-label="Full Data">
             <div class="kpi-head"><span class="kpi-label">Total Assets</span></div>
@@ -1301,6 +1353,7 @@ const exportToggleBtn = document.getElementById('export-toggle');
 if (exportToggleBtn) {
   exportToggleBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    document.getElementById('notif-menu')?.classList.remove('open');
     document.getElementById('export-menu').classList.toggle('open');
   });
   document.addEventListener('click', () => document.getElementById('export-menu').classList.remove('open'));
@@ -1310,12 +1363,48 @@ if (exportIntegrityBtn) exportIntegrityBtn.addEventListener('click', () => { win
 const exportTamperBtn = document.getElementById('export-tamper');
 if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.location.href = '/api/export/tampering'; });
 
-// ---- Notification badge (display only, uses existing computed counts) ----
+// ---- Notification bell: badge total + a breakdown dropdown showing
+// exactly which panel each part of that total comes from, one click
+// away instead of a number nobody can trace back to anything. ----
 (function() {
   const n = DATA.kpi.escalations + DATA.kpi.border + DATA.kpi.doubleFlagged;
   const badge = document.getElementById('notif-badge');
   badge.textContent = n;
   if (n === 0) badge.setAttribute('data-zero', 'true');
+
+  const BREAKDOWN_SOURCES = [
+    { count: DATA.kpi.escalations, label: 'Technical Escalation', panel: 'p-critical', cls: 'danger' },
+    { count: DATA.kpi.border, label: 'Border Risk', panel: 'p-border', cls: 'warn' },
+    { count: DATA.kpi.doubleFlagged, label: 'Priority Overlap (integrity + tampering)', panel: 'p-priority', cls: 'investigation' },
+  ];
+
+  const notifBtn = document.getElementById('notif-btn');
+  const notifMenu = document.getElementById('notif-menu');
+  let html = '<div class="notif-menu-title">Where this number comes from</div>';
+  let anyRow = false;
+  BREAKDOWN_SOURCES.forEach(src => {
+    const panelBtn = document.querySelector('.nav-item[data-panel="' + src.panel + '"]');
+    if (!panelBtn || !src.count) return; // panel not visible to this role, or nothing to show
+    anyRow = true;
+    html += '<button class="notif-row ' + src.cls + '" data-panel="' + src.panel + '">' +
+      '<span>' + escapeHTML(src.label) + '</span><span class="notif-row-count">' + src.count + '</span></button>';
+  });
+  if (!anyRow) html += '<div class="notif-empty">No active alerts right now.</div>';
+  notifMenu.innerHTML = html;
+  notifMenu.querySelectorAll('.notif-row').forEach(row => {
+    row.addEventListener('click', () => {
+      notifMenu.classList.remove('open');
+      const targetBtn = document.querySelector('.nav-item[data-panel="' + row.dataset.panel + '"]');
+      if (targetBtn) targetBtn.click();
+    });
+  });
+
+  notifBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('export-menu')?.classList.remove('open');
+    notifMenu.classList.toggle('open');
+  });
+  document.addEventListener('click', () => notifMenu.classList.remove('open'));
 })();
 
 // ---- Bind real fetched values onto their elements (server sends generic
@@ -1403,6 +1492,33 @@ if (mismatchEl) animateCount(mismatchEl, DATA.kpi.tamperConfirmed + DATA.kpi.tam
     }
     requestAnimationFrame(tick);
   }, 150);
+
+  function openHealthDrillDown() {
+    const notOnline = [...(DATA.critical || []), ...(DATA.pending || [])];
+    const footLink = document.querySelector('.nav-item[data-panel="p-full"]')
+      ? {label: 'View Full Data', panel: 'p-full'}
+      : (document.querySelector('.nav-item[data-panel="p-critical"]') ? {label: 'View Critical Assets', panel: 'p-critical'} : null);
+    openDrillDown(
+      DATA.kpi.healthPct + '% Fleet Health',
+      DATA.kpi.online + ' of ' + DATA.kpi.total + ' assets online. The ' + notOnline.length + ' below are what bring it down from 100%.',
+      roleIntegrityCols, notOnline, footLink
+    );
+  }
+  const gaugeWrap = document.querySelector('.gauge-wrap');
+  if (gaugeWrap) {
+    gaugeWrap.style.cursor = 'pointer';
+    gaugeWrap.title = 'Click to see what makes up this percentage';
+    gaugeWrap.addEventListener('click', openHealthDrillDown);
+  }
+  const healthKpiCard = document.getElementById('kpi-card-health');
+  if (healthKpiCard) {
+    healthKpiCard.setAttribute('tabindex', '0');
+    healthKpiCard.setAttribute('role', 'button');
+    healthKpiCard.addEventListener('click', openHealthDrillDown);
+    healthKpiCard.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openHealthDrillDown(); }
+    });
+  }
 })();
 
 // ---- Honest KPI footers: only show real deltas when history exists (no fabricated trends) ----
@@ -1427,7 +1543,16 @@ if (mismatchEl) animateCount(mismatchEl, DATA.kpi.tamperConfirmed + DATA.kpi.tam
   DATA.newlyOffline.forEach(p => items.push('NEWLY OFFLINE: ' + p));
   DATA.recovered.forEach(p => items.push('RECOVERED: ' + p));
   if (items.length === 0) items.push('No active alerts \u2014 fleet operating within normal parameters');
-  document.getElementById('ticker').textContent = items.concat(items, items).join('   \u2022   ');
+  const tickerEl = document.getElementById('ticker');
+  tickerEl.textContent = items.concat(items, items).join('   \u2022   ');
+  // A fixed animation-duration made longer alert lists scroll visibly
+  // faster (same seconds, more pixels to cover). Derive duration from
+  // the actual rendered content width instead, so the scroll speed
+  // (px/s) stays constant and comfortably readable regardless of how
+  // many alerts are in the list.
+  const PX_PER_SECOND = 90; // was a fixed 42s regardless of content length, ~256px/s for a typical alert list - about half that
+  const contentWidth = tickerEl.scrollWidth;
+  tickerEl.style.animationDuration = Math.max(24, contentWidth / PX_PER_SECOND) + 's';
 })();
 const priorityCalloutEl = document.getElementById('priority-callout-num');
 if (priorityCalloutEl) priorityCalloutEl.textContent = DATA.kpi.doubleFlagged + ' asset(s)';
@@ -1464,6 +1589,41 @@ function cellHTML(c, r) {
   const pillClass = pillFor(c.key, val);
   return '<td>' + (pillClass && val !== '' ? '<span class="' + pillClass + '">' + safeVal + '</span>' : safeVal) + '</td>';
 }
+
+// ---- Generic drill-down modal: every clickable number/segment/bar on
+// the dashboard opens this with the exact rows that make it up, using
+// the same cellHTML()/pillFor() rendering the main tables use, so a
+// drill-down never shows a different shape of truth than the table it
+// came from. footLink (optional) lets the user jump to the full panel. ----
+function openDrillDown(title, subtitle, columns, rows, footLink) {
+  document.getElementById('drill-title').textContent = title;
+  document.getElementById('drill-subtitle').textContent = subtitle;
+  const table = document.getElementById('drill-table');
+  if (!rows.length) {
+    table.innerHTML = '<tbody><tr><td style="padding:32px;color:var(--text-tertiary);text-align:center">No records match this.</td></tr></tbody>';
+  } else {
+    const thead = '<thead><tr>' + columns.map(c => '<th>' + escapeHTML(c.label) + '</th>').join('') + '</tr></thead>';
+    const tbody = '<tbody>' + rows.map(r => '<tr>' + columns.map(c => cellHTML(c, r)).join('') + '</tr>').join('') + '</tbody>';
+    table.innerHTML = thead + tbody;
+  }
+  const footEl = document.getElementById('drill-foot');
+  footEl.innerHTML = '<span>' + rows.length + ' record' + (rows.length === 1 ? '' : 's') + '</span>' +
+    (footLink ? '<button class="btn-primary" id="drill-foot-link">' + escapeHTML(footLink.label) + '</button>' : '');
+  const linkBtn = document.getElementById('drill-foot-link');
+  if (linkBtn) linkBtn.addEventListener('click', () => {
+    closeDrillDown();
+    const targetBtn = document.querySelector('.nav-item[data-panel="' + footLink.panel + '"]');
+    if (targetBtn) targetBtn.click();
+  });
+  document.getElementById('drill-backdrop').classList.add('open');
+}
+function closeDrillDown() { document.getElementById('drill-backdrop').classList.remove('open'); }
+document.getElementById('drill-close').addEventListener('click', closeDrillDown);
+document.getElementById('drill-backdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'drill-backdrop') closeDrillDown();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrillDown(); });
+
 function renderTable(tableId, rows, columns, countElId) {
   const table = document.getElementById(tableId);
   if (!table) return;
@@ -1590,6 +1750,32 @@ function miniGauge(days, maxDays, color) {
     '<text x="30" y="34" text-anchor="middle" class="mini-gauge-num" fill="' + color + '">' + Math.round(days) + '</text></svg>';
 }
 
+// ---- Shared drill-down resolver: every chart segment/bar that
+// represents a status or severity tier funnels through this, so the
+// donut, the bar chart, and (later) any other view of the same
+// buckets all drill into identically-filtered rows. ----
+const SEVERITY_LABEL_MAP = {
+  'Elevated': 'Elevated - Monitor', 'High': 'High - Escalate This Week', 'Critical': 'Critical - Long-term Fault',
+};
+function drillIntoBucket(label) {
+  let rows, subtitle, footLink;
+  if (label === 'Online') {
+    rows = DATA.healthy || [];
+    subtitle = rows.length + ' asset(s) reporting normally on every platform.';
+    footLink = document.querySelector('.nav-item[data-panel="p-healthy"]') ? {label: 'View Healthy Fleet', panel: 'p-healthy'} : null;
+  } else if (label === 'Pending Confirmation') {
+    rows = DATA.pending || [];
+    subtitle = rows.length + ' asset(s) offline, awaiting customer confirmation.';
+    footLink = document.querySelector('.nav-item[data-panel="p-pending"]') ? {label: 'View Pending Feedback', panel: 'p-pending'} : null;
+  } else {
+    const sevLabel = SEVERITY_LABEL_MAP[label] || label;
+    rows = (DATA.critical || []).filter(r => r.severity === sevLabel);
+    subtitle = rows.length + ' asset(s) at the "' + sevLabel + '" severity tier, ranked worst-first.';
+    footLink = document.querySelector('.nav-item[data-panel="p-critical"]') ? {label: 'View Critical Assets', panel: 'p-critical'} : null;
+  }
+  openDrillDown(label, subtitle, roleIntegrityCols, rows, footLink);
+}
+
 (function() {
   const segments = [
     {label:'Online', value:DATA.kpi.online, color:cssVar('--success')},
@@ -1604,17 +1790,22 @@ function miniGauge(days, maxDays, color) {
   const circles = segments.map(s => {
     const frac = s.value/total;
     const dash = frac*c;
-    const el = '<circle cx="65" cy="65" r="' + r + '" fill="none" stroke="' + s.color + '" stroke-width="18" ' +
-      'stroke-dasharray="' + dash + ' ' + (c-dash) + '" stroke-dashoffset="' + (-offsetAcc) + '" transform="rotate(-90 65 65)"><title>' + s.label + ': ' + s.value + '</title></circle>';
+    const el = '<circle class="donut-seg" data-bucket="' + escapeHTML(s.label) + '" style="cursor:pointer" cx="65" cy="65" r="' + r + '" fill="none" stroke="' + s.color + '" stroke-width="18" ' +
+      'stroke-dasharray="' + dash + ' ' + (c-dash) + '" stroke-dashoffset="' + (-offsetAcc) + '" transform="rotate(-90 65 65)"><title>' + s.label + ': ' + s.value + ' (click for detail)</title></circle>';
     offsetAcc += dash;
     return el;
   }).join('');
-  const legend = segments.map(s => '<div class="legend-item"><span class="legend-dot" style="background:' + s.color + '"></span>' + s.label + '<b>' + s.value + '</b></div>').join('');
-  document.getElementById('chart-donut').innerHTML =
+  const legend = segments.map(s => '<div class="legend-item donut-seg" data-bucket="' + escapeHTML(s.label) + '" style="cursor:pointer"><span class="legend-dot" style="background:' + s.color + '"></span>' + s.label + '<b>' + s.value + '</b></div>').join('');
+  const donutEl = document.getElementById('chart-donut');
+  donutEl.innerHTML =
     '<svg viewBox="0 0 130 130" style="width:140px;height:140px">' + circles +
     '<text x="65" y="61" text-anchor="middle" style="font-family:\'JetBrains Mono\';font-size:20px;font-weight:700;fill:var(--text-primary)">' + total + '</text>' +
     '<text x="65" y="77" text-anchor="middle" style="font-family:\'Inter\';font-size:9px;fill:var(--text-tertiary)">ASSETS</text></svg>' +
     '<div class="legend">' + legend + '</div>';
+  donutEl.addEventListener('click', (e) => {
+    const seg = e.target.closest('.donut-seg');
+    if (seg) drillIntoBucket(seg.dataset.bucket);
+  });
 })();
 
 (function() {
@@ -1626,12 +1817,17 @@ function miniGauge(days, maxDays, color) {
   const max = Math.max(...items.map(i => i.value), 1);
   const bars = items.map(i => {
     const h = Math.round((i.value/max)*110);
-    return '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;" title="' + i.label + ': ' + i.value + '">' +
+    return '<div class="sev-bar" data-bucket="' + escapeHTML(i.label) + '" style="cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;" title="' + i.label + ': ' + i.value + ' (click for detail)">' +
       '<div style="font-family:\'JetBrains Mono\';font-size:13px;font-weight:700;color:' + i.color + '">' + i.value + '</div>' +
       '<div style="width:36px;height:' + h + 'px;background:' + i.color + ';border-radius:5px 5px 2px 2px;"></div>' +
       '<div style="font-size:10px;color:var(--text-tertiary)">' + i.label + '</div></div>';
   }).join('');
-  document.getElementById('chart-severity').innerHTML = '<div style="display:flex;gap:22px;align-items:flex-end;height:170px;">' + bars + '</div>';
+  const sevEl = document.getElementById('chart-severity');
+  sevEl.innerHTML = '<div style="display:flex;gap:22px;align-items:flex-end;height:170px;">' + bars + '</div>';
+  sevEl.addEventListener('click', (e) => {
+    const bar = e.target.closest('.sev-bar');
+    if (bar) drillIntoBucket(bar.dataset.bucket);
+  });
 })();
 
 (function() {
@@ -1709,6 +1905,15 @@ const cardsHTML = DATA.criticalCards.map(r => {
     '<div class="card-action">' + escapeHTML(r.action) + '</div></div>';
 }).join('');
 document.getElementById('critical-cards').innerHTML = cardsHTML || '<p style="color:var(--text-tertiary)">No critical cases.</p>';
+document.querySelectorAll('#critical-cards .asset-card').forEach((cardEl, i) => {
+  cardEl.style.cursor = 'pointer';
+  cardEl.title = 'Click for the full record';
+  cardEl.addEventListener('click', () => {
+    const r = DATA.criticalCards[i];
+    const footLink = document.querySelector('.nav-item[data-panel="p-critical"]') ? {label: 'View Critical Assets', panel: 'p-critical'} : null;
+    openDrillDown(r.plate, 'Full record for this asset (' + r.severity + ').', roleIntegrityCols, [r], footLink);
+  });
+});
 
 const routeHTML = DATA.tamperCards.map(c => {
   return '<div class="route-card">' +
@@ -1721,6 +1926,24 @@ const routeHTML = DATA.tamperCards.map(c => {
 }).join('');
 const tamperCardsEl = document.getElementById('tamper-cards');
 if (tamperCardsEl) tamperCardsEl.innerHTML = routeHTML || '<p style="color:var(--text-tertiary)">No confirmed tampering cases.</p>';
+function tamperCardToRow(c) {
+  return {
+    plate: c.Plate, vehicle: c.Vehicle || '', fleetNumber: c.FleetNumber || '', severity: c.Severity || '',
+    arrivalDate: c.ArrivalDate || '', arrivalTime: c.ArrivalTime || '', atLocation: c.AtLocation || '',
+    nextDate: c.NextDate || '', nextTime: c.NextTime || '', fromLocation: c.FromLocation || '',
+    distanceKm: c.DistanceKm || 0, gapDuration: c.GapDuration || '', impliedSpeed: c.ImpliedSpeedKmh || 0,
+    powerEvent: c.PowerEventInGap || '',
+  };
+}
+document.querySelectorAll('#tamper-cards .route-card').forEach((cardEl, i) => {
+  cardEl.style.cursor = 'pointer';
+  cardEl.title = 'Click for the full case record';
+  cardEl.addEventListener('click', () => {
+    const c = DATA.tamperCards[i];
+    const footLink = document.querySelector('.nav-item[data-panel="p-tconfirmed"]') ? {label: 'View Confirmed Cases', panel: 'p-tconfirmed'} : null;
+    openDrillDown(c.Plate, 'Full confirmed tampering case (' + c.DistanceKm + ' km gap).', TAMPER_COLS, [tamperCardToRow(c)], footLink);
+  });
+});
 
 }
 
