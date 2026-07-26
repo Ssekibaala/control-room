@@ -146,16 +146,20 @@
   .nav-count.warn { background:var(--warning-surface); color:var(--warning); }
   .nav-count.danger { background:var(--danger-surface); color:var(--danger); }
 
-  /* Collapsed sidebar: the count badge no longer fits as an inline flex
-     sibling next to the icon (was being clipped by .nav-item's own
-     overflow:hidden). Turn it into a small corner badge overlaid on the
-     icon instead, a standard icon-only-nav pattern. */
-  .sidebar.collapsed .nav-item { justify-content:center; overflow:visible; }
+  /* Collapsed sidebar: a count badge floating in the icon's corner had
+     nowhere to go in a 72px column and ended up sitting on top of the
+     icon glyph itself, illegible. Stack instead: icon on its own row,
+     the count as its own small pill directly underneath, same pattern
+     as a stat tile. Nothing overlaps, everything stays legible. */
+  .sidebar.collapsed .nav-item {
+    flex-direction:column; justify-content:flex-start; align-items:center;
+    gap:5px; padding:9px 4px 8px; overflow:visible;
+  }
+  .sidebar.collapsed .nav-item.active::before { left:2px; }
   .sidebar.collapsed .nav-count {
-    position:absolute; top:1px; right:0px; margin-left:0;
-    min-width:18px; height:18px; padding:0 4px; font-size:10.5px; font-weight:700;
-    display:flex; align-items:center; justify-content:center; line-height:1;
-    box-shadow:0 0 0 2px var(--sidebar-bg);
+    position:static; margin-left:0; max-width:58px;
+    padding:1.5px 6px; font-size:9.5px; font-weight:700;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
 
   .sidebar-foot { padding:var(--sp-2); border-top:1px solid var(--divider); }
@@ -258,9 +262,59 @@
 
   .ff-row { margin-bottom:12px; }
   .ff-row label { display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px; }
-  .ff-row input, .ff-row textarea { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
+  .ff-row input, .ff-row textarea, .ff-row select { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
     padding:9px 12px; border-radius:9px; font-size:13px; font-family:inherit; resize:vertical; }
-  .ff-row input:focus, .ff-row textarea:focus { outline:none; border-color:var(--primary); }
+  .ff-row select { cursor:pointer; }
+  .ff-row input:focus, .ff-row textarea:focus, .ff-row select:focus { outline:none; border-color:var(--primary); }
+
+  /* ---- Manage Users panel ---- */
+  .user-form-submit { width:100%; margin-top:4px; }
+  .users-list-row { display:grid; grid-template-columns:1fr 160px 110px; align-items:center; gap:12px;
+    padding:11px 4px; border-bottom:1px solid var(--divider); }
+  .users-list-row:last-child { border-bottom:none; }
+  .users-list-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
+    color:var(--text-tertiary); font-weight:600; border-bottom:1px solid var(--border); padding-bottom:9px; }
+  .users-list-row .u-name { font-family:'JetBrains Mono'; font-size:13px; font-weight:600; color:var(--text-primary); }
+  .users-list-row .u-lastlogin { font-family:'JetBrains Mono'; font-size:11.5px; color:var(--text-secondary); }
+  .users-list-row .u-lastlogin.never { color:var(--text-tertiary); font-style:italic; }
+  .users-list-row .role-pill { justify-self:start; }
+  .users-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .btn-secondary { background:var(--hover-surface); border:1px solid var(--border); color:var(--text-secondary);
+    padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:600; font-family:inherit; cursor:pointer;
+    display:inline-flex; align-items:center; transition:background-color 0.15s, color 0.15s, border-color 0.15s; }
+  .btn-secondary:hover { color:var(--text-primary); border-color:var(--text-tertiary); }
+  .roles-box-modal { max-width:620px; }
+  .users-list-row .u-you { font-size:10.5px; color:var(--text-tertiary); font-weight:500; margin-left:6px; }
+  .role-pill { font-size:10.5px; font-weight:700; padding:3px 10px; border-radius:20px; text-transform:capitalize; letter-spacing:0.2px; }
+  .role-pill.admin { background:var(--danger-surface); color:var(--danger); }
+  .role-pill.technician { background:var(--warning-surface); color:var(--warning); }
+  .role-pill.client { background:var(--info-surface); color:var(--info); }
+  .users-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+  .btn-icon-inline { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2.2;
+    stroke-linecap:round; vertical-align:-2px; margin-right:5px; }
+  .createuser-box { max-width:460px; }
+
+  /* ---- Roles & Visibility matrix ---- */
+  .roles-row { display:grid; grid-template-columns:1fr repeat(3, 92px); align-items:center;
+    gap:8px; padding:9px 4px; border-bottom:1px solid var(--divider); }
+  .roles-row:last-of-type { border-bottom:none; }
+  .roles-head { border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:4px; }
+  .roles-panel-name { font-size:12.5px; color:var(--text-primary); font-weight:500; }
+  .roles-head .roles-panel-name { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-tertiary); font-weight:600; }
+  .roles-cell { display:flex; justify-content:center; }
+  .roles-check { display:inline-flex; cursor:pointer; }
+  .roles-check input { position:absolute; opacity:0; width:0; height:0; }
+  .roles-box { width:18px; height:18px; border-radius:5px; border:1.5px solid var(--border);
+    background:var(--hover-surface); display:block; position:relative; transition:background-color 0.15s, border-color 0.15s; }
+  .roles-check input:checked + .roles-box { background:var(--primary); border-color:var(--primary); }
+  .roles-check input:checked + .roles-box::after { content:""; position:absolute; left:5.5px; top:2px;
+    width:4px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg); }
+  .roles-check:hover .roles-box { border-color:var(--primary); }
+  .roles-check.locked { cursor:not-allowed; opacity:0.35; }
+  .roles-check.locked:hover .roles-box { border-color:var(--border); }
+  .roles-actions { display:flex; align-items:center; justify-content:space-between; gap:16px;
+    margin-top:var(--sp-3); padding-top:var(--sp-2); border-top:1px solid var(--divider); }
+  .roles-hint { font-size:11.5px; color:var(--text-tertiary); }
   .ff-toggle { display:flex; gap:8px; }
   .ff-toggle-btn { flex:1; padding:10px; border-radius:9px; border:1px solid var(--border); background:var(--hover-surface);
     color:var(--text-secondary); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
@@ -367,7 +421,75 @@
   .panel-card-head { margin-bottom:var(--sp-2); }
   .panel-card-head h3 { font-size:13.5px; color:var(--text-primary); font-weight:700; }
   .chart-body { display:flex; align-items:center; justify-content:center; min-height:170px; }
-  .period-label { font-size:11.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; margin:-14px 0 var(--sp-2); }
+  .chart-empty { color:var(--text-tertiary); font-size:12.5px; padding:24px 0; }
+  .period-label { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--text-tertiary);
+    font-family:'JetBrains Mono'; margin:-10px 0 var(--sp-2); padding:4px 12px; background:var(--hover-surface);
+    border:1px solid var(--border); border-radius:20px; }
+  .chart-subhead { display:block; font-size:11px; font-weight:500; color:var(--text-tertiary); margin-top:3px; }
+
+  /* ---- Tampering Summary: severity-band comparison rows ---- */
+  .tamper-chart-card { min-height:0; }
+  .sevband-chart { width:100%; display:flex; flex-direction:column; gap:18px; }
+  .sevband-row { display:grid; grid-template-columns:130px 1fr; gap:16px; align-items:center;
+    padding:12px; border-radius:12px; border:1px solid transparent; cursor:pointer;
+    transition:background-color 0.15s, border-color 0.15s, transform 0.1s; }
+  .sevband-row:hover { background:var(--hover-surface); border-color:var(--border); }
+  .sevband-row:active { transform:scale(0.99); }
+  .sevband-label { display:flex; flex-direction:column; gap:3px; }
+  .sevband-dot { width:9px; height:9px; border-radius:3px; margin-bottom:2px; }
+  .sevband-name { font-size:13px; font-weight:700; color:var(--text-primary); }
+  .sevband-rule { font-size:10.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; }
+  .sevband-bars { display:flex; flex-direction:column; gap:8px; }
+  .sevband-bar-line { display:grid; grid-template-columns:78px 1fr 34px; align-items:center; gap:10px; }
+  .sevband-tag { font-size:10px; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:0.4px; }
+  .sevband-track { background:var(--divider); border-radius:5px; height:9px; overflow:hidden; }
+  .sevband-fill { height:100%; border-radius:5px; transition:width 0.6s cubic-bezier(.16,1,.3,1); }
+  .sevband-fill.faded { opacity:0.4; }
+  .sevband-value { font-family:'JetBrains Mono'; font-size:12px; font-weight:700; text-align:right; }
+  /* ---- Tampering Summary: evidence-behind-the-gaps breakdown ---- */
+  .evidence-block { margin-top:var(--sp-3); padding-top:var(--sp-3); border-top:1px solid var(--divider); }
+  .evidence-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
+    color:var(--text-tertiary); font-weight:600; margin-bottom:12px; }
+  .evidence-stack { display:flex; height:10px; border-radius:5px; overflow:hidden; gap:2px; margin-bottom:14px; }
+  .evidence-seg { height:100%; }
+  .evidence-seg.danger, .evidence-dot.danger { background:var(--danger); }
+  .evidence-seg.warning, .evidence-dot.warning { background:var(--warning); }
+  .evidence-seg.muted, .evidence-dot.muted { background:var(--text-tertiary); opacity:0.45; }
+  .evidence-row { display:grid; grid-template-columns:10px 1fr 40px 40px; align-items:center; gap:10px; padding:6px 0; }
+  .evidence-dot { width:9px; height:9px; border-radius:3px; }
+  .evidence-label { font-size:12px; color:var(--text-primary); display:flex; flex-direction:column; gap:1px; }
+  .evidence-note { font-size:10.5px; color:var(--text-tertiary); }
+  .evidence-count { font-family:'JetBrains Mono'; font-size:12.5px; font-weight:700; color:var(--text-primary); text-align:right; }
+  .evidence-pct { font-family:'JetBrains Mono'; font-size:11px; color:var(--text-tertiary); text-align:right; }
+
+  /* ---- Tampering Summary: top-vehicles ranking ---- */
+  .topveh-chart { width:100%; display:flex; flex-direction:column; gap:4px; }
+  .topveh-row { display:grid; grid-template-columns:28px 1fr 30px; align-items:center; gap:12px;
+    padding:9px 10px; border-radius:10px; cursor:pointer; transition:background-color 0.15s, transform 0.1s; }
+  .topveh-row:hover { background:var(--hover-surface); }
+  .topveh-row:active { transform:scale(0.99); }
+  .topveh-rank { font-family:'JetBrains Mono'; font-size:11px; font-weight:700; color:var(--text-tertiary);
+    background:var(--hover-surface); border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; }
+  .topveh-rank.gold { background:#f5c84222; color:#e0ab1c; }
+  .topveh-rank.silver { background:#c0c8d222; color:#9aa5b1; }
+  .topveh-rank.bronze { background:#d9863022; color:#c9762a; }
+  .topveh-info { display:flex; flex-direction:column; gap:5px; min-width:0; }
+  .topveh-name { font-family:'JetBrains Mono'; font-size:11.5px; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .topveh-track { background:var(--divider); border-radius:4px; height:7px; overflow:hidden; }
+  .topveh-fill { height:100%; border-radius:4px; background:var(--investigation); transition:width 0.6s cubic-bezier(.16,1,.3,1); }
+  .topveh-value { font-family:'JetBrains Mono'; font-size:12.5px; font-weight:700; color:var(--investigation); text-align:right; }
+
+  /* ---- Tampering Summary: method, as a step sequence not a bare list ---- */
+  .method-steps { display:flex; flex-direction:column; }
+  .method-step { display:grid; grid-template-columns:28px 1fr; gap:14px; padding:10px 0; position:relative; }
+  .method-step:not(:last-child)::before { content:""; position:absolute; left:13px; top:36px; bottom:-4px; width:2px; background:var(--divider); }
+  .method-step-num { width:28px; height:28px; border-radius:50%; background:var(--hover-surface); border:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-size:12px; font-weight:700;
+    color:var(--text-secondary); flex-shrink:0; z-index:1; }
+  .method-step-text { font-size:12.5px; line-height:1.6; color:var(--text-secondary); padding-top:4px; }
+  .method-step-text b { color:var(--text-primary); }
+  .method-step.outcome.confirmed .method-step-num { background:var(--success-surface); border-color:transparent; color:var(--success); }
+  .method-step.outcome.unconfirmed .method-step-num { background:var(--warning-surface); border-color:transparent; color:var(--warning); }
 
   .gauge-wrap { position:relative; display:flex; align-items:center; justify-content:center; }
   .radial { width:150px; height:150px; transform:rotate(-90deg); }
@@ -681,6 +803,12 @@
           <span>Settings</span>
         </button>
 {% endif %}
+        {% if 'p-users' in allowed_panels %}
+<button class="nav-item" data-panel="p-users" data-label="Manage Users">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Manage Users</span><span class="nav-count" id="users-nav-badge">0</span>
+        </button>
+{% endif %}
       </nav>
 
       <div class="nav-group-label">Cross-Analysis</div>
@@ -812,6 +940,67 @@
       <div class="drill-foot" id="drill-foot"></div>
     </div>
   </div>
+
+{% if 'p-users' in allowed_panels %}
+  <div class="drill-backdrop" id="createuser-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Create account">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">Create Account</div>
+          <div class="drill-subtitle">The role you pick here decides everything this person can open.</div>
+        </div>
+        <button class="icon-btn" id="createuser-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body">
+        <form id="user-create-form">
+          <div class="ff-row">
+            <label for="uf-username">Username</label>
+            <input type="text" id="uf-username" placeholder="e.g. kelvin.o" autocomplete="off" required>
+          </div>
+          <div class="ff-row">
+            <label for="uf-role">Role</label>
+            <select id="uf-role" required>
+              <option value="" disabled selected>Choose a role&hellip;</option>
+              <option value="admin">Admin &mdash; full access, settings, user management</option>
+              <option value="technician">Technician &mdash; full operational access, no settings</option>
+              <option value="client">Client &mdash; fleet health &amp; feedback only</option>
+            </select>
+          </div>
+          <div class="ff-row">
+            <label for="uf-password">Password</label>
+            <input type="password" id="uf-password" placeholder="At least 8 characters" autocomplete="new-password" required>
+          </div>
+          <div class="ff-row">
+            <label for="uf-password-confirm">Confirm Password</label>
+            <input type="password" id="uf-password-confirm" placeholder="Re-enter the password" autocomplete="new-password" required>
+          </div>
+          <div id="uf-msg" class="ff-msg"></div>
+          <button type="submit" id="uf-submit" class="btn-primary user-form-submit">Create Account</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="drill-backdrop" id="roles-backdrop">
+    <div class="drill-box roles-box-modal" role="dialog" aria-modal="true" aria-label="Roles and visibility">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">Roles &amp; Visibility</div>
+          <div class="drill-subtitle">Exactly what each role can open. Tick or untick a panel to change it for everyone holding that role.</div>
+        </div>
+        <button class="icon-btn" id="roles-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body">
+        <div id="roles-matrix"><div class="feedback-loading">Loading roles&hellip;</div></div>
+        <div id="roles-msg" class="ff-msg"></div>
+      </div>
+    </div>
+  </div>
+{% endif %}
 
   <div class="main">
     <header class="topbar">
@@ -1032,6 +1221,35 @@
       </section>
 {% endif %}
 
+      {% if 'p-users' in allowed_panels %}
+<section id="p-users" class="panel">
+        <div class="callout muted">
+          Every account is assigned exactly one role, and that role decides what they can see &mdash; admin and
+          technician get the full operational picture including tampering data, client sees fleet health and
+          feedback only. Create accounts for your team here instead of needing shell access.
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head users-head">
+            <div>
+              <h3>Team Accounts</h3>
+              <span class="chart-subhead" id="users-count">&nbsp;</span>
+            </div>
+            <div class="users-head-actions">
+              <button class="btn-secondary" id="open-roles">
+                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                Roles &amp; Visibility
+              </button>
+              <button class="btn-primary" id="open-create-user">
+                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 5v14M5 12h14"/></svg>
+                Create Account
+              </button>
+            </div>
+          </div>
+          <div id="users-list"><div class="feedback-loading">Loading accounts&hellip;</div></div>
+        </div>
+      </section>
+{% endif %}
+
       {% if 'p-priority' in allowed_panels %}
 <section id="p-priority" class="panel">
         <div class="callout investigation">
@@ -1072,25 +1290,46 @@
           <div class="kpi-card clickable" data-goto="p-tquality" data-goto-label="Data Quality Log"><div class="kpi-head"><span class="kpi-label">Null GPS Excluded</span></div><div class="kpi-main"><span class="kpi-num" id="kpi-num-nullgps" data-count="0">0</span></div><div class="kpi-goto">View log <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div></div>
         </div>
         <p class="period-label" id="period-label"></p>
-        <div class="grid-row">
-          <div class="panel-card wide">
-            <div class="panel-card-head"><h3>Severity Bands &mdash; Confirmed vs Unconfirmed</h3></div>
+        <div class="two-col">
+          <div class="panel-card wide tamper-chart-card">
+            <div class="panel-card-head">
+              <h3>Severity Bands</h3>
+              <span class="chart-subhead">Confirmed vs. unconfirmed cases, by distance band &mdash; click a band to drill in</span>
+            </div>
             <div class="chart-body" id="chart-sevbands"></div>
           </div>
-          <div class="panel-card wide">
-            <div class="panel-card-head"><h3>Top Vehicles &mdash; Confirmed Cases</h3></div>
+          <div class="panel-card wide tamper-chart-card">
+            <div class="panel-card-head">
+              <h3>Top Vehicles</h3>
+              <span class="chart-subhead">Ranked by confirmed case count &mdash; click a vehicle to drill in</span>
+            </div>
             <div class="chart-body" id="chart-topvehicles"></div>
           </div>
         </div>
         <div class="panel-card">
           <div class="panel-card-head"><h3>Method</h3></div>
-          <ol class="method-list">
-            <li>Every trip's arrival location is compared to the departure location of that vehicle's next trip.</li>
-            <li>If the two points are more than 2 km apart, the vehicle relocated without a trip being logged.</li>
-            <li>Each flagged gap is checked against Power Disconnect / Power Reconnect events in the same window.</li>
-            <li><b>Confirmed:</b> a power event was logged in the gap window, strongest evidence.</li>
-            <li><b>Unconfirmed:</b> no power event logged, vehicle still moved untracked, needs a field check.</li>
-          </ol>
+          <div class="method-steps">
+            <div class="method-step">
+              <div class="method-step-num">1</div>
+              <div class="method-step-text">Every trip's arrival location is compared to the departure location of that vehicle's <b>next</b> trip.</div>
+            </div>
+            <div class="method-step">
+              <div class="method-step-num">2</div>
+              <div class="method-step-text">If the two points are more than <b>2&nbsp;km</b> apart, the vehicle relocated without a trip being logged.</div>
+            </div>
+            <div class="method-step">
+              <div class="method-step-num">3</div>
+              <div class="method-step-text">Each flagged gap is checked against Power Disconnect / Power Reconnect events in the same window.</div>
+            </div>
+            <div class="method-step outcome confirmed">
+              <div class="method-step-num">✓</div>
+              <div class="method-step-text"><b>Confirmed</b> &mdash; a power event was logged in the gap window, the strongest evidence.</div>
+            </div>
+            <div class="method-step outcome unconfirmed">
+              <div class="method-step-num">?</div>
+              <div class="method-step-text"><b>Unconfirmed</b> &mdash; no power event logged, vehicle still moved untracked, needs a field check.</div>
+            </div>
+          </div>
         </div>
       </section>
 {% endif %}
@@ -1135,6 +1374,7 @@ const DATA_PLACEHOLDER_UNUSED = null;
 
 let DATA = null;
 let CURRENT_ROLE = null;
+let CURRENT_USERNAME = null;
 
 const HTML_ESCAPES = {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'};
 function escapeHTML(v) {
@@ -1183,6 +1423,7 @@ async function boot() {
     const userDisplay = document.getElementById('username-display');
     if (userDisplay) userDisplay.textContent = sessionInfo.username + ' (' + sessionInfo.role + ')';
     CURRENT_ROLE = sessionInfo.role;
+    CURRENT_USERNAME = sessionInfo.username;
     applyRolePanels(sessionInfo.panels);
 
     const dataResp = await fetch('/api/dashboard-data');
@@ -1304,6 +1545,7 @@ const PANEL_SUBS = {
   'p-tquality': 'Excluded for null GPS fix',
   'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
   'p-activity': 'Every feedback comment across every vehicle, newest first',
+  'p-users': 'Team accounts and role assignment',
 };
 let ALLOWED_PANELS = null;
 
@@ -1612,6 +1854,200 @@ function fetchActivityFeed() {
     });
 }
 fetchActivityFeed();
+
+// ---- Manage Users: admin/technician only, gated server-side too (the
+// panel itself only renders when the Jinja allowed_panels check passes,
+// and /api/users double-checks the session role regardless). ----
+const usersForm = document.getElementById('user-create-form');
+if (usersForm) {
+  // ---- Create Account modal ----
+  const cuBackdrop = document.getElementById('createuser-backdrop');
+  function openCreateUser() {
+    document.getElementById('uf-msg').textContent = '';
+    document.getElementById('uf-msg').className = 'ff-msg';
+    usersForm.reset();
+    cuBackdrop.classList.add('open');
+    setTimeout(() => document.getElementById('uf-username').focus(), 50);
+  }
+  function closeCreateUser() { cuBackdrop.classList.remove('open'); }
+  document.getElementById('open-create-user').addEventListener('click', openCreateUser);
+  document.getElementById('createuser-close').addEventListener('click', closeCreateUser);
+  cuBackdrop.addEventListener('click', (e) => { if (e.target === cuBackdrop) closeCreateUser(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && cuBackdrop.classList.contains('open')) closeCreateUser();
+  });
+
+  function renderUsersList(list) {
+    const el = document.getElementById('users-list');
+    const countEl = document.getElementById('users-count');
+    if (countEl) countEl.textContent = list.length + ' account' + (list.length === 1 ? '' : 's');
+    if (!list.length) { el.innerHTML = '<div class="activity-empty">No accounts yet.</div>'; return; }
+    const head = '<div class="users-list-row users-list-head">' +
+      '<span>Account</span><span>Last signed in</span><span>Role</span></div>';
+    el.innerHTML = head + list.map(u =>
+      '<div class="users-list-row">' +
+        '<span class="u-name">' + escapeHTML(u.username) +
+          (u.username === CURRENT_USERNAME ? '<span class="u-you">(you)</span>' : '') + '</span>' +
+        '<span class="u-lastlogin' + (u.lastLogin ? '' : ' never') + '">' +
+          escapeHTML(u.lastLogin || 'Never') + '</span>' +
+        '<span class="role-pill ' + escapeHTML(u.role) + '">' + escapeHTML(u.role) + '</span>' +
+      '</div>'
+    ).join('');
+  }
+
+  // ---- Roles & Visibility modal ----
+  const rolesBackdrop = document.getElementById('roles-backdrop');
+  function openRoles() {
+    document.getElementById('roles-msg').textContent = '';
+    document.getElementById('roles-msg').className = 'ff-msg';
+    fetchRolePanels(); // always re-read on open, so it reflects any save from another session
+    rolesBackdrop.classList.add('open');
+  }
+  function closeRoles() { rolesBackdrop.classList.remove('open'); }
+  document.getElementById('open-roles').addEventListener('click', openRoles);
+  document.getElementById('roles-close').addEventListener('click', closeRoles);
+  rolesBackdrop.addEventListener('click', (e) => { if (e.target === rolesBackdrop) closeRoles(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && rolesBackdrop.classList.contains('open')) closeRoles();
+  });
+
+  let ROLE_PANELS = null;
+  function renderRolesMatrix(data) {
+    const el = document.getElementById('roles-matrix');
+    const roles = data.roles;
+    const head = '<div class="roles-row roles-head">' +
+      '<div class="roles-panel-name">Panel</div>' +
+      roles.map(r => '<div class="roles-cell"><span class="role-pill ' + escapeHTML(r) + '">' + escapeHTML(r) + '</span></div>').join('') +
+      '</div>';
+    const rows = data.panels.map(p =>
+      '<div class="roles-row" data-panel="' + escapeHTML(p.id) + '">' +
+        '<div class="roles-panel-name">' + escapeHTML(p.label) + '</div>' +
+        roles.map(r => {
+          const locked = p.lockedFor.includes(r);
+          const on = p.roles.includes(r);
+          return '<div class="roles-cell">' +
+            '<label class="roles-check' + (locked ? ' locked' : '') + '"' +
+              (locked ? ' title="Locked by design &mdash; this cannot be changed here."' : '') + '>' +
+              '<input type="checkbox" data-role="' + escapeHTML(r) + '"' +
+                (on ? ' checked' : '') + (locked ? ' disabled' : '') + '>' +
+              '<span class="roles-box"></span>' +
+            '</label></div>';
+        }).join('') +
+      '</div>'
+    ).join('');
+    el.innerHTML = head + rows +
+      '<div class="roles-actions">' +
+        '<span class="roles-hint">Changes apply the next time each person reloads the dashboard.</span>' +
+        '<button class="btn-primary" id="roles-save">Save Role Settings</button>' +
+      '</div>';
+
+    document.getElementById('roles-save').addEventListener('click', saveRolesMatrix);
+  }
+
+  function saveRolesMatrix() {
+    const btn = document.getElementById('roles-save');
+    const msgEl = document.getElementById('roles-msg');
+    const panels = {};
+    document.querySelectorAll('#roles-matrix .roles-row[data-panel]').forEach(row => {
+      panels[row.dataset.panel] = [...row.querySelectorAll('input[type=checkbox]')]
+        .filter(cb => cb.checked).map(cb => cb.dataset.role);
+    });
+    btn.disabled = true; btn.textContent = 'Saving…';
+    fetch('/api/role-panels', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({panels}),
+    })
+      .then(r => r.json().then(body => ({ok: r.ok, body})))
+      .then(({ok, body}) => {
+        btn.disabled = false; btn.textContent = 'Save Role Settings';
+        if (!ok) {
+          msgEl.textContent = body.error || 'Could not save role settings.';
+          msgEl.className = 'ff-msg err';
+          return;
+        }
+        msgEl.textContent = 'Role settings saved.';
+        msgEl.className = 'ff-msg ok';
+        fetchRolePanels(); // re-read, so any server-side correction shows immediately
+      })
+      .catch(() => {
+        btn.disabled = false; btn.textContent = 'Save Role Settings';
+        msgEl.textContent = 'Could not reach the server.';
+        msgEl.className = 'ff-msg err';
+      });
+  }
+
+  function fetchRolePanels() {
+    fetch('/api/role-panels')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+      .then(data => { ROLE_PANELS = data; renderRolesMatrix(data); })
+      .catch(() => {
+        document.getElementById('roles-matrix').innerHTML =
+          '<div class="activity-empty">Could not load role settings.</div>';
+      });
+  }
+
+  function fetchUsers() {
+    fetch('/api/users')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+      .then(data => {
+        const list = data.users || [];
+        renderUsersList(list);
+        const navBadge = document.getElementById('users-nav-badge');
+        if (navBadge) navBadge.textContent = list.length;
+      })
+      .catch(() => {
+        document.getElementById('users-list').innerHTML = '<div class="activity-empty">Could not load accounts.</div>';
+      });
+  }
+  fetchUsers();
+
+  usersForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const msgEl = document.getElementById('uf-msg');
+    const username = document.getElementById('uf-username').value.trim();
+    const role = document.getElementById('uf-role').value;
+    const password = document.getElementById('uf-password').value;
+    const confirm = document.getElementById('uf-password-confirm').value;
+
+    if (password !== confirm) {
+      msgEl.textContent = 'Passwords do not match.';
+      msgEl.className = 'ff-msg err';
+      return;
+    }
+    if (password.length < 8) {
+      msgEl.textContent = 'Password must be at least 8 characters.';
+      msgEl.className = 'ff-msg err';
+      return;
+    }
+
+    const submitBtn = document.getElementById('uf-submit');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating…';
+    fetch('/api/users', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, role, password}),
+    })
+      .then(r => r.json().then(body => ({ok: r.ok, body})))
+      .then(({ok, body}) => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Account';
+        if (!ok) {
+          msgEl.textContent = body.error || 'Could not create account.';
+          msgEl.className = 'ff-msg err';
+          return;
+        }
+        usersForm.reset();
+        fetchUsers();
+        closeCreateUser();
+      })
+      .catch(() => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Account';
+        msgEl.textContent = 'Could not reach the server.';
+        msgEl.className = 'ff-msg err';
+      });
+  });
+}
 
 // ---- Bind real fetched values onto their elements (server sends generic
 // zeros in the HTML shell now, since the same page is served to every
@@ -2196,43 +2632,116 @@ function drillIntoBucket(label) {
   const sevEl = document.getElementById('chart-sevbands');
   if (!sevEl) return; // panel not rendered for this role at all, nothing to draw
   const bands = DATA.severityBands;
-  if (!bands.length) { sevEl.innerHTML = '<p style="color:var(--text-tertiary)">No data.</p>'; return; }
+  if (!bands.length) { sevEl.innerHTML = '<div class="chart-empty">No data.</div>'; return; }
   const max = Math.max(...bands.map(b => Math.max(b.confirmed, b.unconfirmed)), 1);
-  const groups = bands.map(b => {
-    const hc = Math.round((b.confirmed/max)*160), hu = Math.round((b.unconfirmed/max)*160);
+
+  const rows = bands.map(b => {
     const color = sevColor(b.severity);
-    return '<div style="display:flex;flex-direction:column;align-items:center;gap:6px;">' +
-      '<div style="display:flex;gap:6px;align-items:flex-end;height:170px;">' +
-        '<div style="width:24px;height:' + hc + 'px;background:' + color + ';border-radius:4px 4px 0 0;" title="Confirmed: ' + b.confirmed + '"></div>' +
-        '<div style="width:24px;height:' + hu + 'px;background:' + color + '55;border-radius:4px 4px 0 0;" title="Unconfirmed: ' + b.unconfirmed + '"></div>' +
+    const wc = Math.max(Math.round((b.confirmed/max)*100), b.confirmed > 0 ? 3 : 0);
+    const wu = Math.max(Math.round((b.unconfirmed/max)*100), b.unconfirmed > 0 ? 3 : 0);
+    return '<div class="sevband-row" data-severity="' + escapeHTML(b.severity) + '" tabindex="0" role="button" ' +
+        'title="' + escapeHTML(b.severity) + ' (' + escapeHTML(b.rule) + '): ' + b.confirmed + ' confirmed, ' + b.unconfirmed + ' unconfirmed &mdash; click for the full case list">' +
+      '<div class="sevband-label">' +
+        '<span class="sevband-dot" style="background:' + color + '"></span>' +
+        '<span class="sevband-name">' + escapeHTML(b.severity) + '</span>' +
+        '<span class="sevband-rule">' + escapeHTML(b.rule) + '</span>' +
       '</div>' +
-      '<div style="font-size:10.5px;color:var(--text-secondary);text-align:center">' + b.severity + '<br><span style="color:var(--text-tertiary)">' + b.rule + '</span></div>' +
-      '<div style="font-family:\'JetBrains Mono\';font-size:10.5px;color:' + color + '">' + b.confirmed + ' / ' + b.unconfirmed + '</div>' +
-      '</div>';
+      '<div class="sevband-bars">' +
+        '<div class="sevband-bar-line">' +
+          '<span class="sevband-tag">Confirmed</span>' +
+          '<div class="sevband-track"><div class="sevband-fill" style="width:' + wc + '%;background:' + color + '"></div></div>' +
+          '<span class="sevband-value" style="color:' + color + '">' + b.confirmed + '</span>' +
+        '</div>' +
+        '<div class="sevband-bar-line">' +
+          '<span class="sevband-tag">Unconfirmed</span>' +
+          '<div class="sevband-track"><div class="sevband-fill faded" style="width:' + wu + '%;background:' + color + '"></div></div>' +
+          '<span class="sevband-value" style="color:' + color + '">' + b.unconfirmed + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }).join('');
-  sevEl.innerHTML =
-    '<div style="display:flex;gap:26px;align-items:flex-end;">' + groups + '</div>' +
-    '<div class="legend" style="margin-top:18px;flex-direction:row;gap:16px;margin-left:0;">' +
-    '<div class="legend-item"><span class="legend-dot" style="background:var(--text-tertiary)"></span>Solid = Confirmed</div>' +
-    '<div class="legend-item"><span class="legend-dot" style="background:var(--text-tertiary);opacity:0.4"></span>Faded = Unconfirmed</div></div>';
+
+  // Evidence breakdown: what power-event record (if any) sits behind
+  // each flagged gap. This is the actual mechanism that separates
+  // "confirmed" from "unconfirmed" - shown nowhere else on the page,
+  // and it fills the space the old legend wasted restating the row
+  // labels that are already printed on every bar.
+  const allCases = [...DATA.tamperConfirmed, ...DATA.tamperUnconfirmed];
+  const EVIDENCE_ORDER = [
+    {match: 'Power Cycle', label: 'Disconnect + Reconnect', note: 'Power cycled mid-gap', cls: 'danger'},
+    {match: 'no Reconnect', label: 'Disconnect, no Reconnect', note: 'Went dark and stayed dark', cls: 'warning'},
+    {match: 'None logged', label: 'No power event', note: 'Moved untracked, cause unknown', cls: 'muted'},
+  ];
+  const evidenceRows = EVIDENCE_ORDER.map(e => {
+    const n = allCases.filter(c => (c.powerEvent || '').includes(e.match)).length;
+    const pct = allCases.length ? (n / allCases.length) * 100 : 0;
+    return {...e, n, pct};
+  }).filter(e => e.n > 0);
+
+  const evidenceHTML = !evidenceRows.length ? '' :
+    '<div class="evidence-block">' +
+      '<div class="evidence-head">Evidence Behind These Gaps</div>' +
+      '<div class="evidence-stack">' +
+        evidenceRows.map(e => '<div class="evidence-seg ' + e.cls + '" style="width:' + e.pct + '%" ' +
+          'title="' + escapeHTML(e.label) + ': ' + e.n + '"></div>').join('') +
+      '</div>' +
+      evidenceRows.map(e =>
+        '<div class="evidence-row">' +
+          '<span class="evidence-dot ' + e.cls + '"></span>' +
+          '<span class="evidence-label">' + escapeHTML(e.label) +
+            '<span class="evidence-note">' + escapeHTML(e.note) + '</span></span>' +
+          '<span class="evidence-count">' + e.n + '</span>' +
+          '<span class="evidence-pct">' + e.pct.toFixed(0) + '%</span>' +
+        '</div>').join('') +
+    '</div>';
+
+  sevEl.innerHTML = '<div class="sevband-chart">' + rows + '</div>' + evidenceHTML;
+
+  sevEl.querySelectorAll('.sevband-row').forEach(row => {
+    const activate = () => {
+      const severity = row.dataset.severity;
+      const cases = [...DATA.tamperConfirmed, ...DATA.tamperUnconfirmed].filter(c => c.severity === severity);
+      openDrillDown(severity + ' Severity', 'Every confirmed and unconfirmed case in this distance band.', TAMPER_COLS, cases,
+        {panel: 'p-tconfirmed', label: 'Open Confirmed Cases'});
+    };
+    row.addEventListener('click', activate);
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+  });
 })();
 
 (function() {
   const topEl = document.getElementById('chart-topvehicles');
   if (!topEl) return; // panel not rendered for this role at all, nothing to draw
   const top = DATA.topVehicles.slice(0, 8);
-  if (!top.length) { topEl.innerHTML = '<p style="color:var(--text-tertiary)">No data.</p>'; return; }
+  if (!top.length) { topEl.innerHTML = '<div class="chart-empty">No data.</div>'; return; }
   const max = Math.max(...top.map(v => v.confirmedCases), 1);
-  const rows = top.map(v => {
-    const w = Math.round((v.confirmedCases/max)*100);
-    return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;" title="' + escapeHTML(v.vehicle) + ': ' + v.confirmedCases + ' confirmed cases">' +
-      '<div style="width:90px;font-family:\'JetBrains Mono\';font-size:11px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(v.vehicle) + '</div>' +
-      '<div style="flex:1;background:var(--divider);border-radius:4px;height:16px;overflow:hidden;">' +
-        '<div style="width:' + w + '%;height:100%;background:var(--investigation);border-radius:4px;"></div></div>' +
-      '<div style="width:26px;font-family:\'JetBrains Mono\';font-size:11px;color:var(--investigation);font-weight:700;text-align:right;">' + v.confirmedCases + '</div>' +
-      '</div>';
+  const rankClass = i => i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+
+  const rows = top.map((v, i) => {
+    const w = Math.max(Math.round((v.confirmedCases/max)*100), 4);
+    return '<div class="topveh-row" data-fleet="' + escapeHTML(v.fleetNumber) + '" tabindex="0" role="button" ' +
+        'title="' + escapeHTML(v.vehicle) + ': ' + v.confirmedCases + ' confirmed cases &mdash; click for the full list">' +
+      '<div class="topveh-rank ' + rankClass(i) + '">' + (i + 1) + '</div>' +
+      '<div class="topveh-info">' +
+        '<div class="topveh-name">' + escapeHTML(v.vehicle) + '</div>' +
+        '<div class="topveh-track"><div class="topveh-fill" style="width:' + w + '%"></div></div>' +
+      '</div>' +
+      '<div class="topveh-value">' + v.confirmedCases + '</div>' +
+    '</div>';
   }).join('');
-  topEl.innerHTML = '<div style="width:100%">' + rows + '</div>';
+  topEl.innerHTML = '<div class="topveh-chart">' + rows + '</div>';
+
+  topEl.querySelectorAll('.topveh-row').forEach(row => {
+    const activate = () => {
+      const fleetNumber = row.dataset.fleet;
+      const vehicleLabel = row.querySelector('.topveh-name').textContent;
+      const cases = DATA.tamperConfirmed.filter(c => c.fleetNumber === fleetNumber);
+      openDrillDown(vehicleLabel, 'Every confirmed tampering case for this vehicle.', TAMPER_COLS, cases,
+        {panel: 'p-tconfirmed', label: 'Open Confirmed Cases'});
+    };
+    row.addEventListener('click', activate);
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+  });
 })();
 
 // ---- Critical / route cards (identical selection logic, restyled markup) ----

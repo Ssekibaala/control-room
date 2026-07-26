@@ -17,9 +17,44 @@ see but with a reduced version (e.g. Critical Assets minus internal
 investigation reasoning).
 """
 
+import json
+import os
+
 ROLES = ("admin", "technician", "client")
 
-PANEL_ACCESS = {
+# Human-readable names for the Roles & Visibility editor, so the UI
+# never has to show raw panel ids like "p-tquality" to a person.
+PANEL_LABELS = {
+    "p-exec": "Executive Dashboard",
+    "p-full": "Full Data",
+    "p-critical": "Critical Assets",
+    "p-pending": "Pending Feedback",
+    "p-border": "Border Risk",
+    "p-recovered": "Recovered / New",
+    "p-healthy": "Healthy Fleet",
+    "p-known": "Known Issues",
+    "p-activity": "Recent Activity",
+    "p-settings": "Settings",
+    "p-users": "Manage Users",
+    "p-priority": "Priority Overlap",
+    "p-tsummary": "Tampering Summary",
+    "p-tconfirmed": "Confirmed Cases",
+    "p-tunconfirmed": "Unconfirmed Cases",
+    "p-tquality": "Data Quality Log",
+}
+
+# Panels that can never be granted to a client, no matter what someone
+# ticks in the Roles editor. These carry tampering evidence and internal
+# investigation notes - the whole reason filter_payload_for_role()
+# exists. Making them toggleable would let a UI click undo the security
+# boundary the rest of this file enforces, so the editor refuses them
+# server-side rather than trusting the checkbox.
+CLIENT_FORBIDDEN_PANELS = {
+    "p-border", "p-priority", "p-tsummary", "p-tconfirmed",
+    "p-tunconfirmed", "p-tquality", "p-settings", "p-users", "p-full",
+}
+
+_DEFAULT_PANEL_ACCESS = {
     "p-exec":          ("admin", "technician", "client"),
     "p-full":          ("admin", "technician"),
     "p-critical":      ("admin", "technician", "client"),   # client sees a reduced version, see below
@@ -30,12 +65,71 @@ PANEL_ACCESS = {
     "p-known":         ("admin", "technician", "client"),   # explained-offline, no follow-up needed - client-facing by design
     "p-activity":      ("admin", "technician", "client"),   # global feedback feed - everyone should be able to see what's been reported and by whom
     "p-settings":      ("admin",),
+    "p-users":         ("admin", "technician"),
     "p-priority":      ("admin", "technician"),
     "p-tsummary":      ("admin", "technician"),
     "p-tconfirmed":    ("admin", "technician"),
     "p-tunconfirmed":  ("admin", "technician"),
     "p-tquality":      ("admin", "technician"),
 }
+
+# Overrides saved from the Roles & Visibility editor live in their own
+# file, never by rewriting this module - so the shipped defaults above
+# stay readable and a bad save can always be undone by deleting the
+# file. PANEL_ACCESS is rebuilt from defaults + overrides on import and
+# again whenever the editor saves.
+_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "database", "role_panels.json")
+
+
+def _load_overrides():
+    if not os.path.exists(_OVERRIDES_PATH):
+        return {}
+    try:
+        with open(_OVERRIDES_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}  # unreadable/corrupt override file falls back to shipped defaults, never crashes login
+
+
+def _build_panel_access():
+    overrides = _load_overrides()
+    access = {}
+    for panel, default_roles in _DEFAULT_PANEL_ACCESS.items():
+        roles = overrides.get(panel, list(default_roles))
+        clean = [r for r in ROLES if r in roles]
+        if panel in CLIENT_FORBIDDEN_PANELS:
+            clean = [r for r in clean if r != "client"]
+        # p-users is what grants access to this editor itself. If every
+        # role loses it, nobody can ever get back in to fix it, so admin
+        # is pinned on unconditionally.
+        if panel == "p-users" and "admin" not in clean:
+            clean.append("admin")
+        access[panel] = tuple(clean)
+    return access
+
+
+PANEL_ACCESS = _build_panel_access()
+
+
+def save_panel_access(new_access: dict):
+    """
+    Persists a full panel->roles map from the Roles & Visibility editor
+    and reloads PANEL_ACCESS in place. Sanitising happens in
+    _build_panel_access(), so whatever gets written here is re-checked
+    against CLIENT_FORBIDDEN_PANELS on the way back out - a client can
+    never end up with a tampering panel even if the request said so.
+    """
+    cleaned = {
+        panel: [r for r in ROLES if r in new_access.get(panel, [])]
+        for panel in _DEFAULT_PANEL_ACCESS
+    }
+    os.makedirs(os.path.dirname(_OVERRIDES_PATH), exist_ok=True)
+    with open(_OVERRIDES_PATH, "w") as f:
+        json.dump(cleaned, f, indent=2)
+    PANEL_ACCESS.clear()
+    PANEL_ACCESS.update(_build_panel_access())
+    return PANEL_ACCESS
+
 
 # Fields stripped from each row of "critical" and "full" data before
 # a client-role response is built, even on panels they're allowed to
@@ -66,6 +160,10 @@ EXPORT_ACCESS = {
     "integrity_xlsx": ("admin", "technician"),
     "tampering_xlsx": ("admin", "technician"),
 }
+
+# Who can create new accounts. Client role is external (GTL themselves)
+# and should never be able to provision logins for this platform.
+MANAGE_USERS_ROLES = ("admin", "technician")
 
 
 def allowed_panels(role):

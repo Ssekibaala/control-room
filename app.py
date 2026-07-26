@@ -28,8 +28,13 @@ from flask import Flask, request, session, jsonify, redirect, url_for, Response,
 from dotenv import load_dotenv
 load_dotenv()  # loads .env for local dev; no-op on Render, which injects real env vars directly
 
+import users as users_store
 from users import verify_login
-from permissions import filter_payload_for_role, allowed_panels, EXPORT_ACCESS
+import permissions
+from permissions import (
+    filter_payload_for_role, allowed_panels, EXPORT_ACCESS,
+    MANAGE_USERS_ROLES, ROLES, PANEL_LABELS, CLIENT_FORBIDDEN_PANELS,
+)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 
@@ -84,6 +89,109 @@ def api_session():
         "role": session["role"],
         "panels": allowed_panels(session["role"]),
     })
+
+
+@app.route("/api/users", methods=["GET"])
+@login_required
+def api_list_users():
+    """
+    Admin and technician accounts can see who has a login and what role
+    they hold - never password hashes, those never leave users.json.
+    Client role is deliberately excluded: it's an external account
+    (GTL themselves), not part of your team's account administration.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    all_users = users_store.load_users()
+    return jsonify({
+        "users": [
+            {
+                "username": name,
+                "role": info["role"],
+                # Blank for anyone who hasn't signed in since last-login
+                # tracking was added - the UI shows "Never" rather than
+                # inventing a date that was never recorded.
+                "lastLogin": info.get("last_login", ""),
+            }
+            for name, info in sorted(all_users.items())
+        ],
+    })
+
+
+@app.route("/api/users", methods=["POST"])
+@login_required
+def api_create_user():
+    """
+    Lets admin and technician accounts provision new logins from the
+    UI instead of needing shell access to run users.py by hand - the
+    same add_user() call, just reachable without a terminal. Refuses
+    to silently overwrite an existing username: that's still a job for
+    users.py directly, a deliberate, explicit action, not a UI click.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    username = (body.get("username") or "").strip()
+    role = (body.get("role") or "").strip()
+    password = body.get("password") or ""
+
+    if not username or not role or not password:
+        return jsonify({"error": "'username', 'role', and 'password' are all required"}), 400
+    if role not in ROLES:
+        return jsonify({"error": f"'role' must be one of {list(ROLES)}"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+    if username in users_store.load_users():
+        return jsonify({"error": f"'{username}' already has an account"}), 409
+
+    users_store.add_user(username, role, password)
+    return jsonify({"username": username, "role": role}), 201
+
+
+@app.route("/api/role-panels", methods=["GET"])
+@login_required
+def api_role_panels():
+    """The current panel->roles matrix, plus which cells the editor must
+    render as locked (client can never hold a tampering panel, admin can
+    never lose Manage Users) so the UI shows the same rules the server
+    enforces rather than letting someone tick a box that silently
+    won't stick."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    return jsonify({
+        "roles": list(ROLES),
+        "panels": [
+            {
+                "id": panel,
+                "label": PANEL_LABELS.get(panel, panel),
+                "roles": list(roles),
+                "lockedFor": (
+                    ["client"] if panel in CLIENT_FORBIDDEN_PANELS else []
+                ) + (["admin"] if panel == "p-users" else []),
+            }
+            for panel, roles in permissions.PANEL_ACCESS.items()
+        ],
+    })
+
+
+@app.route("/api/role-panels", methods=["POST"])
+@login_required
+def api_save_role_panels():
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    new_access = body.get("panels")
+    if not isinstance(new_access, dict):
+        return jsonify({"error": "'panels' must be an object of panelId -> [roles]"}), 400
+
+    try:
+        updated = permissions.save_panel_access(new_access)
+    except OSError as e:
+        return jsonify({"error": f"Could not save role settings: {e}"}), 503
+
+    return jsonify({"ok": True, "panels": {p: list(r) for p, r in updated.items()}})
 
 
 @app.route("/api/dashboard-data")
@@ -347,6 +455,7 @@ def index():
         "dashboard.html", allowed_panels=allowed_panels(role),
         can_export_integrity=role in EXPORT_ACCESS["integrity_xlsx"],
         can_export_tampering=role in EXPORT_ACCESS["tampering_xlsx"],
+        can_manage_users=role in MANAGE_USERS_ROLES,
     )
 
 

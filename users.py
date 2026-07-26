@@ -14,6 +14,7 @@ create or reset a user:
 import json
 import os
 import sys
+from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 USERS_PATH = os.path.join(os.path.dirname(__file__), "database", "users.json")
@@ -42,6 +43,24 @@ def add_user(username, role, password):
     return users[username]
 
 
+def record_login(username):
+    """
+    Stamps the successful sign-in so Manage Users can show who's
+    actually been using the platform (and, more usefully, who hasn't
+    signed in for months and probably shouldn't still have an account).
+    Deliberately non-fatal: a failure to record this must never be able
+    to block someone from logging in, so any write error is swallowed.
+    """
+    try:
+        users = load_users()
+        if username not in users:
+            return
+        users[username]["last_login"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+        save_users(users)
+    except OSError:
+        pass
+
+
 def verify_login(username, password):
     """Returns the role string on success, None on failure. Never
     reveals whether the failure was a bad username or bad password,
@@ -52,6 +71,7 @@ def verify_login(username, password):
         return None
     if not check_password_hash(user["password_hash"], password):
         return None
+    record_login(username)
     return user["role"]
 
 

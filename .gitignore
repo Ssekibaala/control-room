@@ -12,3 +12,4 @@ data/_refresh_lock.json
 # && pip install -r requirements.txt && python app.py` work immediately
 # without any credentials. Once you add real accounts and a live
 # import replaces this file, feel free to start ignoring them.
+database/role_panels.json

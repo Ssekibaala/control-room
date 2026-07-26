@@ -32,6 +32,13 @@
     background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
     background-size:44px 44px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%, #000 40%, transparent 90%);
   }
+  .partner-badge { display:inline-flex; align-items:center; gap:9px; position:relative; z-index:1;
+    background:#fff; border-radius:12px; padding:8px 16px 8px 10px; width:fit-content; margin-bottom:28px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.25); }
+  .partner-badge img { height:26px; width:auto; display:block; }
+  .partner-badge .divider { width:1px; height:20px; background:rgba(15,23,42,0.15); }
+  .partner-badge .caption { font-size:9.5px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#5b6472; line-height:1.3; }
+
   .brand-top { display:flex; align-items:center; gap:12px; position:relative; z-index:1; }
   .brand-mark { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,var(--primary),var(--primary-2));
     color:#fff; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-weight:700; font-size:12px;
@@ -97,6 +104,11 @@
 <body>
 
 <div class="brand-panel">
+  <div class="partner-badge">
+    <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions">
+    <div class="divider"></div>
+    <div class="caption">Live data<br>from Teletrac</div>
+  </div>
   <div class="brand-top">
     <div class="brand-mark">GTL</div>
     <div>
