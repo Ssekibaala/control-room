@@ -27,7 +27,14 @@ import os
 import json
 from datetime import datetime
 
-FEEDBACK_HEADERS = ["Plate", "Comment", "RequiresFollowup", "Status", "DateAdded", "AddedBy", "Role"]
+FEEDBACK_HEADERS = ["Plate", "Comment", "RequiresFollowup", "Status", "DateAdded", "AddedBy", "Role", "EntryType"]
+
+# Which field an entry authors. Both land in the same append-only trail
+# and both show in one chronological history per asset - EntryType only
+# decides which column on the dashboard the newest entry drives.
+ENTRY_FEEDBACK = "feedback"   # the client's account of the asset
+ENTRY_ACTION = "action"       # the technician's operational instruction
+ENTRY_TYPES = (ENTRY_FEEDBACK, ENTRY_ACTION)
 
 CLOSED_KEYWORDS = ("sold", "decommission", "written off", "write off", "scrapped")
 IGNORE_KEYWORDS = ("monitoring", "fine", "no action", "parked", "ignore")
@@ -210,6 +217,11 @@ def _parsed_feedback_rows():
             continue
         comment = str(row.get("Comment", "")).strip()
         requires_followup = _parse_bool(row.get("RequiresFollowup"))
+        # Rows written before EntryType existed are all client feedback -
+        # that's the only kind the form could produce at the time.
+        entry_type = str(row.get("EntryType", "")).strip().lower()
+        if entry_type not in ENTRY_TYPES:
+            entry_type = ENTRY_FEEDBACK
         parsed.append({
             "plate": plate,
             "comment": comment,
@@ -218,28 +230,92 @@ def _parsed_feedback_rows():
             "date": _parse_date(str(row.get("DateAdded", "")).strip()),
             "addedBy": str(row.get("AddedBy", "")).strip(),
             "role": str(row.get("Role", "")).strip(),
+            "entryType": entry_type,
         })
     return parsed
 
 
 def load_feedback():
     """
-    Returns {normalized_plate: {"latest": {...}, "history": [...]}}.
+    Returns {normalized_plate: {"latest", "latestFeedback", "latestAction",
+    "history"}}.
+
     The Sheet is append-only (rows are never edited or deleted here), so
-    "history" is the complete, permanent trail for that plate, oldest
-    first - "latest" is just history[-1], kept separate so
-    classify_fleet() and the dashboard's "Customer Feedback" column
-    don't each need to know how to find the newest entry themselves.
+    "history" is the complete permanent trail for that plate, oldest
+    first, mixing both entry types - one asset, one story, whoever wrote
+    it. The three "latest" keys are conveniences so callers don't each
+    re-derive them:
+      latest         - newest entry of any type, drives classification
+      latestFeedback - newest client-authored entry ("Customer Feedback")
+      latestAction   - newest technician-authored entry, which overrides
+                       the system's computed recommendation when present
     """
     by_plate = {}
     for entry in _parsed_feedback_rows():
         by_plate.setdefault(entry["plate"], []).append(entry)
 
+    def newest_of(entries, kind):
+        matching = [e for e in entries if e["entryType"] == kind]
+        return matching[-1] if matching else None
+
     result = {}
     for plate, entries in by_plate.items():
         entries.sort(key=lambda e: e["date"])
-        result[plate] = {"latest": entries[-1], "history": entries}
+        result[plate] = {
+            "latest": entries[-1],
+            "latestFeedback": newest_of(entries, ENTRY_FEEDBACK),
+            "latestAction": newest_of(entries, ENTRY_ACTION),
+            "history": entries,
+        }
     return result
+
+
+# ---- Read cache -------------------------------------------------------
+# The dashboard applies feedback on every request, so an uncached read
+# would mean a Sheets round-trip (~1s) per page load. Cache briefly and
+# invalidate on write. Invalidation has to cross PROCESSES, not just
+# threads: gunicorn runs several workers on Render and a write handled
+# by worker A must invalidate worker B's cache too. A tiny stamp file
+# does that - every worker stat()s it (microseconds) and drops its cache
+# when the mtime moves.
+_CACHE_TTL_SECONDS = 30
+_STAMP_PATH = os.path.join(os.path.dirname(__file__), "data", "_feedback_stamp")
+_cache = {"data": None, "fetched_at": 0.0, "stamp": None}
+
+
+def _current_stamp():
+    try:
+        return os.path.getmtime(_STAMP_PATH)
+    except OSError:
+        return None
+
+
+def _bump_stamp():
+    try:
+        os.makedirs(os.path.dirname(_STAMP_PATH), exist_ok=True)
+        with open(_STAMP_PATH, "w") as f:
+            f.write(str(datetime.now().timestamp()))
+    except OSError:
+        pass  # a failed stamp only costs freshness, never correctness of the write itself
+
+
+def load_feedback_cached():
+    """load_feedback() behind the cache described above. Callers that
+    must see a guaranteed-fresh read (the import) should keep using
+    load_feedback() directly."""
+    import time
+    now = time.time()
+    stamp = _current_stamp()
+    fresh = (
+        _cache["data"] is not None
+        and _cache["stamp"] == stamp
+        and (now - _cache["fetched_at"]) < _CACHE_TTL_SECONDS
+    )
+    if fresh:
+        return _cache["data"]
+    data = load_feedback()
+    _cache.update({"data": data, "fetched_at": now, "stamp": stamp})
+    return data
 
 
 def load_all_feedback_entries(limit=200):
@@ -255,12 +331,53 @@ def load_all_feedback_entries(limit=200):
     return entries[:limit]
 
 
-def add_feedback(plate: str, comment: str, added_by: str = "", requires_followup=None, role: str = ""):
-    """Called from the dashboard's POST /api/feedback route."""
+def add_feedback(plate: str, comment: str, added_by: str = "", requires_followup=None,
+                 role: str = "", entry_type: str = ENTRY_FEEDBACK):
+    """Called from the dashboard's POST /api/feedback route. Append-only:
+    nothing here ever edits or removes an existing row."""
+    if entry_type not in ENTRY_TYPES:
+        entry_type = ENTRY_FEEDBACK
     client, sheet_id = _get_client()
     ws = _get_or_create_feedback_tab(client, sheet_id)
     followup_text = "" if requires_followup is None else ("Yes" if requires_followup else "No")
     ws.append_row([
         plate, comment, followup_text, infer_status(comment, requires_followup),
-        datetime.now().strftime("%d/%m/%Y %H:%M"), added_by, role,
+        datetime.now().strftime("%d/%m/%Y %H:%M"), added_by, role, entry_type,
     ])
+    # Every OTHER worker must drop its cache, or it would keep serving
+    # the pre-submit dashboard for up to the cache TTL - exactly the
+    # "why hasn't it updated yet" problem this change exists to remove.
+    _bump_stamp()
+
+    # This worker, though, already knows exactly what was just written,
+    # so patch it in rather than paying another full Sheet read (~4s) to
+    # be told what we just said. That read was over half the wait
+    # between pressing Submit and seeing the asset move.
+    entry = {
+        "plate": plate, "comment": comment,
+        "status": infer_status(comment, requires_followup),
+        "requiresFollowup": requires_followup, "date": datetime.now(),
+        "addedBy": added_by, "role": role, "entryType": entry_type,
+    }
+    _patch_cache_with(entry)
+
+
+def _patch_cache_with(entry):
+    """Folds one just-written entry into the cached view, keeping the
+    same shape load_feedback() returns. Leaves the cache alone if it was
+    empty - the next read will fetch everything anyway."""
+    cached = _cache.get("data")
+    if cached is None:
+        return
+    plate = entry["plate"]
+    existing = cached.get(plate)
+    history = (existing["history"] + [entry]) if existing else [entry]
+    cached[plate] = {
+        "latest": entry,
+        "latestFeedback": next((e for e in reversed(history) if e["entryType"] == ENTRY_FEEDBACK), None),
+        "latestAction": next((e for e in reversed(history) if e["entryType"] == ENTRY_ACTION), None),
+        "history": history,
+    }
+    # Re-stamp so this worker doesn't immediately invalidate its own
+    # patch on the very next request by noticing the bump above.
+    _cache["stamp"] = _current_stamp()

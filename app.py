@@ -206,12 +206,33 @@ def api_save_role_panels():
     return jsonify({"ok": True, "panels": {p: list(r) for p, r in updated.items()}})
 
 
+def _overlay_feedback(raw):
+    """
+    Applies the human layer on top of the imported telemetry. Returns
+    (payload, overlay_ok) - on failure the telemetry still goes out and
+    the caller flags the payload as stale, because a dashboard that
+    silently drops feedback is worse than one that admits it couldn't
+    load it.
+    """
+    try:
+        import sheets_store
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
+        from feedback_overlay import apply_feedback
+        return apply_feedback(raw, sheets_store.load_feedback_cached()), True
+    except Exception as e:
+        print(f"Feedback overlay unavailable this request: {e}")
+        return raw, False
+
+
 @app.route("/api/dashboard-data")
 @login_required
 def api_dashboard_data():
     role = session["role"]
     raw = load_dashboard_data()
+    raw, overlay_ok = _overlay_feedback(raw)
     filtered = filter_payload_for_role(raw, role)
+    filtered = dict(filtered)
+    filtered["meta"] = {**filtered.get("meta", {}), "feedbackApplied": overlay_ok}
     # xlsxB64/tamperB64 never need to reach the browser at all, any role,
     # since /api/export/<name> reads them straight from disk on demand.
     filtered = {k: v for k, v in filtered.items() if k not in ("xlsxB64", "tamperB64")}
@@ -256,17 +277,26 @@ def api_feedback():
     comment = (body.get("comment") or "").strip()
     reported_by = (body.get("reportedBy") or "").strip()
     requires_followup_raw = body.get("requiresFollowup")
+    entry_type = (body.get("entryType") or "feedback").strip().lower()
 
     if not plate or not comment or not reported_by:
         return jsonify({"error": "'plate', 'comment', and 'reportedBy' are required"}), 400
     if not isinstance(requires_followup_raw, bool):
         return jsonify({"error": "'requiresFollowup' must be true or false, an explicit choice, not optional"}), 400
+    if entry_type not in ("feedback", "action"):
+        return jsonify({"error": "'entryType' must be 'feedback' or 'action'"}), 400
+    # Recommended Action is the technician's operational instruction to
+    # the field - a client stating their own next step would be writing
+    # your team's job card for them, so that field stays internal.
+    if entry_type == "action" and role == "client":
+        return jsonify({"error": "Only technicians and admins can set the Recommended Action"}), 403
 
     try:
         import sheets_store
         sheets_store.add_feedback(
             plate, comment, added_by=reported_by,
             requires_followup=requires_followup_raw, role=role,
+            entry_type=entry_type,
         )
         status = sheets_store.infer_status(comment, requires_followup_raw)
     except RuntimeError as e:
@@ -311,7 +341,7 @@ def api_feedback_history(plate):
             {
                 "comment": h["comment"], "status": h["status"], "requiresFollowup": h["requiresFollowup"],
                 "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else "",
-                "addedBy": h["addedBy"], "role": h["role"],
+                "addedBy": h["addedBy"], "role": h["role"], "entryType": h.get("entryType", "feedback"),
             }
             for h in history
         ],
@@ -349,7 +379,7 @@ def api_feedback_activity():
             "date": e["date"].strftime("%d %b %Y, %H:%M") if e["date"].year > 1 else "",
             "dateOnly": e["date"].strftime("%d %b %Y") if e["date"].year > 1 else "",
             "dateISO": e["date"].strftime("%Y-%m-%d") if e["date"].year > 1 else "",
-            "addedBy": e["addedBy"], "role": e["role"],
+            "addedBy": e["addedBy"], "role": e["role"], "entryType": e.get("entryType", "feedback"),
         }
         for e in entries
     ]

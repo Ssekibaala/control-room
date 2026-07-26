@@ -13,3 +13,4 @@ data/_refresh_lock.json
 # without any credentials. Once you add real accounts and a live
 # import replaces this file, feel free to start ignoring them.
 database/role_panels.json
+data/_feedback_stamp

@@ -210,6 +210,82 @@ def run():
         failures.append("logged-out user can read the global activity feed")
 
     print()
+    print("=== Feedback overlay: marking no-follow-up takes effect immediately ===")
+    # The defect this covers: feedback used to be applied only during the
+    # daily email import, so an asset marked "no follow-up needed" kept
+    # sitting in Critical and Priority Watch until the next morning's run.
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "fleet_logic"))
+    from feedback_overlay import apply_feedback
+    from datetime import datetime as _dt
+
+    base = {
+        "full": [
+            {"plate": "AAA111", "status": "Technical Escalation", "severity": "Critical - Long-term Fault",
+             "days": 40, "feedback": "", "action": "Recover device", "border": "No"},
+            {"plate": "BBB222", "status": "Technical Escalation", "severity": "Elevated - Monitor",
+             "days": 5, "feedback": "", "action": "Contact customer", "border": "No"},
+        ],
+        "critical": [], "criticalCards": [], "pending": [], "knownIssues": [],
+        "healthy": [], "border": [], "doubleFlagged": [],
+        "kpi": {"escalations": 2, "knownIssues": 0, "total": 2, "online": 0},
+        "sevCounts": {}, "meta": {},
+    }
+
+    def _entry(plate, comment, followup, who, role, etype):
+        e = {"plate": plate, "comment": comment, "requiresFollowup": followup, "date": _dt.now(),
+             "addedBy": who, "role": role, "entryType": etype,
+             "status": "Known Issue - No Follow-up Needed" if followup is False else "Follow-up Requested"}
+        return e
+
+    fb_entry = _entry("AAA111", "parked in the workshop", False, "Glenn", "client", "feedback")
+    overlaid = apply_feedback(base, {"AAA111": {
+        "latest": fb_entry, "latestFeedback": fb_entry, "latestAction": None, "history": [fb_entry]}})
+
+    row = next(r for r in overlaid["full"] if r["plate"] == "AAA111")
+    checks = [
+        (row["status"] == "Known Issue", "no-follow-up flips the asset to Known Issue"),
+        (row["severity"] == "No Follow-up Needed", "severity follows the status change"),
+        ("parked in the workshop" in row["feedback"], "the comment reaches the Customer Feedback column"),
+        (not any(r["plate"] == "AAA111" for r in overlaid["critical"]), "asset leaves Critical Assets"),
+        (not any(r["plate"] == "AAA111" for r in overlaid["criticalCards"]), "asset leaves Priority Watch"),
+        (any(r["plate"] == "AAA111" for r in overlaid["knownIssues"]), "asset appears under Known Issues"),
+        (overlaid["kpi"]["escalations"] == 1, "escalation count drops"),
+        (overlaid["kpi"]["knownIssues"] == 1, "known-issue count rises"),
+        (base["full"][0]["status"] == "Technical Escalation", "the cached import payload is never mutated"),
+    ]
+    for passed, label in checks:
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+        if not passed:
+            failures.append(f"overlay: {label}")
+
+    # A technician's written action outranks the computed suggestion, and
+    # both entry types land in the same trail for the same asset.
+    act = _entry("BBB222", "Dispatch Kelvin Monday", True, "Kelvin", "technician", "action")
+    fb2 = _entry("BBB222", "driver says it is at the border", True, "Glenn", "client", "feedback")
+    overlaid2 = apply_feedback(base, {"BBB222": {
+        "latest": fb2, "latestFeedback": fb2, "latestAction": act, "history": [act, fb2]}})
+    row2 = next(r for r in overlaid2["full"] if r["plate"] == "BBB222")
+    checks2 = [
+        (row2["action"] == "Dispatch Kelvin Monday", "technician action overrides the computed recommendation"),
+        ("border" in row2["feedback"], "client feedback fills its own column, separately"),
+        (row2["status"] == "Technical Escalation", "requiresFollowup=True keeps the asset in the active queue"),
+    ]
+    for passed, label in checks2:
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+        if not passed:
+            failures.append(f"overlay: {label}")
+
+    login(client, "gtl-client", "TestPass123!")
+    r = client.post("/api/feedback", json={"plate": "ZZZTEST1", "comment": "x", "reportedBy": "t",
+                                           "requiresFollowup": True, "entryType": "action"})
+    print(f"  [{'PASS' if r.status_code == 403 else 'FAIL'}] client cannot author a Recommended Action (status {r.status_code})")
+    if r.status_code != 403:
+        failures.append("client can write the technician's action field")
+    client.post("/api/logout")
+
+    print()
     print("=== Roles & Visibility editor drives the actual payload ===")
     import permissions as perms
 

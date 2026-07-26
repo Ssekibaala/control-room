@@ -278,6 +278,19 @@
 
   /* ---- Manage Users panel ---- */
   .user-form-submit { width:100%; margin-top:4px; }
+  /* Entry-type chip: says which field an entry authored, so one trail
+     can carry both a client's feedback and a technician's action
+     without the reader having to guess who wrote what. */
+  .entry-chip { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;
+    padding:2px 6px; border-radius:5px; margin-right:7px; vertical-align:1px; }
+  .pill-warn { background:var(--warning-surface) !important; color:var(--warning) !important; border-color:var(--warning) !important; }
+  .entry-chip.feedback { background:var(--info-surface); color:var(--info); }
+  .entry-chip.action { background:var(--primary-surface); color:var(--primary); }
+  .feedback-entry.entry-action { border-left:2px solid var(--primary); padding-left:10px; }
+  .ff-type-btn { flex:1; padding:9px; border-radius:9px; border:1px solid var(--border); background:var(--hover-surface);
+    color:var(--text-secondary); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .ff-type-btn.selected { background:var(--primary-surface); border-color:var(--primary); color:var(--primary); }
+
   .ff-optional { font-weight:500; font-size:10.5px; color:var(--text-tertiary); text-transform:none; letter-spacing:0; }
   .ff-hint { font-size:10.5px; color:var(--text-tertiary); margin-top:5px; line-height:1.45; }
   .u-clients { display:flex; flex-wrap:wrap; gap:5px; }
@@ -960,12 +973,22 @@
         <table id="drill-table"></table>
         <div id="drill-feedback-section" style="display:none">
           <div class="drill-feedback-block">
-            <h4>Feedback History</h4>
+            <h4>History &mdash; every update on this asset</h4>
             <div id="drill-feedback-history"></div>
           </div>
           <div class="drill-feedback-block">
-            <h4>Add Feedback</h4>
+            <h4>Add an Update</h4>
             <form id="drill-feedback-form">
+              {% if can_manage_users %}
+              <div class="ff-row">
+                <label>What are you updating?</label>
+                <div class="ff-toggle">
+                  <button type="button" class="ff-type-btn selected" data-type="feedback">Customer Feedback</button>
+                  <button type="button" class="ff-type-btn" data-type="action">Recommended Action</button>
+                </div>
+                <div class="ff-hint" id="ff-type-hint">The client's account of what's happening with this asset.</div>
+              </div>
+              {% endif %}
               <div class="ff-row">
                 <label for="ff-name">Your name</label>
                 <input type="text" id="ff-name" placeholder="Who's reporting this?" required>
@@ -981,10 +1004,11 @@
                   <button type="button" class="ff-toggle-btn" data-value="false">No &mdash; known issue</button>
                 </div>
               </div>
-              <button type="submit" class="btn-primary" id="ff-submit">Submit Feedback</button>
+              <button type="submit" class="btn-primary" id="ff-submit">Submit Update</button>
               <div class="ff-msg" id="ff-msg"></div>
             </form>
-            <div class="ff-note">"No follow-up needed" moves this asset out of Critical/Pending into Known Issues on the next data refresh, not immediately.</div>
+            <div class="ff-note">"No follow-up needed" moves this asset out of Critical and Priority Watch into
+              Known Issues straight away &mdash; the dashboard updates as soon as you submit, no refresh needed.</div>
           </div>
         </div>
       </div>
@@ -1550,6 +1574,20 @@ if (logoutBtn) {
   });
 }
 
+// renderEverything() is now re-run on every feedback submit so the
+// dashboard reflects the change instantly. Most of its listeners attach
+// to markup it just rewrote via innerHTML, so those are safe to re-bind
+// (the old nodes are gone). Listeners on elements that OUTLIVE a render
+// - document, the modals, the sidebar, the standing forms - would stack
+// up instead, and a double-bound submit handler would post the same
+// comment to the Sheet twice. Those go through wireOnce().
+const _wiredOnce = new Set();
+function wireOnce(key, fn) {
+  if (_wiredOnce.has(key)) return;
+  _wiredOnce.add(key);
+  fn();
+}
+
 function renderEverything() {
 
 // =====================================================================
@@ -1570,14 +1608,14 @@ function renderEverything() {
     light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   };
   document.getElementById('theme-icon').innerHTML = iconPath[theme];
-  document.getElementById('theme-toggle').addEventListener('click', () => {
+  wireOnce('theme-toggle', () => document.getElementById('theme-toggle').addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
     const next = current === 'light' ? 'dark' : 'light';
     if (next === 'light') document.documentElement.setAttribute('data-theme', 'light');
     else document.documentElement.removeAttribute('data-theme');
     try { localStorage.setItem('gtl-theme', next); } catch (e) {}
     document.getElementById('theme-icon').innerHTML = iconPath[next];
-  });
+  }));
 })();
 
 // ---- Mobile sidebar drawer (new, presentation-only) ----
@@ -1589,12 +1627,13 @@ function closeMobileSidebar() {
   document.getElementById('sidebar').classList.remove('mobile-open');
   document.getElementById('sidebar-backdrop').classList.remove('open');
 }
-document.getElementById('hamburger-btn').addEventListener('click', openMobileSidebar);
-document.getElementById('sidebar-backdrop').addEventListener('click', closeMobileSidebar);
-
-// ---- Sidebar collapse (new, presentation-only) ----
-document.getElementById('collapse-btn').addEventListener('click', () => {
-  document.getElementById('sidebar').classList.toggle('collapsed');
+wireOnce('sidebar-chrome', () => {
+  document.getElementById('hamburger-btn').addEventListener('click', openMobileSidebar);
+  document.getElementById('sidebar-backdrop').addEventListener('click', closeMobileSidebar);
+  // ---- Sidebar collapse (new, presentation-only) ----
+  document.getElementById('collapse-btn').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('collapsed');
+  });
 });
 
 // ---- Recently viewed tracker (new, presentation-only, no data changes) ----
@@ -1701,10 +1740,10 @@ function updateSpeedLabel() {
   const el = document.getElementById('tour-speed-label');
   if (el) el.textContent = currentSpeed() + 'x';
 }
-document.getElementById('tour-speed-btn').addEventListener('click', () => {
+wireOnce('tour-speed', () => document.getElementById('tour-speed-btn').addEventListener('click', () => {
   speedIndex = (speedIndex + 1) % SPEED_PRESETS.length;
   updateSpeedLabel();
-});
+}));
 updateSpeedLabel();
 
 function stopTour() {
@@ -1788,7 +1827,7 @@ document.getElementById('autotour-btn').addEventListener('click', () => {
 });
 
 // ---- Keyboard shortcuts: 1-8 jump panels, Escape stops tour (new, presentation-only) ----
-document.addEventListener('keydown', (e) => {
+wireOnce('shortcuts', () => document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape') { stopTour(); return; }
   const n = parseInt(e.key, 10);
@@ -1796,31 +1835,33 @@ document.addEventListener('keydown', (e) => {
     const [panelId, label] = TOUR_PANELS[n - 1];
     activatePanel(panelId, label);
   }
-});
+}));
 
 // ---- Fullscreen toggle (new, presentation-only) ----
-document.getElementById('fullscreen-btn').addEventListener('click', () => {
+wireOnce('fullscreen', () => document.getElementById('fullscreen-btn').addEventListener('click', () => {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen();
   else document.exitFullscreen();
-});
+}));
 
 // ---- Export dropdown (navigates to a Flask endpoint that streams the real
 // xlsx). The button/menu are only rendered server-side for roles with export
 // access (see app.py can_export_integrity/can_export_tampering), so guard
 // every lookup here, client role never gets this markup at all. ----
-const exportToggleBtn = document.getElementById('export-toggle');
-if (exportToggleBtn) {
-  exportToggleBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    document.getElementById('notif-menu')?.classList.remove('open');
-    document.getElementById('export-menu').classList.toggle('open');
-  });
-  document.addEventListener('click', () => document.getElementById('export-menu').classList.remove('open'));
-}
-const exportIntegrityBtn = document.getElementById('export-integrity');
-if (exportIntegrityBtn) exportIntegrityBtn.addEventListener('click', () => { window.location.href = '/api/export/integrity'; });
-const exportTamperBtn = document.getElementById('export-tamper');
-if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.location.href = '/api/export/tampering'; });
+wireOnce('export-menu', () => {
+  const exportToggleBtn = document.getElementById('export-toggle');
+  if (exportToggleBtn) {
+    exportToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('notif-menu')?.classList.remove('open');
+      document.getElementById('export-menu').classList.toggle('open');
+    });
+    document.addEventListener('click', () => document.getElementById('export-menu').classList.remove('open'));
+  }
+  const exportIntegrityBtn = document.getElementById('export-integrity');
+  if (exportIntegrityBtn) exportIntegrityBtn.addEventListener('click', () => { window.location.href = '/api/export/integrity'; });
+  const exportTamperBtn = document.getElementById('export-tamper');
+  if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.location.href = '/api/export/tampering'; });
+});
 
 // ---- Notification bell: badge total + a breakdown dropdown showing
 // exactly which panel each part of that total comes from, one click
@@ -1871,12 +1912,14 @@ renderNotifBreakdown();
 
 const notifBtn = document.getElementById('notif-btn');
 const notifMenu = document.getElementById('notif-menu');
-notifBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  document.getElementById('export-menu')?.classList.remove('open');
-  notifMenu.classList.toggle('open');
+wireOnce('notif-menu', () => {
+  notifBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('export-menu')?.classList.remove('open');
+    notifMenu.classList.toggle('open');
+  });
+  document.addEventListener('click', () => notifMenu.classList.remove('open'));
 });
-document.addEventListener('click', () => notifMenu.classList.remove('open'));
 
 const ACTIVITY_FILTER_LABELS = { today: 'today', yesterday: 'yesterday', all: 'on any day' };
 function renderActivityFeed(filter) {
@@ -1921,13 +1964,13 @@ function renderActivityFeed(filter) {
     });
   });
 }
-document.querySelectorAll('.activity-filter-btn').forEach(btn => {
+wireOnce('activity-filters', () => document.querySelectorAll('.activity-filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.activity-filter-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
     renderActivityFeed(btn.dataset.filter);
   });
-});
+}));
 
 function fetchActivityFeed() {
   fetch('/api/feedback-activity')
@@ -1963,11 +2006,13 @@ if (usersForm) {
     setTimeout(() => document.getElementById('uf-username').focus(), 50);
   }
   function closeCreateUser() { cuBackdrop.classList.remove('open'); }
-  document.getElementById('open-create-user').addEventListener('click', openCreateUser);
-  document.getElementById('createuser-close').addEventListener('click', closeCreateUser);
-  cuBackdrop.addEventListener('click', (e) => { if (e.target === cuBackdrop) closeCreateUser(); });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && cuBackdrop.classList.contains('open')) closeCreateUser();
+  wireOnce('createuser-modal', () => {
+    document.getElementById('open-create-user').addEventListener('click', openCreateUser);
+    document.getElementById('createuser-close').addEventListener('click', closeCreateUser);
+    cuBackdrop.addEventListener('click', (e) => { if (e.target === cuBackdrop) closeCreateUser(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && cuBackdrop.classList.contains('open')) closeCreateUser();
+    });
   });
 
   function renderUsersList(list) {
@@ -2001,11 +2046,13 @@ if (usersForm) {
     rolesBackdrop.classList.add('open');
   }
   function closeRoles() { rolesBackdrop.classList.remove('open'); }
-  document.getElementById('open-roles').addEventListener('click', openRoles);
-  document.getElementById('roles-close').addEventListener('click', closeRoles);
-  rolesBackdrop.addEventListener('click', (e) => { if (e.target === rolesBackdrop) closeRoles(); });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && rolesBackdrop.classList.contains('open')) closeRoles();
+  wireOnce('roles-modal', () => {
+    document.getElementById('open-roles').addEventListener('click', openRoles);
+    document.getElementById('roles-close').addEventListener('click', closeRoles);
+    rolesBackdrop.addEventListener('click', (e) => { if (e.target === rolesBackdrop) closeRoles(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && rolesBackdrop.classList.contains('open')) closeRoles();
+    });
   });
 
   let ROLE_PANELS = null;
@@ -2100,6 +2147,7 @@ if (usersForm) {
   }
   fetchUsers();
 
+  wireOnce('users-form-submit', () =>
   usersForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const msgEl = document.getElementById('uf-msg');
@@ -2164,7 +2212,7 @@ if (usersForm) {
         msgEl.textContent = 'Could not reach the server.';
         msgEl.className = 'ff-msg err';
       });
-  });
+  }));
 }
 
 // ---- Bind real fetched values onto their elements (server sends generic
@@ -2184,7 +2232,17 @@ kpiBindings.forEach(([id, value]) => {
 const qsHealth = document.getElementById('qs-health'); if (qsHealth) qsHealth.textContent = DATA.kpi.healthPct + '%';
 const qsTotal = document.getElementById('qs-total'); if (qsTotal) qsTotal.textContent = DATA.kpi.total;
 const qsCrit = document.getElementById('qs-crit'); if (qsCrit) qsCrit.textContent = DATA.kpi.escalations;
-const refreshPill = document.getElementById('refresh-pill'); if (refreshPill) refreshPill.textContent = 'Updated ' + DATA.meta.generated;
+const refreshPill = document.getElementById('refresh-pill');
+if (refreshPill) {
+  // meta.feedbackApplied is false when the server couldn't reach the
+  // feedback store this request. The telemetry is still real, but any
+  // comment or "no follow-up" flag may be missing - say so rather than
+  // presenting a partial picture as complete.
+  const applied = DATA.meta.feedbackApplied !== false;
+  refreshPill.textContent = 'Updated ' + DATA.meta.generated + (applied ? '' : ' · feedback unavailable');
+  refreshPill.classList.toggle('pill-warn', !applied);
+  refreshPill.title = applied ? '' : "Couldn't load feedback this request - comments and follow-up flags may be missing.";
+}
 const periodLabel = document.getElementById('period-label'); if (periodLabel) periodLabel.textContent = DATA.meta.tamperPeriod || '';
 
 // ---- Sidebar nav-item counts: bind each panel's badge to its real
@@ -2393,6 +2451,11 @@ function openDrillDown(title, subtitle, columns, rows, footLink, plate) {
 // full dashboard refresh) + a submission form wired to POST
 // /api/feedback. Both client and technician/admin can submit; this is
 // a two-way log, not a one-way form. ----
+function _entryTypeChip(entryType) {
+  return entryType === 'action'
+    ? '<span class="entry-chip action">Action</span>'
+    : '<span class="entry-chip feedback">Feedback</span>';
+}
 function _feedbackBadgeHTML(entry) {
   if (entry.requiresFollowup === true) return '<span class="feedback-entry-badge followup">Needs Follow-up</span>';
   if (entry.requiresFollowup === false) return '<span class="feedback-entry-badge known">Known Issue</span>';
@@ -2426,10 +2489,16 @@ function loadFeedbackForVehicle(plate, resetForm) {
         historyEl.innerHTML = '<div class="feedback-empty">No feedback on file for this vehicle yet.</div>';
         return;
       }
+      // One trail, newest first, regardless of who wrote it or which
+      // field it targets - the entry-type chip says which, so a
+      // technician's action and a client's feedback read as one
+      // conversation about the asset rather than two separate logs.
       historyEl.innerHTML = history.slice().reverse().map(h =>
-        '<div class="feedback-entry">' +
+        '<div class="feedback-entry entry-' + escapeHTML(h.entryType || 'feedback') + '">' +
           '<div class="feedback-entry-head">' +
-            '<span class="feedback-entry-who">' + escapeHTML(h.addedBy || 'Unknown') +
+            '<span class="feedback-entry-who">' +
+              _entryTypeChip(h.entryType) +
+              escapeHTML(h.addedBy || 'Unknown') +
               (h.role ? '<span class="role-tag">(' + escapeHTML(h.role) + ')</span>' : '') + '</span>' +
             '<span class="feedback-entry-date">' + escapeHTML(h.date || '') + '</span>' +
           '</div>' +
@@ -2442,12 +2511,38 @@ function loadFeedbackForVehicle(plate, resetForm) {
       historyEl.innerHTML = '<div class="feedback-empty">Could not load feedback history (Sheets may not be configured yet).</div>';
     });
 }
-document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
+wireOnce('ff-toggle', () => document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
   });
-});
+}));
+
+// Which field this entry authors. Only rendered for technician/admin -
+// a client only ever writes Customer Feedback, so there's nothing for
+// them to choose between and the control stays out of their way.
+const FF_TYPE_HINTS = {
+  feedback: "The client's account of what's happening with this asset.",
+  action: "Your operational instruction for this asset. Replaces the system's suggested action.",
+};
+const FF_TYPE_PLACEHOLDERS = {
+  feedback: "What's the situation with this vehicle?",
+  action: 'What should be done with this vehicle, and by whom?',
+};
+wireOnce('ff-type', () => document.querySelectorAll('.ff-type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ff-type-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    const t = btn.dataset.type;
+    document.getElementById('ff-type-hint').textContent = FF_TYPE_HINTS[t];
+    document.getElementById('ff-comment').placeholder = FF_TYPE_PLACEHOLDERS[t];
+  });
+}));
+function currentEntryType() {
+  const sel = document.querySelector('.ff-type-btn.selected');
+  return sel ? sel.dataset.type : 'feedback';
+}
+wireOnce('drill-feedback-submit', () =>
 document.getElementById('drill-feedback-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const form = e.target;
@@ -2469,37 +2564,72 @@ document.getElementById('drill-feedback-form').addEventListener('submit', (e) =>
       comment: document.getElementById('ff-comment').value.trim(),
       reportedBy: document.getElementById('ff-name').value.trim(),
       requiresFollowup: selected.dataset.value === 'true',
+      entryType: currentEntryType(),
     }),
   })
     .then(r => r.json().then(body => ({ok: r.ok, body})))
     .then(({ok, body}) => {
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit Feedback';
+      submitBtn.textContent = 'Submit Update';
       if (!ok) {
-        msgEl.textContent = body.error || 'Could not submit feedback.';
+        msgEl.textContent = body.error || 'Could not submit this update.';
         msgEl.className = 'ff-msg err';
         return;
       }
-      msgEl.textContent = 'Feedback saved.';
+      msgEl.textContent = 'Saved. Updating the dashboard…';
       msgEl.className = 'ff-msg ok';
       document.getElementById('ff-comment').value = '';
       document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
       loadFeedbackForVehicle(plate, false);
-      fetchActivityFeed(); // so Recent Activity/the notif bell reflect this comment immediately, no reload needed
+      fetchActivityFeed();
+      // The whole point of the overlay: this asset may have just left
+      // Critical/Priority Watch for Known Issues, and every count and
+      // chart that depends on it has to move with it, now, without the
+      // user reloading anything.
+      refreshDashboardData(plate).then(moved => {
+        msgEl.textContent = moved
+          ? 'Saved. ' + moved
+          : 'Saved. The dashboard has been updated.';
+      });
     })
     .catch(() => {
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit Feedback';
+      submitBtn.textContent = 'Submit Update';
       msgEl.textContent = 'Could not reach the server.';
       msgEl.className = 'ff-msg err';
     });
-});
+}));
+
+/**
+ * Re-pulls the (now feedback-overlaid) payload and re-renders every
+ * table, chart, KPI and nav count from it. Returns a short description
+ * of what changed for the given plate, so the confirmation message can
+ * say something specific instead of a generic "saved".
+ */
+function refreshDashboardData(plate) {
+  const before = (DATA.full || []).find(r => r.plate === plate);
+  const beforeStatus = before ? before.status : null;
+  return fetch('/api/dashboard-data')
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+    .then(fresh => {
+      DATA = fillMissingSectionsWithSafeDefaults(fresh);
+      const after = (DATA.full || []).find(r => r.plate === plate);
+      renderEverything();
+      if (after && beforeStatus && after.status !== beforeStatus) {
+        return plate + ' moved from ' + beforeStatus + ' to ' + after.status + '.';
+      }
+      return '';
+    })
+    .catch(() => '');
+}
 function closeDrillDown() { document.getElementById('drill-backdrop').classList.remove('open'); }
-document.getElementById('drill-close').addEventListener('click', closeDrillDown);
-document.getElementById('drill-backdrop').addEventListener('click', (e) => {
-  if (e.target.id === 'drill-backdrop') closeDrillDown();
+wireOnce('drill-close', () => {
+  document.getElementById('drill-close').addEventListener('click', closeDrillDown);
+  document.getElementById('drill-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'drill-backdrop') closeDrillDown();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrillDown(); });
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrillDown(); });
 
 // Every row shape in this app (integrity rows, tamper rows, quality
 // rows) carries a "plate" field - click any table row anywhere to
@@ -2554,6 +2684,7 @@ function renderTable(tableId, rows, columns, countElId) {
 }
 
 // ---- Global search (identical predicate to before: substring match across all raw values) ----
+wireOnce('global-search', () =>
 document.getElementById('global-search').addEventListener('input', (e) => {
   const q = e.target.value.toLowerCase();
   const activePanel = document.querySelector('.panel.active');
@@ -2566,7 +2697,7 @@ document.getElementById('global-search').addEventListener('input', (e) => {
   let tbody = '<tbody>' + filtered.map(r => '<tr>' + cols.map(c => cellHTML(c, r)).join('') + '</tr>').join('') + '</tbody>';
   table.innerHTML = thead + tbody;
   _wireRowClicks(table, filtered, cols);
-});
+}));
 
 // ---- Column definitions (identical to before) ----
 const INTEGRITY_COLS = [
@@ -3036,20 +3167,22 @@ document.querySelectorAll('#tamper-cards .route-card').forEach((cardEl, i) => {
   }
   function close() { backdrop.classList.remove('open'); }
 
-  if (trigger) trigger.addEventListener('click', open);
-  document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      backdrop.classList.contains('open') ? close() : open();
-    } else if (e.key === 'Escape' && backdrop.classList.contains('open')) {
-      close();
-    }
-  });
-  input.addEventListener('input', () => render(input.value));
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setSelected(Math.min(selectedIndex + 1, filtered.length - 1)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setSelected(Math.max(selectedIndex - 1, 0)); }
-    else if (e.key === 'Enter') { e.preventDefault(); runItem(selectedIndex); }
+  wireOnce('cmdk', () => {
+    if (trigger) trigger.addEventListener('click', open);
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        backdrop.classList.contains('open') ? close() : open();
+      } else if (e.key === 'Escape' && backdrop.classList.contains('open')) {
+        close();
+      }
+    });
+    input.addEventListener('input', () => render(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSelected(Math.min(selectedIndex + 1, filtered.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setSelected(Math.max(selectedIndex - 1, 0)); }
+      else if (e.key === 'Enter') { e.preventDefault(); runItem(selectedIndex); }
+    });
   });
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
 })();
