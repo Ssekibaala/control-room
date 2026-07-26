@@ -120,14 +120,14 @@ def _parse_date(date_str):
     return datetime.min
 
 
-def load_feedback():
+def _parsed_feedback_rows():
     """
-    Returns {normalized_plate: {"latest": {...}, "history": [...]}}.
-    The Sheet is append-only (rows are never edited or deleted here), so
-    "history" is the complete, permanent trail for that plate, oldest
-    first - "latest" is just history[-1], kept separate so
-    classify_fleet() and the dashboard's "Customer Feedback" column
-    don't each need to know how to find the newest entry themselves.
+    Every raw Sheet row, parsed into one flat list of {plate, comment,
+    status, requiresFollowup, date, addedBy, role} dicts - the shared
+    parsing step both load_feedback() (grouped per plate, for
+    classify_fleet()) and load_all_feedback_entries() (flat activity
+    feed) build on, so there's exactly one place that knows how to
+    read a Sheet row.
     """
     import sys
     import os
@@ -138,28 +138,56 @@ def load_feedback():
     ws = _get_or_create_feedback_tab(client, sheet_id)
     rows = ws.get_all_records()  # list of dicts keyed by header row
 
-    by_plate = {}
+    parsed = []
     for row in rows:
         plate = normalize_plate(str(row.get("Plate", "")))
         if not plate:
             continue
         comment = str(row.get("Comment", "")).strip()
         requires_followup = _parse_bool(row.get("RequiresFollowup"))
-        entry = {
+        parsed.append({
+            "plate": plate,
             "comment": comment,
             "status": row.get("Status") or infer_status(comment, requires_followup),
             "requiresFollowup": requires_followup,
             "date": _parse_date(str(row.get("DateAdded", "")).strip()),
             "addedBy": str(row.get("AddedBy", "")).strip(),
             "role": str(row.get("Role", "")).strip(),
-        }
-        by_plate.setdefault(plate, []).append(entry)
+        })
+    return parsed
+
+
+def load_feedback():
+    """
+    Returns {normalized_plate: {"latest": {...}, "history": [...]}}.
+    The Sheet is append-only (rows are never edited or deleted here), so
+    "history" is the complete, permanent trail for that plate, oldest
+    first - "latest" is just history[-1], kept separate so
+    classify_fleet() and the dashboard's "Customer Feedback" column
+    don't each need to know how to find the newest entry themselves.
+    """
+    by_plate = {}
+    for entry in _parsed_feedback_rows():
+        by_plate.setdefault(entry["plate"], []).append(entry)
 
     result = {}
     for plate, entries in by_plate.items():
         entries.sort(key=lambda e: e["date"])
         result[plate] = {"latest": entries[-1], "history": entries}
     return result
+
+
+def load_all_feedback_entries(limit=200):
+    """
+    Every feedback entry across every vehicle, newest first - the
+    activity feed (POST /api/feedback-activity), not the per-plate view
+    load_feedback() returns. Capped at `limit` so this stays a bounded
+    payload even after months of daily use, 200 is generous for a
+    "what's been reported today/this week" view.
+    """
+    entries = _parsed_feedback_rows()
+    entries.sort(key=lambda e: e["date"], reverse=True)
+    return entries[:limit]
 
 
 def add_feedback(plate: str, comment: str, added_by: str = "", requires_followup=None, role: str = ""):

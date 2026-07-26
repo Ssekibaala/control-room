@@ -315,6 +315,7 @@
   .notif-row.danger .notif-row-count { background:var(--danger-surface); color:var(--danger); }
   .notif-row.warn .notif-row-count { background:var(--warning-surface); color:var(--warning); }
   .notif-row.investigation .notif-row-count { background:var(--investigation-surface); color:var(--investigation); }
+  .notif-row.info .notif-row-count { background:var(--info-surface); color:var(--info); }
   .notif-empty { padding:20px 14px; text-align:center; color:var(--text-tertiary); font-size:12.5px; }
 
   .avatar { width:32px; height:32px; border-radius:50%; background:var(--grad-invest); color:#fff;
@@ -442,6 +443,14 @@
   .grid-toolbar h3 { font-size:14px; }
   .grid-toolbar .row-count { font-size:11.5px; color:var(--text-tertiary); font-family:'JetBrains Mono'; }
   .good-text { color:var(--success); } .warn-text { color:var(--warning); }
+
+  .activity-filters { display:flex; gap:8px; }
+  .activity-filter-btn { padding:6px 14px; border-radius:20px; border:1px solid var(--border); background:var(--hover-surface);
+    color:var(--text-secondary); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; transition:background-color 0.15s, color 0.15s; }
+  .activity-filter-btn.selected { background:var(--primary-surface); border-color:var(--primary); color:var(--primary); }
+  .activity-entry-plate { font-family:'JetBrains Mono'; font-weight:700; font-size:12.5px; color:var(--primary); cursor:pointer; }
+  .activity-empty { padding:40px 20px; text-align:center; color:var(--text-tertiary); font-size:13px; }
+  .activity-count-today { font-family:'JetBrains Mono'; font-weight:700; color:var(--primary); }
   .two-col { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-3); }
   .table-wrap { background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-lg);
     overflow:auto; box-shadow:var(--shadow-1); max-height:70vh; }
@@ -680,6 +689,12 @@
 <button class="nav-item priority-item" data-panel="p-priority" data-label="Priority Overlap">
           <svg class="nav-icon" viewBox="0 0 24 24"><path d="m12 2 2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
           <span>Priority Overlap</span><span class="nav-count danger">0</span>
+        </button>
+{% endif %}
+        {% if 'p-activity' in allowed_panels %}
+<button class="nav-item" data-panel="p-activity" data-label="Recent Activity">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Recent Activity</span><span class="nav-count" id="activity-nav-badge">0</span>
         </button>
 {% endif %}
       </nav>
@@ -1029,6 +1044,24 @@
       </section>
 {% endif %}
 
+      {% if 'p-activity' in allowed_panels %}
+<section id="p-activity" class="panel">
+        <div class="callout muted">
+          Every comment anyone has added, across every vehicle, newest first &mdash; so it's easy to see what's been
+          reported today (or any other day) without opening vehicles one at a time.
+        </div>
+        <div class="grid-toolbar">
+          <h3>Recent Activity</h3>
+          <div class="activity-filters" id="activity-filters">
+            <button class="activity-filter-btn selected" data-filter="today">Today</button>
+            <button class="activity-filter-btn" data-filter="yesterday">Yesterday</button>
+            <button class="activity-filter-btn" data-filter="all">All</button>
+          </div>
+        </div>
+        <div id="activity-feed"></div>
+      </section>
+{% endif %}
+
       {% if 'p-tsummary' in allowed_panels %}
 <section id="p-tsummary" class="panel">
         <div class="kpi-row tamper-kpis">
@@ -1270,6 +1303,7 @@ const PANEL_SUBS = {
   'p-tconfirmed': 'Location gap plus a power event logged', 'p-tunconfirmed': 'Location gap, no power event, needs a field check',
   'p-tquality': 'Excluded for null GPS fix',
   'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
+  'p-activity': 'Every feedback comment across every vehicle, newest first',
 };
 let ALLOWED_PANELS = null;
 
@@ -1316,6 +1350,7 @@ const TOUR_PANELS_ALL = [
   {% if 'p-tconfirmed' in allowed_panels %}['p-tconfirmed', 'Confirmed Tampering Cases'],{% endif %}
   {% if 'p-healthy' in allowed_panels %}['p-healthy', 'Healthy Fleet'],{% endif %}
   {% if 'p-known' in allowed_panels %}['p-known', 'Known Issues'],{% endif %}
+  {% if 'p-activity' in allowed_panels %}['p-activity', 'Recent Activity'],{% endif %}
 ];
 // Restricted to whatever this role is actually allowed to open, so
 // auto-tour can never surface a panel the sidebar itself is hiding.
@@ -1454,20 +1489,29 @@ if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.lo
 
 // ---- Notification bell: badge total + a breakdown dropdown showing
 // exactly which panel each part of that total comes from, one click
-// away instead of a number nobody can trace back to anything. ----
-(function() {
-  const n = DATA.kpi.escalations + DATA.kpi.border + DATA.kpi.doubleFlagged;
+// away instead of a number nobody can trace back to anything.
+// ---- Recent Activity: a live global feed of every feedback comment
+// across every vehicle (not just the one you happen to be looking
+// at), fetched separately from the main dashboard data since someone
+// can add a comment while your tab is already open. Both live in one
+// block since the bell's breakdown includes "new comments today". ----
+let ACTIVITY_ENTRIES = [];
+let ACTIVITY_TODAY_COUNT = 0;
+
+function renderNotifBreakdown() {
+  const n = DATA.kpi.escalations + DATA.kpi.border + DATA.kpi.doubleFlagged + ACTIVITY_TODAY_COUNT;
   const badge = document.getElementById('notif-badge');
   badge.textContent = n;
+  badge.removeAttribute('data-zero');
   if (n === 0) badge.setAttribute('data-zero', 'true');
 
   const BREAKDOWN_SOURCES = [
     { count: DATA.kpi.escalations, label: 'Technical Escalation', panel: 'p-critical', cls: 'danger' },
     { count: DATA.kpi.border, label: 'Border Risk', panel: 'p-border', cls: 'warn' },
     { count: DATA.kpi.doubleFlagged, label: 'Priority Overlap (integrity + tampering)', panel: 'p-priority', cls: 'investigation' },
+    { count: ACTIVITY_TODAY_COUNT, label: 'New comment(s) today', panel: 'p-activity', cls: 'info' },
   ];
 
-  const notifBtn = document.getElementById('notif-btn');
   const notifMenu = document.getElementById('notif-menu');
   let html = '<div class="notif-menu-title">Where this number comes from</div>';
   let anyRow = false;
@@ -1487,14 +1531,87 @@ if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.lo
       if (targetBtn) targetBtn.click();
     });
   });
+}
+renderNotifBreakdown();
 
-  notifBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    document.getElementById('export-menu')?.classList.remove('open');
-    notifMenu.classList.toggle('open');
+const notifBtn = document.getElementById('notif-btn');
+const notifMenu = document.getElementById('notif-menu');
+notifBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('export-menu')?.classList.remove('open');
+  notifMenu.classList.toggle('open');
+});
+document.addEventListener('click', () => notifMenu.classList.remove('open'));
+
+const ACTIVITY_FILTER_LABELS = { today: 'today', yesterday: 'yesterday', all: 'on any day' };
+function renderActivityFeed(filter) {
+  const feedEl = document.getElementById('activity-feed');
+  if (!feedEl) return;
+  let filtered = ACTIVITY_ENTRIES;
+  if (filter === 'today' || filter === 'yesterday') {
+    const d = new Date();
+    if (filter === 'yesterday') d.setDate(d.getDate() - 1);
+    const targetISO = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    filtered = ACTIVITY_ENTRIES.filter(e => e.dateISO === targetISO);
+  }
+  if (!filtered.length) {
+    feedEl.innerHTML = '<div class="activity-empty">No comments ' + ACTIVITY_FILTER_LABELS[filter] + '.</div>';
+    return;
+  }
+  feedEl.innerHTML = filtered.map(e =>
+    '<div class="feedback-entry">' +
+      '<div class="feedback-entry-head">' +
+        '<span><span class="activity-entry-plate" data-plate="' + escapeHTML(e.plate) + '">' + escapeHTML(e.plate) + '</span> &mdash; ' +
+        '<span class="feedback-entry-who">' + escapeHTML(e.addedBy || 'Unknown') +
+          (e.role ? '<span class="role-tag">(' + escapeHTML(e.role) + ')</span>' : '') + '</span></span>' +
+        '<span class="feedback-entry-date">' + escapeHTML(e.date) + '</span>' +
+      '</div>' +
+      '<div class="feedback-entry-comment">' + escapeHTML(e.comment) + '</div>' +
+      _feedbackBadgeHTML(e) +
+    '</div>'
+  ).join('');
+  feedEl.querySelectorAll('.activity-entry-plate').forEach(el => {
+    el.addEventListener('click', () => {
+      const plate = el.dataset.plate;
+      const allRows = [...(DATA.full || []), ...(DATA.critical || []), ...(DATA.pending || []),
+                        ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
+      const row = allRows.find(r => r.plate === plate);
+      if (row) {
+        openDrillDown(row.plate, 'Full record.', roleIntegrityCols, [row], null, row.plate);
+      } else {
+        // Not in the current fleet snapshot (sold, decommissioned, plate typo)
+        // - still worth seeing its feedback trail, just with an empty table.
+        openDrillDown(plate, "Not in today's fleet data, showing feedback history only.", roleIntegrityCols, [], null, plate);
+      }
+    });
   });
-  document.addEventListener('click', () => notifMenu.classList.remove('open'));
-})();
+}
+document.querySelectorAll('.activity-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.activity-filter-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    renderActivityFeed(btn.dataset.filter);
+  });
+});
+
+function fetchActivityFeed() {
+  fetch('/api/feedback-activity')
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+    .then(data => {
+      ACTIVITY_ENTRIES = data.entries || [];
+      ACTIVITY_TODAY_COUNT = data.todayCount || 0;
+      const navBadge = document.getElementById('activity-nav-badge');
+      if (navBadge) navBadge.textContent = ACTIVITY_TODAY_COUNT;
+      renderNotifBreakdown();
+      const activeBtn = document.querySelector('.activity-filter-btn.selected');
+      renderActivityFeed(activeBtn ? activeBtn.dataset.filter : 'today');
+    })
+    .catch(() => {
+      const feedEl = document.getElementById('activity-feed');
+      if (feedEl) feedEl.innerHTML = '<div class="activity-empty">Could not load the activity feed (Sheets may not be configured yet).</div>';
+    });
+}
+fetchActivityFeed();
 
 // ---- Bind real fetched values onto their elements (server sends generic
 // zeros in the HTML shell now, since the same page is served to every
@@ -1814,6 +1931,7 @@ document.getElementById('drill-feedback-form').addEventListener('submit', (e) =>
       document.getElementById('ff-comment').value = '';
       document.querySelectorAll('.ff-toggle-btn').forEach(b => b.classList.remove('selected'));
       loadFeedbackForVehicle(plate, false);
+      fetchActivityFeed(); // so Recent Activity/the notif bell reflect this comment immediately, no reload needed
     })
     .catch(() => {
       submitBtn.disabled = false;

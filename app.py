@@ -151,6 +151,14 @@ def api_feedback():
         status = sheets_store.infer_status(comment, requires_followup_raw)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        # Anything from gspread/Google's side (rate limit, timeout,
+        # transient API error) landed here before as an unhandled
+        # exception - Flask's HTML error page isn't valid JSON, so the
+        # frontend's fetch().then(r => r.json()) throws and shows a
+        # misleading "could not reach the server" for what was actually
+        # a real, specific failure that reached this code just fine.
+        return jsonify({"error": f"Could not save to Google Sheets right now: {e}"}), 503
 
     return jsonify({"ok": True, "plate": plate, "status": status})
 
@@ -169,6 +177,8 @@ def api_feedback_history(plate):
         all_feedback = sheets_store.load_feedback()
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        return jsonify({"error": f"Could not read from Google Sheets right now: {e}"}), 503
 
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
@@ -186,6 +196,46 @@ def api_feedback_history(plate):
             for h in history
         ],
     })
+
+
+@app.route("/api/feedback-activity")
+@login_required
+def api_feedback_activity():
+    """
+    The global activity feed: every comment across every vehicle,
+    newest first, so anyone with the dashboard open can see what's been
+    reported today (or any other day) without opening each vehicle one
+    at a time. Same data class as api_feedback_history, every role can
+    read this.
+    """
+    try:
+        import sheets_store
+        entries = sheets_store.load_all_feedback_entries()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        return jsonify({"error": f"Could not read from Google Sheets right now: {e}"}), 503
+
+    # dateISO (YYYY-MM-DD) is what the frontend actually filters/counts
+    # on - unambiguous and locale-independent, unlike matching "26 Jul
+    # 2026"-style strings between Python and JS, which breaks the
+    # moment either side's month abbreviation or locale differs.
+    # "date"/"dateOnly" stay as display-formatted strings for showing
+    # in the UI, never for comparison.
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    serialized = [
+        {
+            "plate": e["plate"], "comment": e["comment"], "requiresFollowup": e["requiresFollowup"],
+            "date": e["date"].strftime("%d %b %Y, %H:%M") if e["date"].year > 1 else "",
+            "dateOnly": e["date"].strftime("%d %b %Y") if e["date"].year > 1 else "",
+            "dateISO": e["date"].strftime("%Y-%m-%d") if e["date"].year > 1 else "",
+            "addedBy": e["addedBy"], "role": e["role"],
+        }
+        for e in entries
+    ]
+    today_count = sum(1 for e in serialized if e["dateISO"] == today_iso)
+
+    return jsonify({"todayCount": today_count, "todayISO": today_iso, "entries": serialized})
 
 
 REFRESH_LOCK_PATH = os.path.join(os.path.dirname(__file__), "data", "_refresh_lock.json")

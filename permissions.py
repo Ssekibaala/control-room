@@ -28,6 +28,7 @@ PANEL_ACCESS = {
     "p-recovered":     ("admin", "technician", "client"),
     "p-healthy":       ("admin", "technician", "client"),
     "p-known":         ("admin", "technician", "client"),   # explained-offline, no follow-up needed - client-facing by design
+    "p-activity":      ("admin", "technician", "client"),   # global feedback feed - everyone should be able to see what's been reported and by whom
     "p-settings":      ("admin",),
     "p-priority":      ("admin", "technician"),
     "p-tsummary":      ("admin", "technician"),

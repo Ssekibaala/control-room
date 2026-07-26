@@ -116,6 +116,11 @@ def run():
     if not known_in_panels:
         failures.append("client cannot see Known Issues panel")
 
+    activity_in_panels = "p-activity" in sess.get("panels", [])
+    print(f"  [{'PASS' if activity_in_panels else 'FAIL'}] client's allowed_panels includes p-activity (Recent Activity)")
+    if not activity_in_panels:
+        failures.append("client cannot see Recent Activity panel")
+
     TEST_PLATE = "ZZZTEST1"
 
     r = client.post("/api/feedback", json={"plate": TEST_PLATE, "comment": "x"})  # missing reportedBy/requiresFollowup
@@ -145,6 +150,18 @@ def run():
         if not found:
             failures.append("submitted feedback not readable back from history")
 
+        r = client.get("/api/feedback-activity")
+        activity = r.get_json() if r.status_code == 200 else {}
+        activity_entries = activity.get("entries", [])
+        found_in_activity = any(e.get("plate") == TEST_PLATE and e.get("addedBy") == "test_permissions.py" for e in activity_entries)
+        print(f"  [{'PASS' if found_in_activity else 'FAIL'}] just-submitted feedback appears in /api/feedback-activity (global feed)")
+        if not found_in_activity:
+            failures.append("submitted feedback not visible in the global activity feed")
+        counted_today = activity.get("todayCount", 0) >= 1
+        print(f"  [{'PASS' if counted_today else 'FAIL'}] /api/feedback-activity todayCount reflects the new comment")
+        if not counted_today:
+            failures.append("feedback-activity todayCount did not include the just-submitted entry")
+
         # Clean up: this test data has no business staying in the real
         # Sheet permanently, same principle as never leaving fabricated
         # entries against a real vehicle plate.
@@ -170,6 +187,10 @@ def run():
     print(f"  [{'PASS' if r.status_code == 401 else 'FAIL'}] logged-out feedback history read rejected (status {r.status_code})")
     if r.status_code != 401:
         failures.append("logged-out user can read feedback history")
+    r = client.get("/api/feedback-activity")
+    print(f"  [{'PASS' if r.status_code == 401 else 'FAIL'}] logged-out feedback-activity read rejected (status {r.status_code})")
+    if r.status_code != 401:
+        failures.append("logged-out user can read the global activity feed")
 
     print()
     print("=== Logged out: no access at all ===")
