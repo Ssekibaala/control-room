@@ -109,7 +109,11 @@ def _get_or_create_feedback_tab(client, sheet_id):
     return ws
 
 
-USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "CreatedAt"]
+# Email is appended at the END, never inserted mid-list: gspread maps rows to
+# headers by POSITION, so inserting a column would shift every existing user's
+# data one place left and silently read their Clients value as their Email.
+# Rows written before this column existed simply read back with a blank Email.
+USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "CreatedAt", "Email"]
 
 
 def _get_or_create_users_tab(client, sheet_id):
@@ -147,17 +151,31 @@ def load_users_sheet():
             "clients": [c.strip() for c in clients_raw.split(",") if c.strip()],
             "last_login": str(row.get("LastLogin", "")).strip(),
             "created_at": str(row.get("CreatedAt", "")).strip(),
+            "email": str(row.get("Email", "")).strip(),
         }
     return result
 
 
-def add_user_sheet(username, password_hash, role, clients=None):
+def add_user_sheet(username, password_hash, role, clients=None, email=""):
     client, sheet_id = _get_client()
     ws = _get_or_create_users_tab(client, sheet_id)
     ws.append_row([
         username, password_hash, role, ", ".join(clients or []), "",
-        datetime.now().strftime("%d/%m/%Y %H:%M"),
+        datetime.now().strftime("%d/%m/%Y %H:%M"), email,
     ])
+
+
+def set_user_email(username, email):
+    """Fills in the address for an account created before the Email column
+    existed. Single-cell update so a concurrent write elsewhere in the tab
+    can't clobber it."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return False
+    ws.update_cell(cell.row, USER_HEADERS.index("Email") + 1, email)
+    return True
 
 
 def record_login_sheet(username):

@@ -92,24 +92,59 @@ def save_users(users):
     _save_local(users)
 
 
-def add_user(username, role, password, clients=None):
+def add_user(username, role, password, clients=None, email=""):
     from permissions import ROLES
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
 
+    email = (email or "").strip()
     password_hash = generate_password_hash(password)
     if _sheets_available():
         import sheets_store
-        sheets_store.add_user_sheet(username, password_hash, role, clients or [])
+        sheets_store.add_user_sheet(username, password_hash, role, clients or [], email)
     else:
         users = _load_local()
         users[username] = {
             "password_hash": password_hash, "role": role,
-            "clients": clients or [],
+            "clients": clients or [], "email": email,
             "created_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
         }
         _save_local(users)
-    return {"username": username, "role": role, "clients": clients or []}
+    return {"username": username, "role": role, "clients": clients or [], "email": email}
+
+
+def set_email(username, email):
+    """Backfills the address for an account created before emails were
+    collected. Returns True if the account was found."""
+    email = (email or "").strip()
+    if _sheets_available():
+        import sheets_store
+        return sheets_store.set_user_email(username, email)
+    users = _load_local()
+    if username not in users:
+        return False
+    users[username]["email"] = email
+    _save_local(users)
+    return True
+
+
+def notification_recipients(roles=None):
+    """
+    Addresses to notify, drawn from the accounts themselves - a user with
+    no address is simply not reachable and is skipped rather than
+    silently dropping the whole send. Deduplicated, because two accounts
+    can legitimately share a shared mailbox.
+    """
+    seen, out = set(), []
+    for username, info in load_users().items():
+        addr = (info.get("email") or "").strip()
+        if not addr or addr.lower() in seen:
+            continue
+        if roles and info.get("role") not in roles:
+            continue
+        seen.add(addr.lower())
+        out.append({"username": username, "email": addr, "role": info.get("role", "")})
+    return out
 
 
 def record_login(username):
@@ -153,12 +188,17 @@ def get_user(username):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) in (5, 6) and sys.argv[1] == "add":
+    if len(sys.argv) in (5, 6, 7) and sys.argv[1] == "add":
         username, role, password = sys.argv[2], sys.argv[3], sys.argv[4]
-        clients = [c.strip() for c in sys.argv[5].split(",")] if len(sys.argv) == 6 else []
-        add_user(username, role, password, clients)
+        email = sys.argv[5] if len(sys.argv) >= 6 else ""
+        clients = [c.strip() for c in sys.argv[6].split(",")] if len(sys.argv) == 7 else []
+        add_user(username, role, password, clients, email)
         where = "the Google Sheet" if _sheets_available() else f"{USERS_PATH} (local fallback)"
         print(f"User '{username}' saved with role '{role}' to {where}.")
+    elif len(sys.argv) == 4 and sys.argv[1] == "set-email":
+        ok = set_email(sys.argv[2], sys.argv[3])
+        print(f"Email {'updated' if ok else 'NOT set - no such account'} for '{sys.argv[2]}'.")
     else:
-        print('Usage: python users.py add <username> <role> <password> ["Client A, Client B"]')
+        print('Usage: python users.py add <username> <role> <password> [email] ["Client A, Client B"]')
+        print('       python users.py set-email <username> <email>')
         print("Roles: admin, technician, client")

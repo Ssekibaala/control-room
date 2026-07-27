@@ -328,12 +328,16 @@
   .u-none { font-size:11px; color:var(--text-tertiary); font-style:italic; }
   .sheet-link { text-decoration:none; width:fit-content; }
   .btn-icon-trail { margin-right:0; margin-left:6px; opacity:0.6; }
-  .users-list-row { display:grid; grid-template-columns:1fr 1fr 150px 110px; align-items:center; gap:12px;
+  .users-list-row { display:grid; grid-template-columns:0.9fr 1.3fr 0.9fr 145px 105px; align-items:center; gap:12px;
     padding:11px 4px; border-bottom:1px solid var(--divider); }
   .users-list-row:last-child { border-bottom:none; }
   .users-list-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
     color:var(--text-tertiary); font-weight:600; border-bottom:1px solid var(--border); padding-bottom:9px; }
   .users-list-row .u-name { font-family:'JetBrains Mono'; font-size:13px; font-weight:600; color:var(--text-primary); }
+  .users-list-row .u-email { font-size:12px; color:var(--text-secondary); cursor:pointer;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-bottom:1px dashed transparent; }
+  .users-list-row .u-email:hover { color:var(--primary); border-bottom-color:var(--primary); }
+  .users-list-row .u-email.missing { color:var(--warning); font-style:italic; }
   .users-list-row .u-lastlogin { font-family:'JetBrains Mono'; font-size:11.5px; color:var(--text-secondary); }
   .users-list-row .u-lastlogin.never { color:var(--text-tertiary); font-style:italic; }
   .users-list-row .role-pill { justify-self:start; }
@@ -1056,6 +1060,12 @@
           <div class="ff-row">
             <label for="uf-username">Username</label>
             <input type="text" id="uf-username" placeholder="e.g. kelvin.o" autocomplete="off" required>
+          </div>
+          <div class="ff-row">
+            <label for="uf-email">Email address</label>
+            <input type="email" id="uf-email" placeholder="Where notifications go" autocomplete="off">
+            <div class="ff-hint">Vehicle updates and feedback requests are sent here. Leave blank if this
+              person shouldn't be emailed.</div>
           </div>
           <div class="ff-row">
             <label for="uf-role">Role</label>
@@ -2044,12 +2054,18 @@ if (usersForm) {
     if (countEl) countEl.textContent = list.length + ' account' + (list.length === 1 ? '' : 's');
     if (!list.length) { el.innerHTML = '<div class="activity-empty">No accounts yet.</div>'; return; }
     const head = '<div class="users-list-row users-list-head">' +
-      '<span>Account</span><span>Client(s)</span><span>Last signed in</span><span>Role</span></div>';
+      '<span>Account</span><span>Email</span><span>Client(s)</span><span>Last signed in</span><span>Role</span></div>';
     el.innerHTML = head + list.map(u => {
       const clients = (u.clients || []);
       return '<div class="users-list-row">' +
         '<span class="u-name">' + escapeHTML(u.username) +
           (u.username === CURRENT_USERNAME ? '<span class="u-you">(you)</span>' : '') + '</span>' +
+        // A blank address means this person genuinely cannot be reached by
+        // any notification, so say that plainly and make it click-to-fix
+        // rather than rendering an empty cell nobody questions.
+        '<span class="u-email' + (u.email ? '' : ' missing') + '" data-user="' + escapeHTML(u.username) + '" ' +
+          'title="' + (u.email ? escapeHTML(u.email) : 'No address on file - click to add') + '">' +
+          escapeHTML(u.email || 'Not set') + '</span>' +
         '<span class="u-clients">' + (clients.length
           ? clients.map(c => '<span class="client-tag">' + escapeHTML(c) + '</span>').join('')
           : '<span class="u-none">All / unassigned</span>') + '</span>' +
@@ -2058,6 +2074,21 @@ if (usersForm) {
         '<span class="role-pill ' + escapeHTML(u.role) + '">' + escapeHTML(u.role) + '</span>' +
       '</div>';
     }).join('');
+
+    el.querySelectorAll('.u-email').forEach(cell => {
+      cell.addEventListener('click', () => {
+        const current = cell.classList.contains('missing') ? '' : cell.textContent;
+        const next = prompt('Email address for ' + cell.dataset.user + ':', current);
+        if (next === null) return;
+        fetch('/api/users/' + encodeURIComponent(cell.dataset.user) + '/email', {
+          method: 'PUT', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email: next.trim()}),
+        })
+          .then(r => r.json().then(b => ({ok: r.ok, b})))
+          .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save that address.'); fetchUsers(); })
+          .catch(() => alert('Could not reach the server.'));
+      });
+    });
   }
 
   // ---- Roles & Visibility modal ----
@@ -2195,7 +2226,9 @@ if (usersForm) {
     submitBtn.textContent = 'Creating…';
     fetch('/api/users', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username, role, password, clients: document.getElementById('uf-clients').value}),
+      body: JSON.stringify({username, role, password,
+        email: document.getElementById('uf-email').value.trim(),
+        clients: document.getElementById('uf-clients').value}),
     })
       .then(r => r.json().then(body => ({ok: r.ok, body})))
       .then(({ok, body}) => {

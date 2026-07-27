@@ -16,6 +16,7 @@ Then open http://127.0.0.1:5000
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -108,6 +109,10 @@ def api_list_users():
             {
                 "username": name,
                 "role": info.get("role", ""),
+                # The address notifications go to. Blank means this person
+                # simply isn't reachable by email yet - the UI says so rather
+                # than letting someone assume they're being kept informed.
+                "email": info.get("email", ""),
                 # A user can be assigned more than one client, so this is
                 # always a list even when there's only one today.
                 "clients": info.get("clients", []),
@@ -143,6 +148,7 @@ def api_create_user():
     username = (body.get("username") or "").strip()
     role = (body.get("role") or "").strip()
     password = body.get("password") or ""
+    email = (body.get("email") or "").strip()
     clients_raw = body.get("clients") or []
     if isinstance(clients_raw, str):
         clients_raw = [c.strip() for c in clients_raw.split(",")]
@@ -154,14 +160,38 @@ def api_create_user():
         return jsonify({"error": f"'role' must be one of {list(ROLES)}"}), 400
     if len(password) < 8:
         return jsonify({"error": "Password must be at least 8 characters"}), 400
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify({"error": "That doesn't look like a valid email address"}), 400
     if username in users_store.load_users():
         return jsonify({"error": f"'{username}' already has an account"}), 409
 
     try:
-        users_store.add_user(username, role, password, clients)
+        users_store.add_user(username, role, password, clients, email)
     except Exception as e:
         return jsonify({"error": f"Could not save the account: {e}"}), 503
-    return jsonify({"username": username, "role": role, "clients": clients}), 201
+    return jsonify({"username": username, "role": role, "clients": clients, "email": email}), 201
+
+
+@app.route("/api/users/<username>/email", methods=["PUT"])
+@login_required
+def api_set_user_email(username):
+    """Backfills an address for an account created before emails were
+    collected, so existing users become reachable without being recreated."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    email = (body.get("email") or "").strip()
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify({"error": "That doesn't look like a valid email address"}), 400
+
+    try:
+        found = users_store.set_email(username, email)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the address: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+    return jsonify({"username": username, "email": email})
 
 
 @app.route("/api/role-panels", methods=["GET"])
