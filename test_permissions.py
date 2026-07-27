@@ -189,7 +189,14 @@ def run():
             cell_matches = ws.findall(TEST_PLATE)
             for cell in sorted(cell_matches, key=lambda c: -c.row):
                 ws.delete_rows(cell.row)
-            print(f"  (cleaned up {len(cell_matches)} test row(s) from the real Sheet)")
+            # Submitting feedback now also opens/updates an EmailThreads
+            # row for the plate (see notifications.on_comment_added) -
+            # clean that up too, or it leaks a "ZZZTEST1" case forever.
+            ws_threads = sheets_store._get_or_create_threads_tab(sh_client, sheet_id)
+            thread_matches = ws_threads.findall(TEST_PLATE)
+            for cell in sorted(thread_matches, key=lambda c: -c.row):
+                ws_threads.delete_rows(cell.row)
+            print(f"  (cleaned up {len(cell_matches)} feedback row(s) and {len(thread_matches)} thread ledger row(s))")
         except Exception as e:
             print(f"  (could not clean up test row automatically: {e})")
     else:
@@ -366,6 +373,71 @@ def run():
 
     _reset_role_matrix()
     print("  (reset role matrix back to shipped defaults)")
+
+    print()
+    print("=== Email-response flow: token security holds ===")
+    from app import make_respond_token
+    tok = make_respond_token("ZZTOKTEST", "no_followup")
+
+    r = client.get("/feedback/respond?token=not-a-real-token")
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] garbage token rejected on the confirm page (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("respond_page accepts a garbage token")
+
+    tampered = tok[:-2] + ("a" if tok[-2] != "a" else "b") + tok[-1]
+    r = client.get(f"/feedback/respond?token={tampered}")
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] tampered token rejected, signature check holds (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("respond_page accepts a tampered token")
+
+    r = client.get(f"/feedback/respond?token={tok}")
+    plate_shown = b"ZZTOKTEST" in r.data
+    print(f"  [{'PASS' if r.status_code == 200 and plate_shown else 'FAIL'}] valid token renders the confirm page for the right plate (status {r.status_code})")
+    if not (r.status_code == 200 and plate_shown):
+        failures.append("respond_page doesn't render the plate for a valid token")
+
+    r = client.post("/feedback/respond", json={"token": tok, "requiresFollowup": "false"})
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] submitting with no name is rejected (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("respond_submit accepts a response with no name")
+
+    r = client.post("/feedback/respond", json={"token": tok, "name": "Tester"})
+    print(f"  [{'PASS' if r.status_code == 400 else 'FAIL'}] submitting with no follow-up choice is rejected (status {r.status_code})")
+    if r.status_code != 400:
+        failures.append("respond_submit accepts a response with no explicit follow-up choice")
+
+    # This is the actual security boundary worth proving: the token grants
+    # answering ONE plate, nothing else - it carries no session and needs
+    # no login, so if it leaked scope beyond its own plate that would be a
+    # real hole, not a cosmetic one.
+    r = client.post("/feedback/respond", json={
+        "token": tok, "name": "AUTOTEST_CLEANUP tester",
+        "comment": "AUTOTEST token-scope probe - safe to delete", "requiresFollowup": "false",
+    })
+    ok = r.status_code == 200 and r.get_json().get("plate") == "ZZTOKTEST"
+    print(f"  [{'PASS' if ok else 'FAIL'}] valid token submits successfully and only for its own plate (status {r.status_code})")
+    if not ok:
+        failures.append("respond_submit didn't accept a fully valid submission")
+
+    try:
+        import sheets_store as _ss
+        fb = _ss.load_feedback().get("ZZTOKTEST", {})
+        recorded = any(h["addedBy"] == "AUTOTEST_CLEANUP tester" for h in fb.get("history", []))
+        print(f"  [{'PASS' if recorded else 'FAIL'}] the email-link response lands in the SAME trail as in-app feedback")
+        if not recorded:
+            failures.append("email-link response didn't land in the unified feedback trail")
+        client_sheet, sheet_id = _ss._get_client()
+        ws = _ss._get_or_create_feedback_tab(client_sheet, sheet_id)
+        cell_matches = ws.findall("ZZTOKTEST")
+        for cell in sorted(cell_matches, key=lambda c: -c.row):
+            ws.delete_rows(cell.row)
+        ws2 = _ss._get_or_create_threads_tab(client_sheet, sheet_id)
+        thread_matches = ws2.findall("ZZTOKTEST")
+        for cell in sorted(thread_matches, key=lambda c: -c.row):
+            ws2.delete_rows(cell.row)
+        print(f"  (cleaned up {len(cell_matches)} feedback row(s) and {len(thread_matches)} thread ledger row(s))")
+    except Exception as e:
+        print(f"  (could not clean up ZZTOKTEST automatically: {e})")
 
     print()
     print("=== Logged out: no access at all ===")

@@ -25,6 +25,7 @@ import threading
 import functools
 from datetime import datetime
 from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from dotenv import load_dotenv
 load_dotenv()  # loads .env for local dev; no-op on Render, which injects real env vars directly
@@ -41,6 +42,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
+
+# Signs the plate+action pair carried by an email's response buttons.
+# Deliberately separate serializer/salt from the session cookie, so a
+# link token and a session cookie can never be confused for each other
+# even though both derive from the same app secret.
+RESPOND_TOKEN_MAX_AGE = 60 * 60 * 24 * 30  # 30 days - long enough that an
+# aging notification is still answerable, short enough that a years-old
+# forwarded email eventually stops working.
+_respond_serializer = URLSafeTimedSerializer(app.secret_key, salt="feedback-respond-v1")
+
+
+def make_respond_token(plate, action):
+    return _respond_serializer.dumps({"plate": plate, "action": action})
+
+
+def read_respond_token(token):
+    """Returns (payload, error_message). error_message is None on success,
+    a human-readable reason otherwise - shown directly on the confirm page
+    rather than a raw exception."""
+    try:
+        return _respond_serializer.loads(token, max_age=RESPOND_TOKEN_MAX_AGE), None
+    except SignatureExpired:
+        return None, "This link has expired. Please ask for a fresh update, or reply to the email directly."
+    except BadSignature:
+        return None, "This link isn't valid. Please use the button from the original email."
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "fleet_today.json")
 
@@ -340,7 +366,100 @@ def api_feedback():
         # a real, specific failure that reached this code just fine.
         return jsonify({"error": f"Could not save to Google Sheets right now: {e}"}), 503
 
+    # The comment is already safely saved above - everything from here is
+    # best-effort. A mail outage must never turn a successful save into an
+    # error response, so failures are logged, not raised.
+    try:
+        import notifications
+        respond_urls = None
+        if role in ("admin", "technician"):
+            respond_urls = {
+                "no_followup": request.url_root.rstrip("/") + url_for("respond_page",
+                    token=make_respond_token(plate, "no_followup")),
+                "needs_attention": request.url_root.rstrip("/") + url_for("respond_page",
+                    token=make_respond_token(plate, "needs_attention")),
+            }
+        result = notifications.on_comment_added(
+            plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls)
+        if not result["sent"]:
+            print(f"Notification email not sent for {plate}: {result['reason']}")
+    except Exception as e:
+        print(f"Notification email failed for {plate}: {e}")
+
     return jsonify({"ok": True, "plate": plate, "status": status})
+
+
+@app.route("/feedback/respond")
+def respond_page():
+    """
+    The page an email button lands on. Rendering it is a GET and changes
+    nothing - the pre-selected answer only takes effect once the visitor
+    reviews it and presses Confirm, which is a POST. This is deliberate:
+    corporate mail scanners (Safe Links, Mimecast, Proofpoint...) prefetch
+    every link in an email to scan it, and a GET that acted immediately
+    would let a scanner silently answer on the client's behalf before
+    they ever opened the message.
+    """
+    token = request.args.get("token", "")
+    payload, error = read_respond_token(token)
+    if error:
+        return render_template("respond.html", error=error), 400
+    return render_template(
+        "respond.html", plate=payload["plate"], action=payload["action"], token=token, error=None,
+    )
+
+
+@app.route("/feedback/respond", methods=["POST"])
+def respond_submit():
+    """
+    Commits the answer from the confirm page. No login: the signed,
+    expiring token IS the credential, scoped to exactly one plate and
+    one pre-chosen action - it can set feedback for that vehicle and
+    nothing else, no session, no fleet data, no other vehicle.
+    """
+    token = request.form.get("token", "") or (request.get_json(silent=True) or {}).get("token", "")
+    payload, error = read_respond_token(token)
+    if error:
+        return jsonify({"error": error}), 400
+
+    # The token proves WHICH vehicle this link may answer for - that's the
+    # actual security boundary. The pre-selected action is only a default;
+    # the visitor can still switch it on the page before confirming, the
+    # same free choice the in-app form gives a logged-in user.
+    plate = payload["plate"]
+    body = request.get_json(silent=True) or request.form
+    comment = (body.get("comment") or "").strip()
+    name = (body.get("name") or "").strip()
+    requires_followup_raw = body.get("requiresFollowup")
+    if isinstance(requires_followup_raw, str):
+        requires_followup_raw = requires_followup_raw.lower() == "true"
+
+    if not name:
+        return jsonify({"error": "Please tell us who's responding."}), 400
+    if not isinstance(requires_followup_raw, bool):
+        return jsonify({"error": "Please choose whether this needs follow-up."}), 400
+    if not comment:
+        comment = "No follow-up needed." if not requires_followup_raw else "Please look into this."
+
+    requires_followup = requires_followup_raw
+    try:
+        import sheets_store
+        sheets_store.add_feedback(
+            plate, comment, added_by=name, requires_followup=requires_followup,
+            role="client", entry_type="feedback",
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        return jsonify({"error": f"Could not save your response right now: {e}"}), 503
+
+    try:
+        import notifications
+        notifications.on_comment_added(plate, comment, name, "client", "feedback", requires_followup)
+    except Exception as e:
+        print(f"Outcome email failed for {plate}: {e}")
+
+    return jsonify({"ok": True, "plate": plate})
 
 
 @app.route("/api/feedback-history/<plate>")

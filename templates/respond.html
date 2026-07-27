@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ plate if plate else 'Feedback' }} - GTL Fleet Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#050507; --card-bg:#12121A; --border:rgba(255,255,255,0.09);
+    --text-primary:#F5F6F8; --text-secondary:rgba(245,246,248,0.60); --text-tertiary:rgba(245,246,248,0.38);
+    --primary:#2E8CFF; --primary-2:#7B61FF; --success:#2EE6A6; --warning:#FFB020;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text-primary);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:24px; -webkit-font-smoothing:antialiased; }
+  .card { width:100%; max-width:420px; background:var(--card-bg); border:1px solid var(--border);
+    border-radius:16px; padding:32px; }
+  .plate { font-family:'JetBrains Mono'; font-size:22px; font-weight:700; margin-bottom:4px; }
+  .lede { font-size:13px; color:var(--text-secondary); margin-bottom:26px; }
+  .toggle { display:flex; gap:8px; margin-bottom:18px; }
+  .toggle-btn { flex:1; padding:12px; border-radius:10px; border:1px solid var(--border); background:rgba(255,255,255,0.04);
+    color:var(--text-secondary); font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .toggle-btn.selected[data-value="false"] { background:rgba(46,230,166,0.16); border-color:var(--success); color:var(--success); }
+  .toggle-btn.selected[data-value="true"] { background:rgba(255,176,32,0.18); border-color:var(--warning); color:var(--warning); }
+  .field { margin-bottom:16px; }
+  .field label { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:7px; font-weight:600; }
+  .field input, .field textarea { width:100%; background:rgba(255,255,255,0.04); border:1px solid var(--border);
+    color:var(--text-primary); padding:11px 14px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical; }
+  .field input:focus, .field textarea:focus { outline:none; border-color:var(--primary); }
+  button[type="submit"] { width:100%; margin-top:6px; background:linear-gradient(135deg,var(--primary),var(--primary-2));
+    border:none; color:#fff; padding:13px; border-radius:10px; font-size:14px; font-weight:700; font-family:inherit;
+    cursor:pointer; }
+  button[type="submit"]:disabled { opacity:0.6; cursor:default; }
+  .msg { font-size:13px; margin-top:14px; text-align:center; }
+  .msg.err { color:#FF5C7A; }
+  .msg.ok { color:var(--success); }
+  .error-box { text-align:center; }
+  .error-box p { font-size:14px; color:var(--text-secondary); line-height:1.6; }
+  .success-box { text-align:center; }
+  .success-box h2 { font-size:18px; margin-bottom:8px; }
+  .success-box p { font-size:13px; color:var(--text-secondary); }
+  .brand { font-size:11px; color:var(--text-tertiary); text-align:center; margin-top:22px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+{% if error %}
+  <div class="error-box">
+    <div class="plate">Can't open this link</div>
+    <p>{{ error }}</p>
+  </div>
+{% else %}
+  <div id="form-view">
+    <div class="plate">{{ plate }}</div>
+    <div class="lede">Does this vehicle need follow-up from our side?</div>
+    <div class="toggle" id="toggle">
+      <button type="button" class="toggle-btn{{ ' selected' if action == 'no_followup' else '' }}" data-value="false">No follow-up needed</button>
+      <button type="button" class="toggle-btn{{ ' selected' if action == 'needs_attention' else '' }}" data-value="true">Needs attention</button>
+    </div>
+    <div class="field">
+      <label for="name">Your name</label>
+      <input type="text" id="name" placeholder="Who's responding?" required>
+    </div>
+    <div class="field">
+      <label for="comment">Comment (optional)</label>
+      <textarea id="comment" rows="3" placeholder="Anything we should know?"></textarea>
+    </div>
+    <button type="submit" id="submit-btn">Confirm</button>
+    <div class="msg" id="msg"></div>
+  </div>
+  <div class="success-box" id="success-view" style="display:none">
+    <h2>Recorded, thank you</h2>
+    <p id="success-text"></p>
+  </div>
+{% endif %}
+  <div class="brand">Globe Trotters Ltd &middot; Fleet Intelligence Command Centre</div>
+</div>
+
+{% if not error %}
+<script>
+const token = {{ token|tojson }};
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+  });
+});
+document.getElementById('submit-btn').addEventListener('click', () => {
+  const selected = document.querySelector('.toggle-btn.selected');
+  const msgEl = document.getElementById('msg');
+  if (!selected) {
+    msgEl.textContent = 'Please choose an option above.';
+    msgEl.className = 'msg err';
+    return;
+  }
+  const name = document.getElementById('name').value.trim();
+  if (!name) {
+    msgEl.textContent = "Please tell us who's responding.";
+    msgEl.className = 'msg err';
+    return;
+  }
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  fetch('/feedback/respond', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      token, name,
+      comment: document.getElementById('comment').value.trim(),
+      requiresFollowup: selected.dataset.value,
+    }),
+  })
+    .then(r => r.json().then(b => ({ok: r.ok, b})))
+    .then(({ok, b}) => {
+      if (!ok) {
+        btn.disabled = false;
+        btn.textContent = 'Confirm';
+        msgEl.textContent = b.error || 'Could not submit this right now.';
+        msgEl.className = 'msg err';
+        return;
+      }
+      document.getElementById('form-view').style.display = 'none';
+      document.getElementById('success-view').style.display = 'block';
+      document.getElementById('success-text').textContent =
+        'Your update on ' + b.plate + ' has been recorded and the team has been notified.';
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.textContent = 'Confirm';
+      msgEl.textContent = 'Could not reach the server. Please try again.';
+      msgEl.className = 'msg err';
+    });
+});
+</script>
+{% endif %}
+
+</body>
+</html>

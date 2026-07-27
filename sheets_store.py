@@ -399,3 +399,91 @@ def _patch_cache_with(entry):
     # Re-stamp so this worker doesn't immediately invalidate its own
     # patch on the very next request by noticing the bump above.
     _cache["stamp"] = _current_stamp()
+
+
+# ======================================================================
+# Email thread ledger
+# ----------------------------------------------------------------------
+# Stores only what a mail THREAD needs to exist - never the message
+# content itself, which already lives permanently in the Feedback tab
+# above. One vehicle can have many cases over its life; each case is one
+# mail thread, opened by a new comment and closed once the client marks
+# "no follow-up needed" for it. The next problem on the same plate opens
+# a fresh case with a new subject, rather than appending to a thread that
+# has grown into an unreadable, years-long scroll.
+# ======================================================================
+
+THREAD_HEADERS = ["Plate", "CaseId", "Subject", "RootMessageId", "ReferencesChain",
+                   "Status", "CreatedAt", "LastSentAt"]
+
+
+def _get_or_create_threads_tab(client, sheet_id):
+    sh = client.open_by_key(sheet_id)
+    try:
+        ws = sh.worksheet("EmailThreads")
+    except Exception:
+        ws = sh.add_worksheet(title="EmailThreads", rows=500, cols=len(THREAD_HEADERS))
+        ws.append_row(THREAD_HEADERS)
+        return ws
+    if ws.row_values(1) != THREAD_HEADERS:
+        ws.update("A1", [THREAD_HEADERS])
+    return ws
+
+
+def get_or_create_open_case(plate):
+    """
+    Returns the currently open case for this plate, creating one if none
+    is open (either it's a brand new plate, or the last case was closed).
+    Shape: {plate, caseId, subject, rootMessageId, references (list), row}.
+    `row` is the 1-indexed sheet row, so callers can update it without a
+    second lookup.
+    """
+    client, sheet_id = _get_client()
+    ws = _get_or_create_threads_tab(client, sheet_id)
+    rows = ws.get_all_records()
+
+    plate_rows = [(i, r) for i, r in enumerate(rows, start=2) if str(r.get("Plate", "")).strip() == plate]
+    open_row = next(((i, r) for i, r in plate_rows if r.get("Status") == "open"), None)
+    if open_row:
+        i, r = open_row
+        refs = [m.strip() for m in str(r.get("ReferencesChain", "")).split(" ") if m.strip()]
+        return {"plate": plate, "caseId": int(r["CaseId"]), "subject": r["Subject"],
+                "rootMessageId": r.get("RootMessageId", ""), "references": refs, "row": i}
+
+    next_case_id = max((int(r["CaseId"]) for _, r in plate_rows), default=0) + 1
+    subject = f"{plate} — GTL case {next_case_id}"
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ws.append_row([plate, next_case_id, subject, "", "", "open", now, ""])
+    new_row = len(ws.get_all_values())
+    return {"plate": plate, "caseId": next_case_id, "subject": subject,
+            "rootMessageId": "", "references": [], "row": new_row}
+
+
+def record_sent_message(plate, case, message_id):
+    """
+    Call after successfully sending one email in this case's thread. The
+    first message sent becomes the root that every later one threads
+    against; every message after that appends to References.
+    """
+    client, sheet_id = _get_client()
+    ws = _get_or_create_threads_tab(client, sheet_id)
+    row = case["row"]
+    root = case["rootMessageId"] or message_id
+    references = case["references"] + [message_id]
+    ws.update(f"D{row}:E{row}", [[root, " ".join(references)]])
+    ws.update_cell(row, THREAD_HEADERS.index("LastSentAt") + 1,
+                    datetime.now().strftime("%d/%m/%Y %H:%M"))
+    case["rootMessageId"], case["references"] = root, references
+    return case
+
+
+def close_case(plate, case_id):
+    """Marks a case closed - the NEXT comment on this plate opens a fresh
+    case and a fresh thread, rather than reopening a stale one."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_threads_tab(client, sheet_id)
+    for i, r in enumerate(ws.get_all_records(), start=2):
+        if str(r.get("Plate", "")).strip() == plate and int(r.get("CaseId", 0)) == case_id:
+            ws.update_cell(i, THREAD_HEADERS.index("Status") + 1, "closed")
+            return True
+    return False

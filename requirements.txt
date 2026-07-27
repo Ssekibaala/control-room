@@ -3,6 +3,9 @@ openpyxl>=3.1
 requests>=2.31
 gunicorn>=22.0
 python-dotenv>=1.0
+# Already a transitive Flask dependency; pinned explicitly because
+# app.py now imports it directly to sign email response links.
+itsdangerous>=2.1
 
 # Google Sheets support (feedback/history storage)
 gspread>=6.1

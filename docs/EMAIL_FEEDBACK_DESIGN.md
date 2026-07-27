@@ -1,6 +1,24 @@
 # Email-Driven Client Feedback — Design
 
-Status: **design agreed in principle, not yet built.**
+Status: **Built.** SMTP via the existing Teletrac mailbox (no new env vars -
+reuses EMAIL_ADDRESS/EMAIL_PASSWORD), thread-per-case ledger in a new
+"EmailThreads" Sheet tab, frozen subject `PLATE — GTL case N`, hidden
+preheader, two pre-selecting response buttons, signed/expiring no-login
+confirm page (POST-only mutation), unified feedback trail regardless of
+channel. Verified end-to-end against the real mailbox and Sheet: sent mail
+confirmed via IMAP fetch, thread headers (`In-Reply-To`/`References`)
+confirmed chaining correctly across two real messages, case-close and
+next-case-opens-fresh-thread both confirmed, token tamper/expiry/missing-field
+rejections all tested. New module: `mailer.py`, `email_templates.py`,
+`notifications.py`, `templates/respond.html`; new Sheet tab: `EmailThreads`
+(see `sheets_store.py`'s `get_or_create_open_case`/`record_sent_message`/
+`close_case`). Not yet built: inbound reply ingestion, per-vehicle-per-day
+coalescing, and the clients registry (recipients currently come from
+role-tagged user accounts, per user instruction, not a separate registry).
+
+Below is the original exploration this was built from.
+
+Status (original): **design agreed in principle, not yet built.**
 Source: five independent design lenses (mail-protocol engineer, UX minimalist,
 East-African field ops, trust & safety, wildcard) producing 30 ideas, plus
 partial adversarial stress-testing. Captured here so the reasoning survives.
