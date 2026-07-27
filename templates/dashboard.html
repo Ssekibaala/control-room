@@ -342,6 +342,10 @@
   .users-list-row .u-lastlogin.never { color:var(--text-tertiary); font-style:italic; }
   .users-list-row .role-pill { justify-self:start; }
   .users-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .users-list-row.client-row { grid-template-columns:1fr 2fr 36px; }
+  .client-delete { width:30px; height:30px; color:var(--text-tertiary); }
+  .client-delete:hover { color:var(--danger); }
+  .client-delete svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; }
   .btn-secondary { background:var(--hover-surface); border:1px solid var(--border); color:var(--text-secondary);
     padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:600; font-family:inherit; cursor:pointer;
     display:inline-flex; align-items:center; transition:background-color 0.15s, color 0.15s, border-color 0.15s; }
@@ -1113,6 +1117,35 @@
       </div>
     </div>
   </div>
+
+  <div class="drill-backdrop" id="createclient-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Add client">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">Add Client</div>
+          <div class="drill-subtitle">Contact emails here get vehicle updates without needing a login.</div>
+        </div>
+        <button class="icon-btn" id="createclient-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body">
+        <form id="client-create-form">
+          <div class="ff-row">
+            <label for="cf-name">Client name</label>
+            <input type="text" id="cf-name" placeholder="e.g. Globe Trotters Ltd" autocomplete="off" required>
+          </div>
+          <div class="ff-row">
+            <label for="cf-emails">Contact email(s)</label>
+            <input type="text" id="cf-emails" placeholder="glenn@example.com, ops@example.com" autocomplete="off">
+            <div class="ff-hint">Separate multiple addresses with commas. Can be left blank and added later.</div>
+          </div>
+          <div id="cf-msg" class="ff-msg"></div>
+          <button type="submit" id="cf-submit" class="btn-primary user-form-submit">Add Client</button>
+        </form>
+      </div>
+    </div>
+  </div>
 {% endif %}
 
   <div class="main">
@@ -1380,6 +1413,23 @@
             </div>
           </div>
           <div id="users-list"><div class="feedback-loading">Loading accounts&hellip;</div></div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-card-head users-head">
+            <div>
+              <h3>Client Contacts</h3>
+              <span class="chart-subhead">Who gets emailed about a vehicle, even without a login. Every vehicle
+                currently reaches every client contact below &mdash; per-vehicle assignment isn't built yet.</span>
+            </div>
+            <div class="users-head-actions">
+              <button class="btn-primary" id="open-create-client">
+                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 5v14M5 12h14"/></svg>
+                Add Client
+              </button>
+            </div>
+          </div>
+          <div id="clients-list"><div class="feedback-loading">Loading clients&hellip;</div></div>
         </div>
       </section>
 {% endif %}
@@ -2200,6 +2250,110 @@ if (usersForm) {
       });
   }
   fetchUsers();
+
+  // ---- Client Contacts ----
+  const clientsList = document.getElementById('clients-list');
+  if (clientsList) {
+    function renderClientsList(clients) {
+      if (!clients.length) {
+        clientsList.innerHTML = '<div class="activity-empty">No clients yet. Vehicle updates have no one to notify until one is added.</div>';
+        return;
+      }
+      clientsList.innerHTML = clients.map(c =>
+        '<div class="users-list-row client-row">' +
+          '<span class="u-name">' + escapeHTML(c.name) + '</span>' +
+          '<span class="u-email client-emails' + (c.emails.length ? '' : ' missing') + '" data-client="' + escapeHTML(c.name) + '" ' +
+            'title="' + (c.emails.length ? escapeHTML(c.emails.join(', ')) : 'No contacts on file - click to add') + '">' +
+            (c.emails.length ? escapeHTML(c.emails.join(', ')) : 'Not set') + '</span>' +
+          '<button class="icon-btn client-delete" data-client="' + escapeHTML(c.name) + '" title="Remove client" aria-label="Remove client">' +
+            '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>' +
+          '</button>' +
+        '</div>'
+      ).join('');
+
+      clientsList.querySelectorAll('.client-emails').forEach(cell => {
+        cell.addEventListener('click', () => {
+          const current = cell.classList.contains('missing') ? '' : cell.title;
+          const next = prompt('Contact email(s) for ' + cell.dataset.client + ' (comma-separated):', current);
+          if (next === null) return;
+          fetch('/api/clients/' + encodeURIComponent(cell.dataset.client) + '/emails', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({emails: next.trim()}),
+          })
+            .then(r => r.json().then(b => ({ok: r.ok, b})))
+            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save.'); fetchClients(); })
+            .catch(() => alert('Could not reach the server.'));
+        });
+      });
+      clientsList.querySelectorAll('.client-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!confirm('Remove "' + btn.dataset.client + '" from Client Contacts? Vehicle updates will stop reaching their address(es).')) return;
+          fetch('/api/clients/' + encodeURIComponent(btn.dataset.client), {method: 'DELETE'})
+            .then(r => r.json().then(b => ({ok: r.ok, b})))
+            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not remove.'); fetchClients(); })
+            .catch(() => alert('Could not reach the server.'));
+        });
+      });
+    }
+
+    function fetchClients() {
+      fetch('/api/clients')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => renderClientsList(data.clients || []))
+        .catch(() => { clientsList.innerHTML = '<div class="activity-empty">Could not load clients.</div>'; });
+    }
+    fetchClients();
+
+    const ccBackdrop = document.getElementById('createclient-backdrop');
+    const clientForm = document.getElementById('client-create-form');
+    function openCreateClient() {
+      document.getElementById('cf-msg').textContent = '';
+      document.getElementById('cf-msg').className = 'ff-msg';
+      clientForm.reset();
+      ccBackdrop.classList.add('open');
+      setTimeout(() => document.getElementById('cf-name').focus(), 50);
+    }
+    function closeCreateClient() { ccBackdrop.classList.remove('open'); }
+    wireOnce('createclient-modal', () => {
+      document.getElementById('open-create-client').addEventListener('click', openCreateClient);
+      document.getElementById('createclient-close').addEventListener('click', closeCreateClient);
+      ccBackdrop.addEventListener('click', (e) => { if (e.target === ccBackdrop) closeCreateClient(); });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && ccBackdrop.classList.contains('open')) closeCreateClient();
+      });
+    });
+
+    wireOnce('client-form-submit', () => clientForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const msgEl = document.getElementById('cf-msg');
+      const submitBtn = document.getElementById('cf-submit');
+      submitBtn.disabled = true; submitBtn.textContent = 'Adding…';
+      fetch('/api/clients', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: document.getElementById('cf-name').value.trim(),
+          emails: document.getElementById('cf-emails').value.trim(),
+        }),
+      })
+        .then(r => r.json().then(b => ({ok: r.ok, b})))
+        .then(({ok, b}) => {
+          submitBtn.disabled = false; submitBtn.textContent = 'Add Client';
+          if (!ok) {
+            msgEl.textContent = b.error || 'Could not add this client.';
+            msgEl.className = 'ff-msg err';
+            return;
+          }
+          clientForm.reset();
+          fetchClients();
+          closeCreateClient();
+        })
+        .catch(() => {
+          submitBtn.disabled = false; submitBtn.textContent = 'Add Client';
+          msgEl.textContent = 'Could not reach the server.';
+          msgEl.className = 'ff-msg err';
+        });
+    }));
+  }
 
   wireOnce('users-form-submit', () =>
   usersForm.addEventListener('submit', (e) => {

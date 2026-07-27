@@ -487,3 +487,74 @@ def close_case(plate, case_id):
             ws.update_cell(i, THREAD_HEADERS.index("Status") + 1, "closed")
             return True
     return False
+
+
+# ---- Clients registry ---------------------------------------------------
+# A client here is the ORGANISATION (e.g. "Globe Trotters Ltd"), not a
+# login - it exists so notifications can reach people who watch a fleet
+# without needing their own account. Every vehicle currently belongs to
+# the one existing client by default (no per-vehicle assignment yet - see
+# docs/EMAIL_FEEDBACK_DESIGN.md), so registry contacts are additive
+# recipients on every notification, alongside role-tagged user accounts.
+CLIENT_HEADERS = ["Name", "ContactEmails", "CreatedAt"]
+
+
+def _get_or_create_clients_tab(client, sheet_id):
+    sh = client.open_by_key(sheet_id)
+    try:
+        ws = sh.worksheet("Clients")
+    except Exception:
+        ws = sh.add_worksheet(title="Clients", rows=100, cols=len(CLIENT_HEADERS))
+        ws.append_row(CLIENT_HEADERS)
+        return ws
+    if ws.row_values(1) != CLIENT_HEADERS:
+        ws.update("A1", [CLIENT_HEADERS])
+    return ws
+
+
+def load_clients():
+    client, sheet_id = _get_client()
+    ws = _get_or_create_clients_tab(client, sheet_id)
+    out = []
+    for row in ws.get_all_records():
+        name = str(row.get("Name", "")).strip()
+        if not name:
+            continue
+        emails_raw = str(row.get("ContactEmails", "")).strip()
+        out.append({
+            "name": name,
+            "emails": [e.strip() for e in emails_raw.split(",") if e.strip()],
+            "createdAt": str(row.get("CreatedAt", "")).strip(),
+        })
+    return out
+
+
+def add_client(name, emails=None):
+    client, sheet_id = _get_client()
+    ws = _get_or_create_clients_tab(client, sheet_id)
+    if any(str(r.get("Name", "")).strip().lower() == name.lower() for r in ws.get_all_records()):
+        raise ValueError(f"A client named '{name}' already exists")
+    ws.append_row([name, ", ".join(emails or []), datetime.now().strftime("%d/%m/%Y %H:%M")])
+
+
+def set_client_emails(name, emails):
+    """Replaces the full contact list for one client. Single-row update,
+    matched by name - returns False if no client by that name exists."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_clients_tab(client, sheet_id)
+    cell = ws.find(name, in_column=1)
+    if cell is None:
+        return False
+    ws.update_cell(cell.row, CLIENT_HEADERS.index("ContactEmails") + 1, ", ".join(emails or []))
+    return True
+
+
+def delete_client(name):
+    client, sheet_id = _get_client()
+    ws = _get_or_create_clients_tab(client, sheet_id)
+    cell = ws.find(name, in_column=1)
+    if cell is None:
+        return False
+    ws.delete_rows(cell.row)
+    return True
+    return False

@@ -18,24 +18,50 @@ from users import notification_recipients
 
 
 def _client_recipients():
-    return [r["email"] for r in notification_recipients(roles=("client",))]
+    """Union of client-role user accounts AND the Clients registry's
+    contact emails, deduplicated - a client contact doesn't need a login
+    to be notified, and a client-role account works even before the
+    registry has an entry for them. Every vehicle currently defaults to
+    the one existing client (see docs/EMAIL_FEEDBACK_DESIGN.md), so
+    registry contacts are additive recipients on every notification,
+    not routed per-vehicle yet."""
+    seen, out = set(), []
+    for email in [r["email"] for r in notification_recipients(roles=("client",))]:
+        if email.lower() not in seen:
+            seen.add(email.lower())
+            out.append(email)
+    try:
+        for c in sheets_store.load_clients():
+            for email in c["emails"]:
+                if email.lower() not in seen:
+                    seen.add(email.lower())
+                    out.append(email)
+    except Exception:
+        pass  # registry unreachable - role-tagged accounts above still get notified
+    return out
 
 
 def _staff_recipients():
     return [r["email"] for r in notification_recipients(roles=("admin", "technician"))]
 
 
-def on_comment_added(plate, comment, added_by, role, entry_type, requires_followup, respond_urls=None):
+def on_comment_added(plate, comment, added_by, role, entry_type, requires_followup,
+                     respond_urls=None, base_url=""):
     """
     role/entry_type/requires_followup are exactly what was just written
     to the Feedback tab by sheets_store.add_feedback(). respond_urls, if
     given, is {"no_followup": url, "needs_attention": url} - supplied by
     the caller because building them needs a signed token, which is the
-    caller's job (app.py), not this module's.
+    caller's job (app.py), not this module's. base_url is the same
+    absolute, deployment-real URL used to build those links (see
+    app.py's public_base_url()) - reused here for the logo <img> src,
+    since an email has no page origin to resolve a relative path
+    against, only ever an absolute one.
 
     Returns a small dict of what happened, purely for logging/testing -
     callers are not expected to act on it.
     """
+    logo_url = f"{base_url}/static/Teletrac_Fleet_Solutions_logo.png" if base_url else ""
     result = {"sent": False, "reason": None, "case_id": None}
     try:
         case = sheets_store.get_or_create_open_case(plate)
@@ -65,7 +91,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
         no_url = (respond_urls or {}).get("no_followup", "#")
         need_url = (respond_urls or {}).get("needs_attention", "#")
         html, preheader = email_templates.build_update_email(
-            plate, comment, added_by, role, timestamp, no_url, need_url, recent)
+            plate, comment, added_by, role, timestamp, no_url, need_url, recent, logo_url)
         return _send_and_record(plate, case, to, html, preheader, result)
 
     if role == "client":
@@ -74,7 +100,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
             result["reason"] = "no recipients on file"
             return result
         html, preheader = email_templates.build_outcome_email(
-            plate, comment, added_by, requires_followup, timestamp)
+            plate, comment, added_by, requires_followup, timestamp, logo_url)
         sent = _send_and_record(plate, case, to, html, preheader, result)
         if requires_followup is False:
             try:

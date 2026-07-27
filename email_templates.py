@@ -24,15 +24,35 @@ BG = "#F4F5F7"
 _esc = html.escape
 
 
-def _shell(inner_html, preheader_note=""):
+def _shell(inner_html, logo_url=""):
+    # The Teletrac mark sits on its own white plate inside the gradient
+    # header, same reasoning as the dashboard sidebar: it's a third-party
+    # brand with its own colours, not something to recolour to the app's
+    # theme, and it needs real contrast to read at a glance in an inbox.
+    # logo_url must be an absolute URL - an email has no page origin to
+    # resolve a relative /static/... path against.
+    logo_html = (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;'
+        f'border-radius:8px;padding:6px 10px;display:inline-block;"><tr><td>'
+        f'<img src="{logo_url}" alt="Teletrac Fleet Solutions" height="22" '
+        f'style="display:block;height:22px;width:auto;border:0;"></td></tr></table>'
+        if logo_url else
+        '<span style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.4px;">TELETRAC</span>'
+    )
     return f"""
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BG};padding:24px 0;">
   <tr><td align="center">
     <table role="presentation" width="560" cellpadding="0" cellspacing="0"
       style="background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid {BORDER};font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
       <tr>
-        <td style="background:linear-gradient(135deg,{PRIMARY},{PRIMARY_2});background-color:{PRIMARY};padding:22px 28px;">
-          <span style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.4px;">GTL FLEET INTELLIGENCE</span>
+        <td style="background:linear-gradient(135deg,{PRIMARY},{PRIMARY_2});background-color:{PRIMARY};padding:18px 28px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td>{logo_html}</td>
+            <td align="right">
+              <span style="color:rgba(255,255,255,0.92);font-size:11.5px;font-weight:700;letter-spacing:0.5px;">
+                GTL FLEET INTELLIGENCE</span>
+            </td>
+          </tr></table>
         </td>
       </tr>
       {inner_html}
@@ -63,7 +83,8 @@ def _button(label, url, color):
             f'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">{_esc(label)}</a>')
 
 
-def build_update_email(plate, comment, author, role, timestamp, no_followup_url, needs_attention_url, recent_trail):
+def build_update_email(plate, comment, author, role, timestamp, no_followup_url, needs_attention_url,
+                       recent_trail, logo_url=""):
     """
     Sent to the client when a technician/admin adds a comment. Two large
     tap-target buttons, pre-selecting the answer they land on - nothing
@@ -99,10 +120,10 @@ def build_update_email(plate, comment, author, role, timestamp, no_followup_url,
       {"<tr><td style='padding:0 28px 22px;'><span style='font-size:10.5px;color:" + MUTED + ";text-transform:uppercase;letter-spacing:0.5px;'>Recent history</span><table role='presentation' width='100%' cellpadding='0' cellspacing='0'>" + trail_rows + "</table></td></tr>" if trail_rows else ""}
     """
     preheader = f"{comment[:110]}"
-    return _shell(inner), preheader
+    return _shell(inner, logo_url), preheader
 
 
-def build_outcome_email(plate, resolved_comment, author, requires_followup, timestamp):
+def build_outcome_email(plate, resolved_comment, author, requires_followup, timestamp, logo_url=""):
     """Sent to everyone in the thread once the client (or anyone) records
     an answer - states the real outcome, never a blanket 'closed' when
     follow-up was actually requested."""
@@ -127,4 +148,4 @@ def build_outcome_email(plate, resolved_comment, author, requires_followup, time
       </td></tr>
     """
     preheader = headline
-    return _shell(inner), preheader
+    return _shell(inner, logo_url), preheader

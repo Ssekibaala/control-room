@@ -57,6 +57,25 @@ def make_respond_token(plate, action):
     return _respond_serializer.dumps({"plate": plate, "action": action})
 
 
+def public_base_url():
+    """
+    The base URL for links that leave the app in an email, which must
+    never depend on which machine happened to be running Flask when the
+    notification was sent. request.url_root reflects THAT REQUEST's
+    host - correct for a real visitor Browse the deployed site, but
+    "http://localhost:5000/" for any local dev run or test script, and a
+    link like that is dead for anyone who isn't the exact machine that
+    sent it. PUBLIC_BASE_URL is an explicit override; RENDER_EXTERNAL_URL
+    is injected automatically by Render for every web service, so
+    production needs no manual configuration at all. request.url_root is
+    the last resort, kept only so interactive local testing still works.
+    """
+    configured = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+    if configured:
+        return configured.rstrip("/")
+    return request.url_root.rstrip("/")
+
+
 def read_respond_token(token):
     """Returns (payload, error_message). error_message is None on success,
     a human-readable reason otherwise - shown directly on the confirm page
@@ -220,6 +239,88 @@ def api_set_user_email(username):
     return jsonify({"username": username, "email": email})
 
 
+def _valid_emails(raw):
+    """raw is a comma-separated string from the UI. Returns
+    (clean_list, error_message) - error_message is None when every
+    address present is well-formed, so a single typo doesn't silently
+    drop the rest of a client's contacts."""
+    emails = [e.strip() for e in raw.split(",") if e.strip()]
+    bad = [e for e in emails if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)]
+    if bad:
+        return None, f"These don't look like valid email addresses: {', '.join(bad)}"
+    return emails, None
+
+
+@app.route("/api/clients", methods=["GET"])
+@login_required
+def api_list_clients():
+    """Every client is visible to any logged-in role - unlike accounts,
+    there's nothing sensitive in an organisation's name and contact
+    emails, and technicians need to see this list just as much as admins
+    do when they're the ones adding vehicle updates."""
+    try:
+        import sheets_store
+        return jsonify({"clients": sheets_store.load_clients()})
+    except Exception as e:
+        return jsonify({"error": f"Could not load clients: {e}"}), 503
+
+
+@app.route("/api/clients", methods=["POST"])
+@login_required
+def api_create_client():
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "'name' is required"}), 400
+    emails, err = _valid_emails(body.get("emails") or "")
+    if err:
+        return jsonify({"error": err}), 400
+    try:
+        import sheets_store
+        sheets_store.add_client(name, emails)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        return jsonify({"error": f"Could not save the client: {e}"}), 503
+    return jsonify({"name": name, "emails": emails}), 201
+
+
+@app.route("/api/clients/<name>/emails", methods=["PUT"])
+@login_required
+def api_set_client_emails(name):
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    emails, err = _valid_emails(body.get("emails") or "")
+    if err:
+        return jsonify({"error": err}), 400
+    try:
+        import sheets_store
+        found = sheets_store.set_client_emails(name, emails)
+    except Exception as e:
+        return jsonify({"error": f"Could not save: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No client called '{name}'"}), 404
+    return jsonify({"name": name, "emails": emails})
+
+
+@app.route("/api/clients/<name>", methods=["DELETE"])
+@login_required
+def api_delete_client(name):
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    try:
+        import sheets_store
+        found = sheets_store.delete_client(name)
+    except Exception as e:
+        return jsonify({"error": f"Could not delete: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No client called '{name}'"}), 404
+    return jsonify({"ok": True})
+
+
 @app.route("/api/role-panels", methods=["GET"])
 @login_required
 def api_role_panels():
@@ -371,16 +472,17 @@ def api_feedback():
     # error response, so failures are logged, not raised.
     try:
         import notifications
+        base_url = public_base_url()
         respond_urls = None
         if role in ("admin", "technician"):
             respond_urls = {
-                "no_followup": request.url_root.rstrip("/") + url_for("respond_page",
+                "no_followup": base_url + url_for("respond_page",
                     token=make_respond_token(plate, "no_followup")),
-                "needs_attention": request.url_root.rstrip("/") + url_for("respond_page",
+                "needs_attention": base_url + url_for("respond_page",
                     token=make_respond_token(plate, "needs_attention")),
             }
         result = notifications.on_comment_added(
-            plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls)
+            plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls, base_url)
         if not result["sent"]:
             print(f"Notification email not sent for {plate}: {result['reason']}")
     except Exception as e:
@@ -455,7 +557,9 @@ def respond_submit():
 
     try:
         import notifications
-        notifications.on_comment_added(plate, comment, name, "client", "feedback", requires_followup)
+        notifications.on_comment_added(
+            plate, comment, name, "client", "feedback", requires_followup,
+            base_url=public_base_url())
     except Exception as e:
         print(f"Outcome email failed for {plate}: {e}")
 
