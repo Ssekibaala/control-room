@@ -102,12 +102,18 @@
   }
   .sidebar.collapsed .collapse-btn svg { transform:rotate(180deg); }
 
-  .sidebar-top { display:flex; align-items:center; gap:var(--sp-1); padding:18px var(--sp-2); border-bottom:1px solid var(--divider); }
+  /* The collapse button and the logo sit in their own row so that
+     align-items:center means "centred on the logo". When the tagline
+     was a sibling in this flex row, centring measured against the whole
+     block and the arrow landed 20px below the logo's midline. */
+  .sidebar-top { display:flex; flex-direction:column; gap:10px; padding:18px var(--sp-2); border-bottom:1px solid var(--divider); }
+  .brand-row { display:flex; align-items:center; gap:var(--sp-1); }
   .collapse-btn { background:var(--hover-surface); border:1px solid var(--border); border-radius:9px; width:28px; height:28px;
     display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-secondary); flex-shrink:0; }
   .collapse-btn svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2; transition:transform 0.3s; }
   .collapse-btn:hover { color:var(--text-primary); }
-  .sidebar-brand { display:block; flex:1; min-width:0; }
+  .sidebar-brand { display:block; flex:1; min-width:0; text-decoration:none; }
+  .sidebar-brand:hover, .sidebar-brand:focus { text-decoration:none; }
   .brand-name { font-family:-apple-system,'Manrope'; font-weight:700; font-size:14px; white-space:nowrap; }
   .brand-sub { font-size:11px; color:var(--text-tertiary); white-space:nowrap; }
 
@@ -119,8 +125,14 @@
      because it's a third-party brand with its own colours. */
   .powered-logo { display:block; width:84%; max-width:160px; height:auto; background:#fff;
     border-radius:9px; padding:8px 11px; box-shadow:0 2px 12px rgba(0,0,0,0.25); }
-  .brand-tagline { display:block; margin-top:9px; font-size:11px; font-weight:500; line-height:1.45;
-    color:var(--text-secondary); }
+  /* Sits outside the anchor now, so it can't pick up link underlining
+     on hover. Styled as a product descriptor rather than body copy: a
+     short accent rule, then quiet letterspaced type. */
+  .brand-tagline { margin:0; padding-left:10px; position:relative; font-size:10.5px; font-weight:500;
+    line-height:1.5; letter-spacing:0.2px; color:var(--text-secondary); }
+  .brand-tagline::before { content:""; position:absolute; left:0; top:3px; bottom:3px; width:2px;
+    border-radius:2px; background:var(--grad-primary); }
+  .sidebar.collapsed .brand-tagline { display:none; }
   /* The collapsed rail is 72px and this is a wide horizontal lockup - at
      that width the wordmark is unreadable, which is the problem this
      change set out to fix, not a smaller version of it. Hide it while
@@ -797,14 +809,16 @@
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
-      <button class="collapse-btn" id="collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
-        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
-      <a class="sidebar-brand" href="/" title="Fleet Intelligence Command Centre &mdash; telemetry by Teletrac Fleet Solutions">
-        <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
-             alt="Teletrac Fleet Solutions" class="powered-logo">
-        <span class="brand-tagline">Fleet integrity &amp; tampering intelligence</span>
-      </a>
+      <div class="brand-row">
+        <button class="collapse-btn" id="collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
+          <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <a class="sidebar-brand" href="/" title="Fleet Intelligence Command Centre &mdash; telemetry by Teletrac Fleet Solutions">
+          <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
+               alt="Teletrac Fleet Solutions" class="powered-logo">
+        </a>
+      </div>
+      <p class="brand-tagline">Fleet integrity &amp; tampering intelligence</p>
     </div>
 
     <div class="quick-stats">
