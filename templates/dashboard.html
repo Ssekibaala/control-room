@@ -119,7 +119,8 @@
      because it's a third-party brand with its own colours. */
   .powered-logo { display:block; width:84%; max-width:160px; height:auto; background:#fff;
     border-radius:9px; padding:8px 11px; box-shadow:0 2px 12px rgba(0,0,0,0.25); }
-  .brand-tagline { display:block; margin-top:9px; font-size:10px; line-height:1.5; color:var(--text-tertiary); }
+  .brand-tagline { display:block; margin-top:9px; font-size:11px; font-weight:500; line-height:1.45;
+    color:var(--text-secondary); }
   /* The collapsed rail is 72px and this is a wide horizontal lockup - at
      that width the wordmark is unreadable, which is the problem this
      change set out to fix, not a smaller version of it. Hide it while
@@ -802,7 +803,7 @@
       <a class="sidebar-brand" href="/" title="Fleet Intelligence Command Centre &mdash; telemetry by Teletrac Fleet Solutions">
         <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
              alt="Teletrac Fleet Solutions" class="powered-logo">
-        <span class="brand-tagline">Fleet integrity &amp; tampering intelligence, unified across Teletrac, MiX&nbsp;Unity and FT&nbsp;Cloud.</span>
+        <span class="brand-tagline">Fleet integrity &amp; tampering intelligence</span>
       </a>
     </div>
 
