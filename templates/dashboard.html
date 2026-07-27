@@ -107,21 +107,25 @@
     display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-secondary); flex-shrink:0; }
   .collapse-btn svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2; transition:transform 0.3s; }
   .collapse-btn:hover { color:var(--text-primary); }
-  .sidebar-brand { display:flex; align-items:center; gap:10px; overflow:hidden; }
-  .brand-mark { width:34px; height:34px; border-radius:10px; background:var(--grad-primary); color:#fff;
-    display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-weight:700; font-size:11px; flex-shrink:0;
-    box-shadow: 0 4px 14px rgba(10,132,255,0.35); }
+  .sidebar-brand { display:block; flex:1; min-width:0; }
   .brand-name { font-family:-apple-system,'Manrope'; font-weight:700; font-size:14px; white-space:nowrap; }
   .brand-sub { font-size:11px; color:var(--text-tertiary); white-space:nowrap; }
 
-  /* Teletrac mark sits on white so the logo's own colours stay true -
-     it's a third-party brand, not something to recolour to our theme. */
-  .powered-strip { display:flex; align-items:center; gap:10px; padding:10px var(--sp-2); border-bottom:1px solid var(--divider); }
-  .powered-logo { height:22px; width:auto; background:#fff; border-radius:6px; padding:3px 6px; flex-shrink:0; }
-  .powered-caption { font-size:10px; color:var(--text-tertiary); line-height:1.3; white-space:nowrap; }
-  .sidebar.collapsed .powered-strip { justify-content:center; padding:10px 6px; }
-  .sidebar.collapsed .powered-caption { display:none; }
-  .sidebar.collapsed .powered-logo { height:18px; padding:2px 3px; }
+  /* The Teletrac mark is the sidebar's whole identity now. The "GTL"
+     tile duplicated the wordmark beside it, and the "Fleet Intelligence
+     / Command Centre" text was consuming the width the logo needed to
+     be legible - the page header already names the product on every
+     screen, so the sidebar doesn't have to repeat it. White background
+     because it's a third-party brand with its own colours. */
+  .powered-logo { display:block; width:84%; max-width:160px; height:auto; background:#fff;
+    border-radius:9px; padding:8px 11px; box-shadow:0 2px 12px rgba(0,0,0,0.25); }
+  .brand-tagline { display:block; margin-top:9px; font-size:10px; line-height:1.5; color:var(--text-tertiary); }
+  /* The collapsed rail is 72px and this is a wide horizontal lockup - at
+     that width the wordmark is unreadable, which is the problem this
+     change set out to fix, not a smaller version of it. Hide it while
+     collapsed; expanding brings it straight back. */
+  .sidebar.collapsed .sidebar-brand { display:none; }
+  .sidebar.collapsed .sidebar-top { justify-content:center; }
 
   .quick-stats { display:flex; justify-content:space-around; padding:var(--sp-2); border-bottom:1px solid var(--divider); }
   .qs-item { display:flex; flex-direction:column; align-items:center; gap:2px; }
@@ -281,6 +285,18 @@
   /* Entry-type chip: says which field an entry authored, so one trail
      can carry both a client's feedback and a technician's action
      without the reader having to guess who wrote what. */
+  /* Feedback cell: badge stays narrow and fixed, the comment gets every
+     remaining pixel. min-width:0 on the text is what lets it actually
+     shrink-and-ellipsis inside a flex row instead of forcing the column
+     wider. */
+  .fb-cell { max-width:340px; }
+  .fb-cell > * { vertical-align:middle; }
+  .fb-flag { display:inline-block; flex-shrink:0; font-size:9px; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.4px; padding:2px 7px; border-radius:20px; margin-right:8px; }
+  .fb-flag.followup { background:var(--warning-surface); color:var(--warning); }
+  .fb-flag.known { background:var(--success-surface); color:var(--success); }
+  .fb-text { display:inline; color:var(--text-primary); }
+
   .entry-chip { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;
     padding:2px 6px; border-radius:5px; margin-right:7px; vertical-align:1px; }
   .pill-warn { background:var(--warning-surface) !important; color:var(--warning) !important; border-color:var(--warning) !important; }
@@ -783,19 +799,11 @@
       <button class="collapse-btn" id="collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
         <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <div class="sidebar-brand">
-        <div class="brand-mark">GTL</div>
-        <div class="brand-text">
-          <div class="brand-name">Fleet Intelligence</div>
-          <div class="brand-sub">Command Centre</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="powered-strip">
-      <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
-           alt="Teletrac Fleet Solutions" class="powered-logo">
-      <span class="powered-caption">Live data from Teletrac</span>
+      <a class="sidebar-brand" href="/" title="Fleet Intelligence Command Centre &mdash; telemetry by Teletrac Fleet Solutions">
+        <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
+             alt="Teletrac Fleet Solutions" class="powered-logo">
+        <span class="brand-tagline">Fleet integrity &amp; tampering intelligence, unified across Teletrac, MiX&nbsp;Unity and FT&nbsp;Cloud.</span>
+      </a>
     </div>
 
     <div class="quick-stats">
@@ -2402,7 +2410,31 @@ function pillFor(key, val) {
   }
   return null;
 }
+/**
+ * The Customer Feedback cell gets its own renderer: a narrow badge for
+ * the follow-up state, then the client's comment taking whatever width
+ * is left. Previously the status was baked into the string, so every
+ * cell opened with the same ~25 characters of prefix and the ellipsis
+ * fell on the words that actually mattered. Full text stays reachable
+ * via the title tooltip and the row's drill-down.
+ */
+function feedbackCellHTML(r) {
+  const comment = r.feedback || '';
+  if (!comment) return '<td></td>';
+  const needsFollowup = r.requiresFollowup;
+  const badge = needsFollowup === true
+    ? '<span class="fb-flag followup" title="Follow-up requested">Follow-up</span>'
+    : needsFollowup === false
+      ? '<span class="fb-flag known" title="Known issue, no follow-up needed">Known</span>'
+      : '';
+  const tip = (r.feedbackStatus ? r.feedbackStatus + ' — ' : '') + comment +
+    (r.reportedBy ? '\n\n— ' + r.reportedBy + (r.feedbackDate ? ', ' + r.feedbackDate : '') : '');
+  return '<td class="fb-cell" title="' + escapeHTML(tip) + '">' +
+    badge + '<span class="fb-text">' + escapeHTML(comment) + '</span></td>';
+}
+
 function cellHTML(c, r) {
+  if (c.key === 'feedback') return feedbackCellHTML(r);
   const val = r[c.key] !== undefined && r[c.key] !== null ? r[c.key] : '';
   const safeVal = escapeHTML(val);
   const pillClass = pillFor(c.key, val);

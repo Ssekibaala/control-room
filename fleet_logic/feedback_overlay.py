@@ -35,7 +35,12 @@ def _apply_to_row(row, entry):
     action_entry = entry.get("latestAction")
 
     if fb:
-        row["feedback"] = f'{fb["status"]}: {fb["comment"]}'
+        # Status and comment are separate fields - see control_room.py's
+        # _integrity_row(). The dashboard badges the status so the
+        # client's words get the full width of the cell.
+        row["feedback"] = fb["comment"]
+        row["feedbackStatus"] = fb["status"]
+        row["requiresFollowup"] = fb.get("requiresFollowup")
         row["reportedBy"] = fb.get("addedBy", "")
         row["feedbackDate"] = _fmt_date(fb.get("date"))
 

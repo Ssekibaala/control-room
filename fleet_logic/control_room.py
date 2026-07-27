@@ -55,7 +55,14 @@ def _integrity_row(plate, info):
         "camSeen": per_platform_seen.get("CAM", "No data"),
         "border": "Yes" if info["border_flag"] else "No",
         "borderDetail": f"{border[0]} ({border[1]}) {border[2]}km" if border else "",
-        "feedback": f'{fb["status"]}: {fb["comment"]}' if fb else "",
+        # Status and comment stay SEPARATE fields. Concatenating them
+        # ("Follow-up Requested: asset is...") meant a fixed prefix ate
+        # the front of every cell and the truncation landed on the
+        # client's actual words - the only part carrying information.
+        # The dashboard renders the status as a compact badge instead.
+        "feedback": fb["comment"] if fb else "",
+        "feedbackStatus": fb["status"] if fb else "",
+        "requiresFollowup": fb.get("requiresFollowup") if fb else None,
         "reportedBy": fb.get("addedBy", "") if fb else "",
         "feedbackDate": fb["date"].strftime("%d %b %Y, %H:%M") if fb and fb.get("date") else "",
         "action": info["action"], "reasons": "; ".join(info["reasons"]),
