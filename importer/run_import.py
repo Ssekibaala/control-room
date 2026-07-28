@@ -180,6 +180,13 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
 
     data = _build_data(results, settings, tampering, [], [], now, False, integrity_path, tamper_path)
     data["_skipped_plates"] = sorted(set(skipped))
+    # Stashed so run_import() can react to Offline->Online transitions
+    # (see notifications.check_reconnections) without this function - kept
+    # deliberately network-free per its own docstring - doing any Sheets
+    # reads or sending mail itself. Popped back out before the dashboard
+    # JSON is written; it's classify_fleet()'s raw internal shape, not
+    # something the frontend has any use for.
+    data["_classification"] = results
     return data
 
 
@@ -276,6 +283,7 @@ def run_import(username=None, password=None, force=False):
         feedback_rows = {}
 
     data = process_reports(paths, feedback_rows=feedback_rows)
+    classification = data.pop("_classification", {})
 
     # meta.generated reflects the latest timestamp found IN the report
     # data itself, which naturally lags real time (assets report
@@ -289,4 +297,54 @@ def run_import(username=None, password=None, force=False):
     with open(os.path.join(DATA_DIR, "fleet_today.json"), "w") as f:
         json.dump(data, f, default=str)
 
+    # Best-effort and last: the dashboard's own data is already safely
+    # written above regardless of anything below. A vehicle whose status
+    # just flipped Offline->Online, with an unanswered follow-up still on
+    # file, gets asked (not told) whether that resolves it - see
+    # notifications.check_reconnections for why this is a question, not
+    # an automatic close.
+    base_url = _public_base_url()
+    try:
+        import notifications
+        prompted = notifications.check_reconnections(classification, base_url=base_url)
+        if prompted:
+            print(f"Reconnect-check sent for: {', '.join(prompted)}")
+    except Exception as e:
+        print(f"Reconnect-check pass failed: {e}")
+
+    # Weekly (configurable) rollups - snapshots of current state, not
+    # tied to this cycle's transitions, so they're independent of
+    # check_reconnections above and of each other.
+    try:
+        digest_settings = load_settings(os.path.join(DATA_DIR, "settings.ini"))
+        import notifications
+        pending_result = notifications.send_pending_confirmation_digest(
+            classification, base_url,
+            digest_settings["PENDING_DIGEST_INTERVAL_DAYS"],
+            digest_settings["PENDING_CONFIRMATION_OVERDUE_DAYS"])
+        if pending_result["sent"]:
+            print(f"Pending-confirmation digest sent for {pending_result['count']} vehicle(s)")
+        escalation_result = notifications.send_technical_escalation_digest(
+            classification, base_url, digest_settings["ESCALATION_DIGEST_INTERVAL_DAYS"])
+        if escalation_result["sent"]:
+            print(f"Technical-escalation digest sent for {escalation_result['count']} vehicle(s)")
+    except Exception as e:
+        print(f"Digest pass failed: {e}")
+
     return {"status": "ok", "generated": data["meta"]["generated"]}
+
+
+def _public_base_url():
+    """
+    Same purpose as app.py's public_base_url(), deliberately reimplemented
+    rather than imported: this module runs standalone (its own load_dotenv
+    call, no Flask app object) as often as it runs inside a request, and
+    the /api/refresh-if-stale trigger specifically calls it from a
+    background thread with no active Flask request context at all -
+    touching flask.request there would raise, not just return the wrong
+    value. Render injects RENDER_EXTERNAL_URL automatically, so production
+    needs no extra configuration; local runs without PUBLIC_BASE_URL set
+    just won't get working respond links in the reconnect-check email,
+    same tradeoff every other local-dev email test in this codebase makes.
+    """
+    return (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")

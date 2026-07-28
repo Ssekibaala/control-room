@@ -62,12 +62,23 @@ def infer_status(comment: str, requires_followup=None) -> str:
     return "Noted"
 
 
+_client_cache = {"client": None, "sheet_id": None}
+
+
 def _get_client():
     """
-    Deliberately imported here, not at module load time, so the rest
-    of the app works fine (and test_permissions.py etc keep passing)
-    even before gspread and credentials are set up.
+    Authorizing is a full OAuth2 handshake (parse the service account
+    key, exchange it for a bearer token) - real network latency that
+    was previously paid on EVERY call into this module, on top of the
+    Sheets API calls themselves. gspread's AuthorizedSession refreshes
+    its own token internally once it's near expiry, so reusing the same
+    client for this worker process's lifetime is exactly what the
+    library is designed for; the only thing being skipped on repeat
+    calls is redundant re-authorization, not staleness protection.
     """
+    if _client_cache["client"] is not None:
+        return _client_cache["client"], _client_cache["sheet_id"]
+
     try:
         import gspread
         from google.oauth2.service_account import Credentials
@@ -89,23 +100,48 @@ def _get_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(json.loads(raw_creds), scopes=scopes)
     client = gspread.authorize(creds)
+    _client_cache["client"], _client_cache["sheet_id"] = client, sheet_id
     return client, sheet_id
 
 
+_spreadsheet_cache = {}
+_verified_headers = set()
+
+
+def _open_spreadsheet(client, sheet_id):
+    """Same reasoning as _get_client(): open_by_key() is a real Sheets
+    API round trip fetching the whole spreadsheet's metadata (including
+    every tab), and nothing about that metadata changes between one
+    request and the next within a worker's lifetime. Cached per
+    sheet_id rather than unconditionally, since a single process could
+    in principle talk to more than one spreadsheet."""
+    if sheet_id not in _spreadsheet_cache:
+        _spreadsheet_cache[sheet_id] = client.open_by_key(sheet_id)
+    return _spreadsheet_cache[sheet_id]
+
+
 def _get_or_create_feedback_tab(client, sheet_id):
-    sh = client.open_by_key(sheet_id)
+    sh = _open_spreadsheet(client, sheet_id)
     try:
         ws = sh.worksheet("Feedback")
     except Exception:
         ws = sh.add_worksheet(title="Feedback", rows=1000, cols=len(FEEDBACK_HEADERS))
         ws.append_row(FEEDBACK_HEADERS)
+        _verified_headers.add("Feedback")
         return ws
     # Migrate an older header (from before RequiresFollowup/Role existed)
     # to the current schema. Only ever touches row 1 - existing data rows
     # are never rewritten, older rows just read back with those two
     # fields blank (_parse_bool below treats that as "not specified").
-    if ws.row_values(1) != FEEDBACK_HEADERS:
-        ws.update("A1", [FEEDBACK_HEADERS])
+    # Checked once per worker process, not on every single append - the
+    # header row isn't going to change mid-process, and row_values(1) is
+    # its own Sheets API round trip that was doubling the latency of
+    # every comment submit for a check that, in practice, only ever
+    # matters once, right after a deploy that changes FEEDBACK_HEADERS.
+    if "Feedback" not in _verified_headers:
+        if ws.row_values(1) != FEEDBACK_HEADERS:
+            ws.update("A1", [FEEDBACK_HEADERS])
+        _verified_headers.add("Feedback")
     return ws
 
 
@@ -117,7 +153,7 @@ USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "Cre
 
 
 def _get_or_create_users_tab(client, sheet_id):
-    sh = client.open_by_key(sheet_id)
+    sh = _open_spreadsheet(client, sheet_id)
     try:
         ws = sh.worksheet("Users")
     except Exception:
@@ -418,7 +454,7 @@ THREAD_HEADERS = ["Plate", "CaseId", "Subject", "RootMessageId", "ReferencesChai
 
 
 def _get_or_create_threads_tab(client, sheet_id):
-    sh = client.open_by_key(sheet_id)
+    sh = _open_spreadsheet(client, sheet_id)
     try:
         ws = sh.worksheet("EmailThreads")
     except Exception:
@@ -434,9 +470,13 @@ def get_or_create_open_case(plate):
     """
     Returns the currently open case for this plate, creating one if none
     is open (either it's a brand new plate, or the last case was closed).
-    Shape: {plate, caseId, subject, rootMessageId, references (list), row}.
-    `row` is the 1-indexed sheet row, so callers can update it without a
-    second lookup.
+    Shape: {plate, caseId, subject, rootMessageId, references (list), row,
+    reopened, previousClosedAt}. `row` is the 1-indexed sheet row, so
+    callers can update it without a second lookup. `reopened` is True
+    only when this plate already has case history and every prior case
+    is closed - i.e. this comment is what's bringing it back, not the
+    plate's first-ever case - so notifications.py can call that out in
+    the email instead of presenting it as a routine update.
     """
     client, sheet_id = _get_client()
     ws = _get_or_create_threads_tab(client, sheet_id)
@@ -448,15 +488,25 @@ def get_or_create_open_case(plate):
         i, r = open_row
         refs = [m.strip() for m in str(r.get("ReferencesChain", "")).split(" ") if m.strip()]
         return {"plate": plate, "caseId": int(r["CaseId"]), "subject": r["Subject"],
-                "rootMessageId": r.get("RootMessageId", ""), "references": refs, "row": i}
+                "rootMessageId": r.get("RootMessageId", ""), "references": refs, "row": i,
+                "reopened": False, "previousClosedAt": None}
 
     next_case_id = max((int(r["CaseId"]) for _, r in plate_rows), default=0) + 1
     subject = f"{plate} — GTL case {next_case_id}"
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
     ws.append_row([plate, next_case_id, subject, "", "", "open", now, ""])
     new_row = len(ws.get_all_values())
+    # plate_rows is non-empty here (every row in it is closed, or there'd
+    # have been an open_row above) - the most recently closed one is what
+    # "reopened" refers to. LastSentAt on that row is when its closing
+    # outcome email went out, close_case() runs right after that send
+    # succeeds, so it's a faithful stand-in for a "ClosedAt" the sheet
+    # doesn't otherwise track.
+    last_closed = max(plate_rows, key=lambda ir: int(ir[1].get("CaseId", 0)), default=None)
+    previous_closed_at = last_closed[1].get("LastSentAt") or last_closed[1].get("CreatedAt") if last_closed else None
     return {"plate": plate, "caseId": next_case_id, "subject": subject,
-            "rootMessageId": "", "references": [], "row": new_row}
+            "rootMessageId": "", "references": [], "row": new_row,
+            "reopened": bool(plate_rows), "previousClosedAt": previous_closed_at or None}
 
 
 def record_sent_message(plate, case, message_id):
@@ -500,7 +550,7 @@ CLIENT_HEADERS = ["Name", "ContactEmails", "CreatedAt"]
 
 
 def _get_or_create_clients_tab(client, sheet_id):
-    sh = client.open_by_key(sheet_id)
+    sh = _open_spreadsheet(client, sheet_id)
     try:
         ws = sh.worksheet("Clients")
     except Exception:
@@ -557,4 +607,107 @@ def delete_client(name):
         return False
     ws.delete_rows(cell.row)
     return True
-    return False
+
+
+# ---- Vehicle status memory ----------------------------------------------
+# classify_fleet() recomputes Online/Offline fresh every import with zero
+# memory of the previous run - correct for "what's the status right now",
+# but it means nothing in the app can ever answer "did this vehicle just
+# COME BACK online" without something remembering what it was last time.
+# This tab is that memory: one row per plate, overwritten wholesale every
+# import (see notifications.check_reconnections), not appended - only the
+# latest status matters, there's no history value in keeping old rows.
+VEHICLE_STATUS_HEADERS = ["Plate", "Status", "UpdatedAt"]
+
+
+def _get_or_create_vehicle_status_tab(client, sheet_id):
+    sh = _open_spreadsheet(client, sheet_id)
+    try:
+        ws = sh.worksheet("VehicleStatus")
+    except Exception:
+        ws = sh.add_worksheet(title="VehicleStatus", rows=500, cols=len(VEHICLE_STATUS_HEADERS))
+        ws.append_row(VEHICLE_STATUS_HEADERS)
+        return ws
+    if ws.row_values(1) != VEHICLE_STATUS_HEADERS:
+        ws.update("A1", [VEHICLE_STATUS_HEADERS])
+    return ws
+
+
+def load_vehicle_status():
+    """{plate: "Online"/"Offline"} as of the last time this was saved -
+    i.e. the previous import cycle, not the current one being computed
+    right now. Missing entirely for a plate that's brand new."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_vehicle_status_tab(client, sheet_id)
+    out = {}
+    for row in ws.get_all_records():
+        plate = str(row.get("Plate", "")).strip()
+        if plate:
+            out[plate] = str(row.get("Status", "")).strip()
+    return out
+
+
+def save_vehicle_status(status_by_plate):
+    """Overwrites the whole tab with this cycle's status for every plate
+    - deliberately a full replace, not a per-row patch, since every
+    plate's status is recomputed every import anyway and a stale row for
+    a plate that's since left the fleet is just clutter, never a value
+    worth preserving."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_vehicle_status_tab(client, sheet_id)
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    rows = [[plate, status, now] for plate, status in sorted(status_by_plate.items())]
+    ws.clear()
+    ws.append_row(VEHICLE_STATUS_HEADERS)
+    if rows:
+        ws.append_rows(rows)
+
+
+# ---- Digest state ---------------------------------------------------
+# The two rollup emails (Pending Customer Confirmation -> clients,
+# Technical Escalation -> staff) fire on a configurable interval, not on
+# every import - this is the only place that "when did each one last
+# go out" is remembered, so it survives Render redeploys same as
+# everything else that has to.
+DIGEST_STATE_HEADERS = ["DigestKey", "LastSentAt"]
+
+
+def _get_or_create_digest_state_tab(client, sheet_id):
+    sh = _open_spreadsheet(client, sheet_id)
+    try:
+        ws = sh.worksheet("DigestState")
+    except Exception:
+        ws = sh.add_worksheet(title="DigestState", rows=20, cols=len(DIGEST_STATE_HEADERS))
+        ws.append_row(DIGEST_STATE_HEADERS)
+        return ws
+    if ws.row_values(1) != DIGEST_STATE_HEADERS:
+        ws.update("A1", [DIGEST_STATE_HEADERS])
+    return ws
+
+
+def get_digest_last_sent(digest_key):
+    """Returns the datetime it last went out, or None if it never has."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_digest_state_tab(client, sheet_id)
+    for row in ws.get_all_records():
+        if str(row.get("DigestKey", "")).strip() == digest_key:
+            raw = str(row.get("LastSentAt", "")).strip()
+            if not raw:
+                return None
+            try:
+                return datetime.strptime(raw, "%d/%m/%Y %H:%M")
+            except ValueError:
+                return None
+    return None
+
+
+def set_digest_last_sent(digest_key, when=None):
+    when = when or datetime.now()
+    client, sheet_id = _get_client()
+    ws = _get_or_create_digest_state_tab(client, sheet_id)
+    stamp = when.strftime("%d/%m/%Y %H:%M")
+    for i, row in enumerate(ws.get_all_records(), start=2):
+        if str(row.get("DigestKey", "")).strip() == digest_key:
+            ws.update_cell(i, DIGEST_STATE_HEADERS.index("LastSentAt") + 1, stamp)
+            return
+    ws.append_row([digest_key, stamp])

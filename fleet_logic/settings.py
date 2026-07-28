@@ -19,6 +19,16 @@ DEFAULTS = {
     "filters": {
         "ignore_demo_vehicles": "true",      # drop TMS demo / test-site rows
     },
+    "digests": {
+        # Weekly rollup emails, not per-vehicle transition emails - one
+        # message listing every currently-pending/escalated vehicle,
+        # sent no more often than this many days apart. Escalation
+        # itself stays purely days-based (see classifier.py); these are
+        # an additive notification layer, not a gate on anything.
+        "pending_digest_interval_days": "7",     # client digest: vehicles in Pending Customer Confirmation
+        "escalation_digest_interval_days": "7",  # staff digest: vehicles in Technical Escalation
+        "pending_confirmation_overdue_days": "2",  # visual "overdue" flag inside the client digest only
+    },
 }
 
 
@@ -45,5 +55,8 @@ def load_settings(path="settings.ini"):
         "HIGH_PRIORITY_DAYS": config.getint("thresholds", "high_priority_days"),
         "BORDER_RADIUS_KM": config.getfloat("thresholds", "border_radius_km"),
         "IGNORE_DEMO_VEHICLES": config.getboolean("filters", "ignore_demo_vehicles"),
+        "PENDING_DIGEST_INTERVAL_DAYS": config.getfloat("digests", "pending_digest_interval_days"),
+        "ESCALATION_DIGEST_INTERVAL_DAYS": config.getfloat("digests", "escalation_digest_interval_days"),
+        "PENDING_CONFIRMATION_OVERDUE_DAYS": config.getfloat("digests", "pending_confirmation_overdue_days"),
         "_path": os.path.abspath(path),
     }

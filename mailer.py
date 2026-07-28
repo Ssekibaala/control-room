@@ -20,6 +20,11 @@ from email.utils import make_msgid
 
 SMTP_HOST = "mail.teletracfleets.com"
 SMTP_PORT = 587
+# Fallback for networks that block outbound 587 (common on residential/
+# office connections that block anti-spam-prone SMTP ports) but allow
+# implicit-TLS submission - same mailbox, same credentials, just a
+# different port/handshake. Confirmed reachable where 587 timed out.
+SMTP_SSL_PORT = 465
 
 
 def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, references=None):
@@ -59,8 +64,21 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     msg.add_alternative(preheader_html + html_body, subtype="html")
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
             smtp.starttls()
+            smtp.login(address, password)
+            smtp.send_message(msg)
+        return msg["Message-ID"], None
+    except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected):
+        # Port 587 itself was unreachable (blocked/filtered), not a mailbox
+        # or content problem - worth one retry over 465 before giving up,
+        # since that's a network-level failure, not an authoritative "no".
+        pass
+    except Exception as e:
+        return None, str(e)
+
+    try:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_SSL_PORT, timeout=20) as smtp:
             smtp.login(address, password)
             smtp.send_message(msg)
         return msg["Message-ID"], None

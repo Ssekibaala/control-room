@@ -95,7 +95,15 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
     for plate, reports in reports_by_plate.items():
         platform_status, latest_per_platform = _platform_status(reports, now, threshold_days)
         platforms = sorted(platform_status.keys())
-        offline_platforms = [p for p, (s, _) in platform_status.items() if s == "Offline"]
+        # "No Data" (a report row exists for this platform, but with no
+        # usable timestamp inside it) counted as neither Offline nor
+        # Online meant a persistently malformed report on ONE platform
+        # could block all_offline forever, however dead the other
+        # platforms were - a vehicle stuck in Pending Customer
+        # Confirmation permanently, never reaching Technical Escalation.
+        # No timestamp is at least as concerning as a known-stale one,
+        # never a reason to treat the platform as healthier.
+        offline_platforms = [p for p, (s, _) in platform_status.items() if s in ("Offline", "No Data")]
         any_offline = len(offline_platforms) > 0
         all_offline = len(offline_platforms) == len(platforms)
 

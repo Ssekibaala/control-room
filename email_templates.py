@@ -10,12 +10,17 @@ Colours are the app's own tokens (see templates/dashboard.html's
 properties.
 """
 
+import base64
+import functools
 import html
+import os
 
-PRIMARY = "#2E8CFF"
-PRIMARY_2 = "#7B61FF"
+PRIMARY = "#0E5C43"
+PRIMARY_2 = "#1FAF7B"
 SUCCESS = "#2EE6A6"
 WARNING = "#FFB020"
+INFO = "#4FC3FF"
+DANGER = "#FF5C7A"
 INK = "#12131A"
 MUTED = "#6B7280"
 BORDER = "#E5E7EB"
@@ -23,20 +28,43 @@ BG = "#F4F5F7"
 
 _esc = html.escape
 
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "static", "Teletrac_Fleet_Solutions_logo.png")
+# History that can pile up over a vehicle's lifetime; capped so one very
+# old, very chatty plate can't turn its email into a multi-megabyte page.
+# Not a silent cap - the "+N earlier" line below says exactly what's cut.
+MAX_HISTORY_ROWS = 25
 
-def _shell(inner_html, logo_url=""):
+
+@functools.lru_cache(maxsize=1)
+def _embedded_logo_src():
+    """
+    The logo as a data: URI, embedded directly in the email rather than
+    linked to /static/... on the live app. A linked image depends on the
+    app being reachable *at the moment the mail client renders it* - on
+    a phone, that's whenever the recipient happens to open the message,
+    possibly while the Render service is asleep/cold-starting, which is
+    exactly what was showing up as a broken-image icon. A data URI has
+    no such dependency: the bytes travel inside the email itself.
+    """
+    try:
+        with open(_LOGO_PATH, "rb") as f:
+            return "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
+
+
+def _shell(inner_html):
     # The Teletrac mark sits on its own white plate inside the gradient
     # header, same reasoning as the dashboard sidebar: it's a third-party
     # brand with its own colours, not something to recolour to the app's
     # theme, and it needs real contrast to read at a glance in an inbox.
-    # logo_url must be an absolute URL - an email has no page origin to
-    # resolve a relative /static/... path against.
+    logo_src = _embedded_logo_src()
     logo_html = (
         f'<table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;'
-        f'border-radius:8px;padding:6px 10px;display:inline-block;"><tr><td>'
-        f'<img src="{logo_url}" alt="Teletrac Fleet Solutions" height="22" '
-        f'style="display:block;height:22px;width:auto;border:0;"></td></tr></table>'
-        if logo_url else
+        f'border-radius:10px;padding:8px 14px;display:inline-block;"><tr><td>'
+        f'<img src="{logo_src}" alt="Teletrac Fleet Solutions" height="34" '
+        f'style="display:block;height:34px;width:auto;border:0;"></td></tr></table>'
+        if logo_src else
         '<span style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.4px;">TELETRAC</span>'
     )
     return f"""
@@ -83,26 +111,122 @@ def _button(label, url, color):
             f'font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">{_esc(label)}</a>')
 
 
+def _reopened_banner(reopened, previous_closed_at):
+    """Called out explicitly rather than left for the reader to notice
+    buried in the history below - a case that was already marked
+    resolved coming back is a different situation than a routine
+    update, and the email should say so up front."""
+    if not reopened:
+        return ""
+    when = f" on {_esc(previous_closed_at)}" if previous_closed_at else ""
+    return f"""
+      <tr><td style="padding:0 28px 14px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{INFO}1F;border:1px solid {INFO}66;border-radius:10px;padding:12px 14px;">
+          <tr><td style="font-size:12.5px;color:{INK};line-height:1.5;">
+            <span style="font-size:14px;">&#128260;</span>&nbsp;<b>Reopened</b> &mdash; this vehicle was previously
+            marked resolved{when}, and a new comment has just brought it back.
+          </td></tr>
+        </table>
+      </td></tr>
+    """
+
+
+def _history_row(e):
+    badge = ""
+    if e.get("requiresFollowup") is False:
+        badge = "&nbsp;" + _badge("No follow-up", SUCCESS)
+    elif e.get("requiresFollowup") is True:
+        badge = "&nbsp;" + _badge("Follow-up", WARNING)
+    return (
+        f'<tr><td style="padding:8px 0;border-top:1px solid {BORDER};">'
+        f'<span style="font-size:12px;color:{INK};">{_esc(e["comment"])}</span>{badge}<br>'
+        f'<span style="font-size:10.5px;color:{MUTED};">{_esc(e["addedBy"])} &middot; {_esc(e["date"])}</span>'
+        f'</td></tr>'
+    )
+
+
+def _history_block(entries, title="Comment history"):
+    """Every prior comment on this vehicle, not just the last couple -
+    capped at MAX_HISTORY_ROWS with an explicit "+N earlier" line rather
+    than silently trimming, so a long-lived plate's email stays a
+    reasonable size without hiding that anything was cut."""
+    if not entries:
+        return ""
+    shown = entries[:MAX_HISTORY_ROWS]
+    overflow = len(entries) - len(shown)
+    more = (
+        f'<tr><td style="padding:8px 0;border-top:1px solid {BORDER};">'
+        f'<span style="font-size:10.5px;color:{MUTED};">'
+        f'+{overflow} earlier comment{"s" if overflow != 1 else ""} not shown here &mdash; see the full trail in the dashboard.'
+        f'</span></td></tr>'
+        if overflow > 0 else ""
+    )
+    return (
+        f'<tr><td style="padding:0 28px 22px;">'
+        f'<span style="font-size:10.5px;color:{MUTED};text-transform:uppercase;letter-spacing:0.5px;">{_esc(title)}</span>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        f'{"".join(_history_row(e) for e in shown)}{more}</table></td></tr>'
+    )
+
+
+def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
+                                no_followup_url, needs_attention_url, recent_trail):
+    """
+    Sent when a vehicle that was offline reports back online while it
+    still has an unanswered follow-up request on file. Deliberately a
+    QUESTION, not a closure: the vehicle reconnecting doesn't prove the
+    reported problem is fixed (it might not even be about connectivity
+    at all - see notifications.check_reconnections), so this reuses the
+    exact same two-button respond flow a human update gets, rather than
+    auto-closing anything on the system's own authority.
+    """
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">{_esc(plate)}</span>
+        &nbsp;{_badge("Back online", INFO)}<br>
+        <span style="font-size:12px;color:{MUTED};">Automatic check &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 14px;">
+        <span style="font-size:13px;color:{INK};line-height:1.5;">
+          This vehicle was offline for {int(days_offline)} day{"s" if days_offline != 1 else ""} and has just
+          reported back in. It still has an open follow-up request on file:
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 14px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{BG};border-radius:10px;padding:16px;">
+          <tr><td style="font-size:14px;color:{INK};line-height:1.6;">{_esc(open_comment)}</td></tr>
+        </table>
+      </td></tr>
+      <tr><td style="padding:4px 28px 22px;">
+        <span style="font-size:11.5px;color:{MUTED};display:block;margin-bottom:12px;">
+          Now that it's back online, does this resolve it?
+        </span>
+        {_button("No follow-up needed", no_followup_url, SUCCESS)}
+        &nbsp;&nbsp;
+        {_button("Needs attention", needs_attention_url, WARNING)}
+      </td></tr>
+      {_history_block(recent_trail)}
+    """
+    preheader = f"{_esc(plate)} is back online - does this resolve the open follow-up?"
+    return _shell(inner), preheader
+
+
 def build_update_email(plate, comment, author, role, timestamp, no_followup_url, needs_attention_url,
-                       recent_trail, logo_url=""):
+                       recent_trail, reopened=False, previous_closed_at=None):
     """
     Sent to the client when a technician/admin adds a comment. Two large
     tap-target buttons, pre-selecting the answer they land on - nothing
     changes state until that page is submitted, so a mail scanner
     prefetching either link only loads a page, it can never act.
     """
-    trail_rows = "".join(
-        f'<tr><td style="padding:6px 0;border-top:1px solid {BORDER};">'
-        f'<span style="font-size:12px;color:{INK};">{_esc(e["comment"])}</span><br>'
-        f'<span style="font-size:10.5px;color:{MUTED};">{_esc(e["addedBy"])} &middot; {_esc(e["date"])}</span>'
-        f'</td></tr>'
-        for e in recent_trail[:3]
-    )
     inner = f"""
       <tr><td style="padding:26px 28px 8px;">
         <span style="font-size:19px;font-weight:800;color:{INK};">{_esc(plate)}</span><br>
         <span style="font-size:12px;color:{MUTED};">Update from {_esc(author)} ({_esc(role)}) &middot; {_esc(timestamp)}</span>
       </td></tr>
+      {_reopened_banner(reopened, previous_closed_at)}
       <tr><td style="padding:14px 28px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
           style="background:{BG};border-radius:10px;padding:16px;">
@@ -117,13 +241,14 @@ def build_update_email(plate, comment, author, role, timestamp, no_followup_url,
         &nbsp;&nbsp;
         {_button("Needs attention", needs_attention_url, WARNING)}
       </td></tr>
-      {"<tr><td style='padding:0 28px 22px;'><span style='font-size:10.5px;color:" + MUTED + ";text-transform:uppercase;letter-spacing:0.5px;'>Recent history</span><table role='presentation' width='100%' cellpadding='0' cellspacing='0'>" + trail_rows + "</table></td></tr>" if trail_rows else ""}
+      {_history_block(recent_trail)}
     """
     preheader = f"{comment[:110]}"
-    return _shell(inner, logo_url), preheader
+    return _shell(inner), preheader
 
 
-def build_outcome_email(plate, resolved_comment, author, requires_followup, timestamp, logo_url=""):
+def build_outcome_email(plate, resolved_comment, author, requires_followup, timestamp,
+                        recent_trail=None, reopened=False, previous_closed_at=None):
     """Sent to everyone in the thread once the client (or anyone) records
     an answer - states the real outcome, never a blanket 'closed' when
     follow-up was actually requested."""
@@ -139,6 +264,7 @@ def build_outcome_email(plate, resolved_comment, author, requires_followup, time
       <tr><td style="padding:0 28px 14px;">
         <span style="font-size:13px;color:{MUTED};">{_esc(headline)}</span>
       </td></tr>
+      {_reopened_banner(reopened, previous_closed_at)}
       <tr><td style="padding:0 28px 22px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
           style="background:{BG};border-radius:10px;padding:16px;">
@@ -146,6 +272,97 @@ def build_outcome_email(plate, resolved_comment, author, requires_followup, time
           <tr><td style="padding-top:8px;font-size:11px;color:{MUTED};">&mdash; {_esc(author)}, {_esc(timestamp)}</td></tr>
         </table>
       </td></tr>
+      {_history_block(recent_trail or [])}
     """
     preheader = headline
-    return _shell(inner, logo_url), preheader
+    return _shell(inner), preheader
+
+
+def _pending_digest_row(v):
+    """One vehicle's block inside the weekly client digest - its own
+    respond buttons, so answering doesn't require opening anything else.
+    `overdue` (from settings.PENDING_CONFIRMATION_OVERDUE_DAYS) is purely
+    a visual flag here - escalation itself stays days-based regardless
+    of whether this email was ever opened or answered."""
+    overdue = f"&nbsp;{_badge('Overdue', WARNING)}" if v.get("overdue") else ""
+    return f"""
+      <tr><td style="padding:16px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:15px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>{overdue}<br>
+        <span style="font-size:11.5px;color:{MUTED};">{_esc(v['detail'])}</span>
+        <div style="margin-top:10px;">
+          {_button("No follow-up needed", v['no_url'], SUCCESS)}
+          &nbsp;&nbsp;
+          {_button("Needs attention", v['need_url'], WARNING)}
+        </div>
+      </td></tr>
+    """
+
+
+def build_pending_confirmation_digest_email(vehicles, timestamp):
+    """
+    One weekly email to the client listing EVERY vehicle currently in
+    Pending Customer Confirmation (some, not all, platforms silent) -
+    not a per-vehicle transition alert. Each vehicle carries its own
+    signed respond links, so answering any of them works exactly like
+    the single-vehicle update email always has; nothing new for
+    /feedback/respond to handle. `vehicles` is a list of dicts:
+    {plate, detail, no_url, need_url, overdue}.
+    """
+    rows = "".join(_pending_digest_row(v) for v in vehicles)
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Vehicles awaiting your confirmation</span><br>
+        <span style="font-size:12px;color:{MUTED};">{len(vehicles)} vehicle(s) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 4px;">
+        <span style="font-size:13px;color:{INK};line-height:1.5;">
+          These vehicles have one or more tracking platforms not reporting. For each one below, let us know
+          whether it needs follow-up from our side.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>
+      </td></tr>
+    """
+    preheader = f"{len(vehicles)} vehicle(s) awaiting your confirmation"
+    return _shell(inner), preheader
+
+
+def _escalation_digest_row(v):
+    return f"""
+      <tr><td style="padding:14px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:15px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>
+        &nbsp;{_badge(v['severity'], DANGER)}<br>
+        <span style="font-size:11.5px;color:{MUTED};">{_esc(v['detail'])}</span>
+        {f'<div style="margin-top:8px;"><a href="{v["dashboard_url"]}" target="_blank" style="font-size:12px;color:{PRIMARY};font-weight:700;text-decoration:none;">Open in dashboard &rarr;</a></div>' if v.get('dashboard_url') else ''}
+      </td></tr>
+    """
+
+
+def build_technical_escalation_digest_email(vehicles, timestamp):
+    """
+    One weekly email to staff (admin/technician) listing every vehicle
+    currently in Technical Escalation (all platforms silent past the
+    offline threshold). Purely informational - staff already have full
+    dashboard access, so this links back to each vehicle rather than
+    offering a response-token flow like the client digest does.
+    `vehicles` is a list of dicts: {plate, detail, severity, dashboard_url}.
+    """
+    rows = "".join(_escalation_digest_row(v) for v in vehicles)
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Vehicles in Technical Escalation</span><br>
+        <span style="font-size:12px;color:{MUTED};">{len(vehicles)} vehicle(s) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 4px;">
+        <span style="font-size:13px;color:{INK};line-height:1.5;">
+          Every tracking platform has gone silent on these vehicles past the offline threshold. Needs field
+          action.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>
+      </td></tr>
+    """
+    preheader = f"{len(vehicles)} vehicle(s) in Technical Escalation"
+    return _shell(inner), preheader

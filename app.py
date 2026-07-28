@@ -25,7 +25,6 @@ import threading
 import functools
 from datetime import datetime
 from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from dotenv import load_dotenv
 load_dotenv()  # loads .env for local dev; no-op on Render, which injects real env vars directly
@@ -37,24 +36,12 @@ from permissions import (
     filter_payload_for_role, allowed_panels, EXPORT_ACCESS,
     MANAGE_USERS_ROLES, ROLES, PANEL_LABELS, LockoutError,
 )
+from respond_tokens import make_respond_token, read_respond_token
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
-
-# Signs the plate+action pair carried by an email's response buttons.
-# Deliberately separate serializer/salt from the session cookie, so a
-# link token and a session cookie can never be confused for each other
-# even though both derive from the same app secret.
-RESPOND_TOKEN_MAX_AGE = 60 * 60 * 24 * 30  # 30 days - long enough that an
-# aging notification is still answerable, short enough that a years-old
-# forwarded email eventually stops working.
-_respond_serializer = URLSafeTimedSerializer(app.secret_key, salt="feedback-respond-v1")
-
-
-def make_respond_token(plate, action):
-    return _respond_serializer.dumps({"plate": plate, "action": action})
 
 
 def public_base_url():
@@ -76,16 +63,27 @@ def public_base_url():
     return request.url_root.rstrip("/")
 
 
-def read_respond_token(token):
-    """Returns (payload, error_message). error_message is None on success,
-    a human-readable reason otherwise - shown directly on the confirm page
-    rather than a raw exception."""
-    try:
-        return _respond_serializer.loads(token, max_age=RESPOND_TOKEN_MAX_AGE), None
-    except SignatureExpired:
-        return None, "This link has expired. Please ask for a fresh update, or reply to the email directly."
-    except BadSignature:
-        return None, "This link isn't valid. Please use the button from the original email."
+def _notify_async(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
+    """
+    Fires notifications.on_comment_added() on a background thread. The
+    Sheets write it follows is already durable by the time this runs -
+    email is a courtesy the requester was never waiting on, so a slow or
+    blocked SMTP host (see mailer.py's port 587->465 fallback, which by
+    itself can take several seconds) must not hold the HTTP response
+    open. Errors are only logged here; there is no request left to
+    report them to.
+    """
+    def _run():
+        try:
+            import notifications
+            result = notifications.on_comment_added(
+                plate, comment, added_by, role, entry_type, requires_followup, respond_urls)
+            if not result["sent"]:
+                print(f"Notification email not sent for {plate}: {result['reason']}")
+        except Exception as e:
+            print(f"Notification email failed for {plate}: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "fleet_today.json")
 
@@ -468,25 +466,22 @@ def api_feedback():
         return jsonify({"error": f"Could not save to Google Sheets right now: {e}"}), 503
 
     # The comment is already safely saved above - everything from here is
-    # best-effort. A mail outage must never turn a successful save into an
-    # error response, so failures are logged, not raised.
-    try:
-        import notifications
-        base_url = public_base_url()
-        respond_urls = None
-        if role in ("admin", "technician"):
-            respond_urls = {
-                "no_followup": base_url + url_for("respond_page",
-                    token=make_respond_token(plate, "no_followup")),
-                "needs_attention": base_url + url_for("respond_page",
-                    token=make_respond_token(plate, "needs_attention")),
-            }
-        result = notifications.on_comment_added(
-            plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls, base_url)
-        if not result["sent"]:
-            print(f"Notification email not sent for {plate}: {result['reason']}")
-    except Exception as e:
-        print(f"Notification email failed for {plate}: {e}")
+    # best-effort AND off the request thread. SMTP itself can take several
+    # seconds (a blocked port timing out before mailer.py's fallback picks
+    # up, or just a slow mail host), and there is nothing in that send the
+    # browser needs before it can show "Saved" - the sheet write already
+    # succeeded. Blocking the response on it turned every submit into a
+    # multi-second wait for something the user was never looking at.
+    base_url = public_base_url()
+    respond_urls = None
+    if role in ("admin", "technician"):
+        respond_urls = {
+            "no_followup": base_url + url_for("respond_page",
+                token=make_respond_token(plate, "no_followup")),
+            "needs_attention": base_url + url_for("respond_page",
+                token=make_respond_token(plate, "needs_attention")),
+        }
+    _notify_async(plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls)
 
     return jsonify({"ok": True, "plate": plate, "status": status})
 
@@ -555,13 +550,7 @@ def respond_submit():
     except Exception as e:
         return jsonify({"error": f"Could not save your response right now: {e}"}), 503
 
-    try:
-        import notifications
-        notifications.on_comment_added(
-            plate, comment, name, "client", "feedback", requires_followup,
-            base_url=public_base_url())
-    except Exception as e:
-        print(f"Outcome email failed for {plate}: {e}")
+    _notify_async(plate, comment, name, "client", "feedback", requires_followup, None)
 
     return jsonify({"ok": True, "plate": plate})
 
@@ -574,10 +563,18 @@ def api_feedback_history(plate):
     Feedback" column on every table can't show (just the latest). Any
     logged-in role can read this: it's the same feedback the client
     themselves can already submit, not privileged data.
+
+    Uses the cached read (same as /api/dashboard-data's overlay) rather
+    than a fresh Sheets API call - the drill-down modal was paying a
+    full ~1-4s Google Sheets round trip on every open, when the same
+    30s-TTL cache everything else already relies on is fresh enough
+    here too. A submit on this exact plate still lands instantly for
+    the submitter: add_feedback() patches this worker's cache in place
+    before this ever runs (see sheets_store._patch_cache_with).
     """
     try:
         import sheets_store
-        all_feedback = sheets_store.load_feedback()
+        all_feedback = sheets_store.load_feedback_cached()
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:

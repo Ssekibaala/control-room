@@ -809,6 +809,42 @@
     .panel { display:block !important; page-break-before:always; }
     body { background:white; color:black; background-image:none; }
   }
+
+  /* ---- Live new-comment toast ---- */
+  #toast-stack {
+    position:fixed; top:76px; right:20px; z-index:9999;
+    display:flex; flex-direction:column; gap:10px;
+    width:min(340px, calc(100vw - 32px)); pointer-events:none;
+  }
+  .comment-toast {
+    pointer-events:auto;
+    display:flex; gap:12px; align-items:flex-start;
+    background:var(--card-bg-2); border:1px solid var(--border);
+    border-left:3px solid var(--primary);
+    border-radius:var(--radius-md);
+    box-shadow:0 12px 32px rgba(0,0,0,0.35);
+    padding:12px 14px; backdrop-filter:var(--blur);
+    opacity:0; transform:translateX(24px) scale(0.98);
+    transition:opacity .28s ease, transform .28s cubic-bezier(.2,.8,.2,1);
+  }
+  .comment-toast.show { opacity:1; transform:translateX(0) scale(1); }
+  .comment-toast-icon {
+    flex:0 0 auto; width:30px; height:30px; border-radius:50%;
+    background:var(--primary-surface); display:flex; align-items:center; justify-content:center;
+    font-size:14px;
+  }
+  .comment-toast-body { flex:1 1 auto; min-width:0; }
+  .comment-toast-title { font-size:13px; font-weight:700; color:var(--text-primary); }
+  .comment-toast-meta { font-size:11px; color:var(--text-tertiary); margin-top:1px; }
+  .comment-toast-text {
+    font-size:12.5px; color:var(--text-secondary); margin-top:6px; line-height:1.4;
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+  }
+  .comment-toast-close {
+    flex:0 0 auto; background:none; border:none; color:var(--text-tertiary);
+    font-size:16px; line-height:1; cursor:pointer; padding:0 2px;
+  }
+  .comment-toast-close:hover { color:var(--text-primary); }
 </style>
 </head>
 <body>
@@ -1639,6 +1675,22 @@ async function boot() {
       if (firstAllowed) firstAllowed.click();
     }
 
+    // Deep link from an email (e.g. the Technical Escalation digest's
+    // "Open in dashboard" links, see email_templates.build_technical_
+    // escalation_digest_email) - jump to Full Data and reuse the
+    // existing search box's own filter rather than adding a second way
+    // to land on one vehicle.
+    const deepLinkPlate = new URLSearchParams(window.location.search).get('plate');
+    if (deepLinkPlate) {
+      const fullDataNav = document.querySelector('[data-panel="p-full"]');
+      if (fullDataNav) fullDataNav.click();
+      const searchBox = document.getElementById('global-search');
+      if (searchBox) {
+        searchBox.value = deepLinkPlate;
+        searchBox.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+
     if (loadingEl) loadingEl.style.display = 'none';
   } catch (err) {
     if (loadingEl) loadingEl.style.display = 'none';
@@ -1656,6 +1708,127 @@ if (logoutBtn) {
     window.location.href = '/login';
   });
 }
+
+// ---- Live new-comment notification (popup + chime) ----
+// Independent of renderEverything()/fetchActivityFeed() so it survives
+// re-renders untouched and only sets up its poll timer once. There is
+// no push channel from the server (no websocket/SSE), so this just
+// polls the same read-only activity feed everything else already uses
+// and diffs against the newest entry it last saw.
+let _audioCtx = null;
+function _getAudioCtx() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!_audioCtx) _audioCtx = new AC();
+  if (_audioCtx.state === 'suspended') _audioCtx.resume().catch(() => {});
+  return _audioCtx;
+}
+// Browsers block audio before a user gesture - this unlocks the
+// AudioContext on the very first click/keypress/tap anywhere on the page.
+['click', 'keydown', 'touchstart'].forEach(evt =>
+  document.addEventListener(evt, () => _getAudioCtx(), { once: true, passive: true }));
+
+function playCommentChime() {
+  const ctx = _getAudioCtx();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  // Two-tone descending chime, similar in spirit to an in-flight cabin
+  // announcement tone (E6 then B5).
+  [{ freq: 1318.51, start: 0 }, { freq: 987.77, start: 0.30 }].forEach(n => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = n.freq;
+    gain.gain.setValueAtTime(0, now + n.start);
+    gain.gain.linearRampToValueAtTime(0.22, now + n.start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + n.start + 0.65);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + n.start);
+    osc.stop(now + n.start + 0.7);
+  });
+}
+
+function _commentToastStack() {
+  let stack = document.getElementById('toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  return stack;
+}
+
+function showCommentToast(entry) {
+  const stack = _commentToastStack();
+  const el = document.createElement('div');
+  el.className = 'comment-toast';
+  const typeLabel = entry.entryType === 'action' ? 'Recommended Action' : 'Customer Feedback';
+  el.innerHTML =
+    '<div class="comment-toast-icon">💬</div>' +
+    '<div class="comment-toast-body">' +
+      '<div class="comment-toast-title">New comment &mdash; ' + escapeHTML(entry.plate) + '</div>' +
+      '<div class="comment-toast-meta">' + escapeHTML(entry.addedBy || 'Unknown') + ' &middot; ' + escapeHTML(typeLabel) + '</div>' +
+      '<div class="comment-toast-text">' + escapeHTML(entry.comment) + '</div>' +
+    '</div>' +
+    '<button class="comment-toast-close" aria-label="Dismiss">&times;</button>';
+  stack.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+  const dismiss = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  el.querySelector('.comment-toast-close').addEventListener('click', dismiss);
+  setTimeout(dismiss, 9000);
+}
+
+function _commentSignature(e) { return e.plate + '|' + e.date + '|' + e.comment + '|' + e.addedBy; }
+
+let _lastCommentSig = null;
+let _lastCommentBaselineReady = false;
+
+async function pollForNewComments() {
+  try {
+    const resp = await fetch('/api/feedback-activity');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const entries = data.entries || [];
+    if (!entries.length) return;
+    const newestSig = _commentSignature(entries[0]);
+    if (!_lastCommentBaselineReady) {
+      // First poll after page load: establish the baseline silently,
+      // don't fire a toast for the entire pre-existing history.
+      _lastCommentSig = newestSig;
+      _lastCommentBaselineReady = true;
+      return;
+    }
+    if (newestSig === _lastCommentSig) return;
+    const priorIdx = entries.findIndex(e => _commentSignature(e) === _lastCommentSig);
+    // If the previously-seen entry fell off (unlikely at this feed size)
+    // just surface the single newest one rather than guessing further back.
+    const fresh = priorIdx === -1 ? entries.slice(0, 1) : entries.slice(0, priorIdx);
+    _lastCommentSig = newestSig;
+    if (!fresh.length) return;
+    fresh.slice().reverse().forEach(showCommentToast);
+    playCommentChime();
+    // A comment landing anywhere (not just this browser's own submit) can
+    // move a row between Critical/Pending/Known Issues, so every OTHER
+    // open dashboard needs the same live re-pull the submitter's own tab
+    // already gets from refreshDashboardData() - otherwise the Full Data
+    // grid's Customer Feedback column keeps showing what it saw at boot
+    // until someone reloads.
+    if (DATA) {
+      try {
+        const freshData = await fetch('/api/dashboard-data');
+        if (freshData.ok) {
+          DATA = fillMissingSectionsWithSafeDefaults(await freshData.json());
+          renderEverything();
+        }
+      } catch (e) { /* best-effort - next poll tries again */ }
+    }
+  } catch (e) { /* best-effort live nicety - a missed poll just waits for the next one */ }
+}
+// Top-level (not inside renderEverything), so this executes exactly
+// once per page load - no wireOnce() guard needed here.
+pollForNewComments();
+setInterval(pollForNewComments, 15000);
 
 // renderEverything() is now re-run on every feedback submit so the
 // dashboard reflects the change instantly. Most of its listeners attach

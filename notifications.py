@@ -46,22 +46,17 @@ def _staff_recipients():
 
 
 def on_comment_added(plate, comment, added_by, role, entry_type, requires_followup,
-                     respond_urls=None, base_url=""):
+                     respond_urls=None):
     """
     role/entry_type/requires_followup are exactly what was just written
     to the Feedback tab by sheets_store.add_feedback(). respond_urls, if
     given, is {"no_followup": url, "needs_attention": url} - supplied by
     the caller because building them needs a signed token, which is the
-    caller's job (app.py), not this module's. base_url is the same
-    absolute, deployment-real URL used to build those links (see
-    app.py's public_base_url()) - reused here for the logo <img> src,
-    since an email has no page origin to resolve a relative path
-    against, only ever an absolute one.
+    caller's job (app.py), not this module's.
 
     Returns a small dict of what happened, purely for logging/testing -
     callers are not expected to act on it.
     """
-    logo_url = f"{base_url}/static/Teletrac_Fleet_Solutions_logo.png" if base_url else ""
     result = {"sent": False, "reason": None, "case_id": None}
     try:
         case = sheets_store.get_or_create_open_case(plate)
@@ -73,34 +68,49 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
     from datetime import datetime
     timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
 
-    if role in ("admin", "technician"):
+    # Every prior comment on this vehicle, newest first - shared by both
+    # email types below so a client sees the same trail whether they're
+    # the one being asked a question or the one being told the outcome.
+    recent = []
+    try:
+        history = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
+        recent = [
+            {"comment": h["comment"], "addedBy": h["addedBy"], "requiresFollowup": h["requiresFollowup"],
+             "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else ""}
+            for h in reversed(history[:-1])
+        ]
+    except Exception:
+        pass
+
+    # A technician/admin submitting with requires_followup left True (or
+    # unset) is REPORTING something and asking the client to weigh in -
+    # that's the two-button question below. But one submitted as False is
+    # a technician who already decided this is resolved on their own, no
+    # client input needed to close it - that's an OUTCOME, the exact same
+    # shape as a client resolving their own case, not a question. Treating
+    # both under one "ask" branch meant a technician explicitly closing
+    # something themselves still made the client answer a question that
+    # had already been answered - real bug, confirmed against a live send.
+    if role in ("admin", "technician") and requires_followup is not False:
         to = _client_recipients()
         if not to:
             result["reason"] = "no client recipients on file"
             return result
-        recent = []
-        try:
-            history = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
-            recent = [
-                {"comment": h["comment"], "addedBy": h["addedBy"],
-                 "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else ""}
-                for h in reversed(history[:-1])
-            ]
-        except Exception:
-            pass
         no_url = (respond_urls or {}).get("no_followup", "#")
         need_url = (respond_urls or {}).get("needs_attention", "#")
         html, preheader = email_templates.build_update_email(
-            plate, comment, added_by, role, timestamp, no_url, need_url, recent, logo_url)
+            plate, comment, added_by, role, timestamp, no_url, need_url, recent,
+            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"])
         return _send_and_record(plate, case, to, html, preheader, result)
 
-    if role == "client":
+    if role in ("client", "admin", "technician"):
         to = list({*_staff_recipients(), *_client_recipients()})
         if not to:
             result["reason"] = "no recipients on file"
             return result
         html, preheader = email_templates.build_outcome_email(
-            plate, comment, added_by, requires_followup, timestamp, logo_url)
+            plate, comment, added_by, requires_followup, timestamp, recent,
+            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"])
         sent = _send_and_record(plate, case, to, html, preheader, result)
         if requires_followup is False:
             try:
@@ -112,6 +122,241 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
 
     result["reason"] = f"no notification rule for role {role!r}"
     return result
+
+
+def check_reconnections(classification, base_url=""):
+    """
+    Called once per import cycle (see run_import.py), after
+    classify_fleet() has produced this cycle's fresh status for every
+    plate. Compares each plate's status against what was recorded last
+    cycle (sheets_store.load_vehicle_status/save_vehicle_status - there
+    is otherwise NO memory of a previous cycle anywhere in this app).
+
+    A vehicle that just came back online, and still has an unanswered
+    follow-up request on file, gets asked whether that resolves it - the
+    same two-button email a human update gets, not a silent close. The
+    vehicle reconnecting is evidence about connectivity, not proof the
+    reported problem (which might not even have been about connectivity)
+    is actually fixed, so this is deliberately a question a person still
+    has to answer, same as every other state change in this app.
+
+    Returns the list of plates a reconnect-check was actually sent for,
+    purely for logging/testing.
+    """
+    try:
+        previous_status = sheets_store.load_vehicle_status()
+    except Exception as e:
+        print(f"Reconnect-check: could not read previous vehicle status, skipping this cycle's checks: {e}")
+        previous_status = None  # None, not {}: see below - don't treat "couldn't read" as "everything was online"
+
+    current_status = {}
+    prompted = []
+    for plate, info in classification.items():
+        is_online = info.get("status") == "Online"
+        current_status[plate] = "Online" if is_online else "Offline"
+        if not is_online or previous_status is None:
+            continue
+        if previous_status.get(plate) != "Offline":
+            continue  # was already online last cycle, or this plate is new - no transition to react to
+        fb = info.get("feedback")
+        if not fb or fb.get("requiresFollowup") is not True:
+            continue  # nothing outstanding to check on for this plate
+        try:
+            if _send_reconnect_check(plate, info.get("days_silent") or 0, fb["comment"], base_url):
+                prompted.append(plate)
+        except Exception as e:
+            print(f"Reconnect-check email failed for {plate}: {e}")
+
+    try:
+        sheets_store.save_vehicle_status(current_status)
+    except Exception as e:
+        print(f"Reconnect-check: could not persist this cycle's vehicle status: {e}")
+
+    return prompted
+
+
+def _offline_platform_detail(info):
+    """
+    Names the actual platform(s) that are silent (e.g. "MiX Unity"), not
+    just a count - classifier.py's platform_status keys are already the
+    real display names ("Teletrac", "MiX Unity", "FT Cloud Camera", see
+    fleet_logic/adapters/*.py's source_platform= values), so no mapping
+    is needed, just reading them straight through instead of discarding
+    them down to a bare "X/Y platforms" number.
+    """
+    platforms = info.get("platforms") or []
+    offline = sorted(p for p, (s, _) in (info.get("platform_status") or {}).items() if s in ("Offline", "No Data"))
+    days = info.get("days_silent") or 0
+    tracked = f"{len(platforms)} platform{'s' if len(platforms) != 1 else ''} tracked"
+    if offline and len(offline) < len(platforms):
+        return f"Offline {days} day(s) on {', '.join(offline)} ({tracked})"
+    if offline:
+        return f"Offline {days} day(s) on all tracked platforms ({', '.join(offline)})"
+    return f"Offline {days} day(s)"
+
+
+def send_pending_confirmation_digest(classification, base_url, interval_days, overdue_days):
+    """
+    Weekly (configurable, see settings.ini [digests]) rollup to the
+    client of EVERY vehicle currently in Pending Customer Confirmation -
+    a snapshot of current state, not a per-vehicle transition alert like
+    check_reconnections above. A vehicle that's been sitting here for a
+    month reappears in every digest until it actually resolves; that's
+    intentional, not a bug to dedupe away.
+
+    Gated purely on elapsed time since the last send
+    (sheets_store.get_digest_last_sent/set_digest_last_sent) - escalation
+    to Technical Escalation itself is untouched by any of this, it stays
+    exactly the days-based rule in classifier.py it always was. This is
+    an additive notification layer, not a gate.
+    """
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0}
+    try:
+        last_sent = sheets_store.get_digest_last_sent("pending_confirmation")
+        if last_sent and (datetime.now() - last_sent).days < interval_days:
+            result["reason"] = "interval not elapsed"
+            return result
+    except Exception as e:
+        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
+        return result
+
+    pending = sorted(
+        (plate, info) for plate, info in classification.items()
+        if info.get("status") == "Pending Customer Confirmation"
+    )
+    if not pending:
+        result["reason"] = "nothing pending"
+        return result
+
+    to = _client_recipients()
+    if not to:
+        result["reason"] = "no client recipients on file"
+        return result
+
+    import respond_tokens
+    overdue_seen = False
+    vehicles = []
+    for plate, info in pending:
+        days = info.get("days_silent") or 0
+        overdue = days >= overdue_days
+        overdue_seen = overdue_seen or overdue
+        vehicles.append({
+            "plate": plate, "detail": _offline_platform_detail(info), "overdue": overdue,
+            "no_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}",
+            "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
+        })
+
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_pending_confirmation_digest_email(vehicles, timestamp)
+    message_id, err = mailer.send(
+        to, f"Weekly check-in: {len(vehicles)} vehicle(s) awaiting your confirmation", html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+
+    try:
+        sheets_store.set_digest_last_sent("pending_confirmation")
+    except Exception as e:
+        print(f"Pending-confirmation digest sent but could not record last-sent timestamp: {e}")
+    result["sent"], result["count"] = True, len(vehicles)
+    return result
+
+
+def send_technical_escalation_digest(classification, base_url, interval_days):
+    """Staff-facing counterpart to send_pending_confirmation_digest -
+    same interval-gated snapshot mechanism, different audience and no
+    respond-token links (staff act from the dashboard directly, not by
+    clicking an email button - see the "Open in dashboard" deep link,
+    handled by templates/dashboard.html's boot())."""
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0}
+    try:
+        last_sent = sheets_store.get_digest_last_sent("technical_escalation")
+        if last_sent and (datetime.now() - last_sent).days < interval_days:
+            result["reason"] = "interval not elapsed"
+            return result
+    except Exception as e:
+        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
+        return result
+
+    escalated = sorted(
+        (plate, info) for plate, info in classification.items()
+        if info.get("status") == "Technical Escalation"
+    )
+    if not escalated:
+        result["reason"] = "nothing escalated"
+        return result
+
+    to = _staff_recipients()
+    if not to:
+        result["reason"] = "no staff recipients on file"
+        return result
+
+    vehicles = [
+        {
+            "plate": plate, "detail": _offline_platform_detail(info),
+            "severity": info.get("severity") or "Escalated",
+            "dashboard_url": f"{base_url}/?plate={plate}" if base_url else "",
+        }
+        for plate, info in escalated
+    ]
+
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_technical_escalation_digest_email(vehicles, timestamp)
+    message_id, err = mailer.send(
+        to, f"Weekly check-in: {len(vehicles)} vehicle(s) in Technical Escalation", html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+
+    try:
+        sheets_store.set_digest_last_sent("technical_escalation")
+    except Exception as e:
+        print(f"Escalation digest sent but could not record last-sent timestamp: {e}")
+    result["sent"], result["count"] = True, len(vehicles)
+    return result
+
+
+def _send_reconnect_check(plate, days_offline, open_comment, base_url):
+    from datetime import datetime
+    import respond_tokens
+
+    if not base_url:
+        # Respond links with no domain are dead links - worse than not
+        # sending at all, since a client clicking one lands nowhere.
+        print(f"Reconnect-check for {plate} skipped: no base URL configured "
+              f"(set PUBLIC_BASE_URL, or run on Render where it's automatic).")
+        return False
+
+    to = _client_recipients()
+    if not to:
+        return False
+
+    case = sheets_store.get_or_create_open_case(plate)
+    recent = []
+    try:
+        history = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
+        # Exclude the last entry - that's the same open ask already shown
+        # above in its own highlighted box, showing it twice would be
+        # redundant rather than informative.
+        recent = [
+            {"comment": h["comment"], "addedBy": h["addedBy"], "requiresFollowup": h["requiresFollowup"],
+             "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else ""}
+            for h in reversed(history[:-1])
+        ]
+    except Exception:
+        pass
+
+    no_url = f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}"
+    need_url = f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}"
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_reconnect_check_email(
+        plate, days_offline, open_comment, timestamp, no_url, need_url, recent)
+
+    result = {"sent": False, "reason": None, "case_id": case["caseId"]}
+    sent = _send_and_record(plate, case, to, html, preheader, result)
+    return sent["sent"]
 
 
 def _send_and_record(plate, case, to_addrs, html, preheader, result):
