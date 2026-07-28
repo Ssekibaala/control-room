@@ -346,5 +346,18 @@ def _public_base_url():
     needs no extra configuration; local runs without PUBLIC_BASE_URL set
     just won't get working respond links in the reconnect-check email,
     same tradeoff every other local-dev email test in this codebase makes.
+
+    Same guard as app.py's public_base_url(): a PUBLIC_BASE_URL that
+    got left set to a local-dev value (this exact incident happened -
+    "http://localhost:5000" ended up configured on the live Render
+    service) must not win. Unlike app.py, there's no live request to
+    fall back to here, so a rejected value becomes "" rather than a
+    wrong-but-present one - check_reconnections/send_*_digest already
+    skip sending rather than mail out a dead link when base_url is empty.
     """
-    return (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    configured = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
+    if configured and any(marker in configured.lower() for marker in ("localhost", "127.0.0.1", "0.0.0.0")):
+        print(f"WARNING: ignoring PUBLIC_BASE_URL/RENDER_EXTERNAL_URL={configured!r} - "
+              f"looks like a local-dev leftover, not a real public domain.")
+        return ""
+    return configured.rstrip("/")

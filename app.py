@@ -56,11 +56,33 @@ def public_base_url():
     is injected automatically by Render for every web service, so
     production needs no manual configuration at all. request.url_root is
     the last resort, kept only so interactive local testing still works.
+
+    A real production incident: PUBLIC_BASE_URL got set to
+    "http://localhost:5000" on the actual live Render service (almost
+    certainly copied in from a local .env at some point) - since it's
+    checked FIRST, that silently overrode the otherwise-correct
+    request.url_root fallback for every real visitor, and every email
+    link went out dead. _is_probably_local_leftover() below refuses to
+    trust an override that looks like a dev-machine artifact rather
+    than a real public domain, so a misconfigured env var can't take
+    priority over the live request it's actually being sent from.
     """
     configured = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-    if configured:
+    if configured and not _is_probably_local_leftover(configured):
         return configured.rstrip("/")
+    if configured:
+        print(f"WARNING: ignoring PUBLIC_BASE_URL/RENDER_EXTERNAL_URL={configured!r} - "
+              f"looks like a local-dev leftover, not a real public domain. Falling back "
+              f"to the current request's own host instead.")
     return request.url_root.rstrip("/")
+
+
+def _is_probably_local_leftover(url):
+    """True for exactly the kind of value that should never win over a
+    real incoming request's own host: localhost, 127.0.0.1, 0.0.0.0, or
+    port 5000/8000-style dev-server ports."""
+    lowered = url.lower()
+    return any(marker in lowered for marker in ("localhost", "127.0.0.1", "0.0.0.0"))
 
 
 def _notify_async(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
