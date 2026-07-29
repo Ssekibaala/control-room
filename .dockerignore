@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+.git/
+.claude/
+data/_incoming/
+data/_refresh_lock.json
