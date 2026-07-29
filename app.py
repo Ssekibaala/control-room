@@ -85,30 +85,6 @@ def _is_probably_local_leftover(url):
     return any(marker in lowered for marker in ("localhost", "127.0.0.1", "0.0.0.0"))
 
 
-@app.route("/api/debug/smtp-check")
-def debug_smtp_check():
-    """
-    Temporary diagnostic, no auth needed (TCP-connect only, no
-    credentials sent). mailer.py no longer uses SMTP at all (switched to
-    Resend's HTTP API after Render's free tier turned out to block every
-    SMTP port), but the original question - would this specific host's
-    network even allow outbound SMTP, independent of what mailer.py
-    currently does - is still worth a real answer instead of a guess.
-    Safe to delete once checked.
-    """
-    import socket
-    host = "mail.teletracfleets.com"
-    results = {}
-    for port in (587, 465, 25):
-        try:
-            s = socket.create_connection((host, port), timeout=8)
-            s.close()
-            results[port] = "open"
-        except Exception as e:
-            results[port] = f"failed: {e}"
-    return jsonify({"host": host, "ports": results})
-
-
 def _notify_async(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
     """
     Fires notifications.on_comment_added() on a background thread. The

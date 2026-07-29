@@ -11,9 +11,5 @@ itsdangerous>=2.1
 gspread>=6.1
 google-auth>=2.30
 
-# Outbound email (mailer.py) - HTTP API, not SMTP, because Render blocks
-# outbound SMTP ports on free web services.
-resend>=2.0
-
 # Only needed if you run the test suite yourself
-# (not required in production on Render)
+# (not required in production)
