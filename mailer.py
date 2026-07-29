@@ -1,10 +1,16 @@
 """
-Outbound mail. Sends via the same Teletrac mailbox mail_reader.py already
-reads from (EMAIL_ADDRESS/EMAIL_PASSWORD) - no new vendor, and replies
-land where the app already looks. SMTP submission (port 587, STARTTLS)
-is the standard companion to the IMAP connection already in use; if this
-mailbox turns out not to support it, swap send() for a transactional
-provider without touching any caller.
+Outbound mail, sent via the Resend HTTP API (resend.com).
+
+This used to go over raw SMTP to the Teletrac mailbox, but Render
+blocks outbound traffic on every SMTP port (25, 465, 587) on free web
+services - confirmed live: local dev could reach the mailbox, the
+deployed app timed out on both 587 and 465. There is no SMTP port
+combination that gets around that from Render's network; the only way
+out is a transport that isn't SMTP. Resend's API is plain HTTPS
+(port 443), which is never blocked - trading "our own mailbox" for
+"a provider that actually reaches the recipient" is the least-bad
+option that also means never touching this file again if this network
+changes its port rules yet again.
 
 Sending is deliberately never allowed to break the caller: a feedback
 comment is saved to the Sheet first and always succeeds or fails on its
@@ -14,17 +20,15 @@ already do for the Sheets API itself.
 """
 
 import os
-import smtplib
-from email.message import EmailMessage
-from email.utils import make_msgid
+import resend
 
-SMTP_HOST = "mail.teletracfleets.com"
-SMTP_PORT = 587
-# Fallback for networks that block outbound 587 (common on residential/
-# office connections that block anti-spam-prone SMTP ports) but allow
-# implicit-TLS submission - same mailbox, same credentials, just a
-# different port/handshake. Confirmed reachable where 587 timed out.
-SMTP_SSL_PORT = 465
+# onboarding@resend.dev is Resend's own shared sandbox sender - works
+# immediately with no domain setup, which is why it's the default here,
+# but it's Resend's brand in the "From" line, not Teletrac's. Once a
+# real sending domain (e.g. teletracfleets.com) is verified in the
+# Resend dashboard, set RESEND_FROM_EMAIL to an address on it and every
+# email starts coming from the real domain with zero code changes.
+DEFAULT_FROM = "onboarding@resend.dev"
 
 
 def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, references=None):
@@ -38,49 +42,38 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     it as the inbox preview snippet, which is what lets the subject stay
     frozen while the client still sees what changed at a glance.
     """
-    address = os.environ.get("EMAIL_ADDRESS")
-    password = os.environ.get("EMAIL_PASSWORD")
-    if not address or not password:
-        return None, "EMAIL_ADDRESS / EMAIL_PASSWORD not configured"
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        return None, "RESEND_API_KEY not configured"
     if not to_addrs:
         return None, "no recipients"
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = address
-    msg["To"] = ", ".join(to_addrs)
-    msg["Message-ID"] = make_msgid(domain=address.split("@")[-1])
-    if in_reply_to:
-        msg["In-Reply-To"] = in_reply_to
-    if references:
-        msg["References"] = " ".join(references)
+    resend.api_key = api_key
+    from_addr = os.environ.get("RESEND_FROM_EMAIL", DEFAULT_FROM)
 
     preheader_html = (
         f'<div style="display:none;max-height:0;overflow:hidden;opacity:0;'
         f'mso-hide:all;">{preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>'
         if preheader else ""
     )
-    msg.set_content("This message requires an HTML-capable email client to view.")
-    msg.add_alternative(preheader_html + html_body, subtype="html")
+
+    headers = {}
+    if in_reply_to:
+        headers["In-Reply-To"] = in_reply_to
+    if references:
+        headers["References"] = " ".join(references)
+
+    params = {
+        "from": from_addr,
+        "to": list(to_addrs),
+        "subject": subject,
+        "html": preheader_html + html_body,
+    }
+    if headers:
+        params["headers"] = headers
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
-            smtp.starttls()
-            smtp.login(address, password)
-            smtp.send_message(msg)
-        return msg["Message-ID"], None
-    except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected):
-        # Port 587 itself was unreachable (blocked/filtered), not a mailbox
-        # or content problem - worth one retry over 465 before giving up,
-        # since that's a network-level failure, not an authoritative "no".
-        pass
-    except Exception as e:
-        return None, str(e)
-
-    try:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_SSL_PORT, timeout=20) as smtp:
-            smtp.login(address, password)
-            smtp.send_message(msg)
-        return msg["Message-ID"], None
+        result = resend.Emails.send(params)
+        return result["id"], None
     except Exception as e:
         return None, str(e)
