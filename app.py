@@ -85,51 +85,6 @@ def _is_probably_local_leftover(url):
     return any(marker in lowered for marker in ("localhost", "127.0.0.1", "0.0.0.0"))
 
 
-@app.route("/api/debug/smtp-check")
-def debug_smtp_check():
-    """
-    Temporary diagnostic: does THIS server's network actually let outbound
-    connections through to the mail host on the ports mailer.py tries?
-    Render's network is not the same as a local dev machine's - a port
-    open here proved nothing about whether it's open from the deployed
-    service, and that gap is exactly what needs checking live rather
-    than assumed. TCP-connect only, no credentials sent. Safe to delete
-    once root-caused.
-    """
-    import socket
-    import mailer as mailer_mod
-    results = {}
-    for port in (mailer_mod.SMTP_PORT, mailer_mod.SMTP_SSL_PORT):
-        try:
-            s = socket.create_connection((mailer_mod.SMTP_HOST, port), timeout=8)
-            s.close()
-            results[port] = "open"
-        except Exception as e:
-            results[port] = f"failed: {e}"
-    return jsonify({"host": mailer_mod.SMTP_HOST, "ports": results})
-
-
-@app.route("/api/debug/base-url")
-def debug_base_url():
-    """
-    Temporary diagnostic, no auth/session required (it leaks no secrets -
-    env var presence and request headers only) - added to find a live
-    "email links point at localhost" bug from production data instead of
-    guessing at it. Safe to delete once that's root-caused.
-    """
-    return jsonify({
-        "resolved_base_url": public_base_url(),
-        "PUBLIC_BASE_URL_env": os.environ.get("PUBLIC_BASE_URL"),
-        "RENDER_EXTERNAL_URL_env": os.environ.get("RENDER_EXTERNAL_URL"),
-        "request_url_root": request.url_root,
-        "request_host_header": request.headers.get("Host"),
-        "request_x_forwarded_host": request.headers.get("X-Forwarded-Host"),
-        "request_x_forwarded_proto": request.headers.get("X-Forwarded-Proto"),
-        "werkzeug_server_name": request.environ.get("SERVER_NAME"),
-        "werkzeug_server_port": request.environ.get("SERVER_PORT"),
-    })
-
-
 def _notify_async(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
     """
     Fires notifications.on_comment_added() on a background thread. The
