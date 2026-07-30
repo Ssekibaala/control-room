@@ -468,6 +468,17 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     except Exception as e:
         print(f"Reconnect-check pass failed: {e}")
 
+    # Separate from the reconnect-check above: a plain FYI for EVERY
+    # recovery this cycle, not just the ones with an unanswered
+    # follow-up. No interval gate - see send_recovery_notice's own
+    # docstring for why a schedule doesn't fit this one.
+    try:
+        recovery_result = notifications.send_recovery_notice(classification, recovered)
+        if recovery_result["sent"]:
+            print(f"Recovery notice sent for {recovery_result['count']} vehicle(s)")
+    except Exception as e:
+        print(f"Recovery notice failed: {e}")
+
     # Weekly (configurable) rollups - snapshots of current state, not
     # tied to this cycle's transitions, so they're independent of
     # check_reconnections above and of each other.

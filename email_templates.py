@@ -578,3 +578,49 @@ def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checke
     """
     preheader = f"{summary.get('confirmed', 0)} confirmed, {summary.get('unconfirmed', 0)} unconfirmed this week"
     return _shell(inner), preheader
+
+
+def _recovery_row(v):
+    comment_html = (
+        f'<span style="font-size:11.5px;color:{MUTED};display:block;margin-top:2px;">'
+        f'Last reported: &ldquo;{_esc(v["comment"])}&rdquo;</span>'
+        if v.get("comment") else ""
+    )
+    return f"""
+      <tr><td style="padding:10px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:13.5px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>
+        &nbsp;{_badge('Back online', SUCCESS)}<br>
+        <span style="font-size:11.5px;color:{MUTED};">Last known location: {_esc(v['location'])}</span>
+        {comment_html}
+      </td></tr>
+    """
+
+
+def build_recovery_notice_email(vehicles, timestamp):
+    """
+    Plain FYI, no response needed: every vehicle that came back online
+    this import cycle. Deliberately separate from check_reconnections'
+    two-button ask - that email only fires for the subset with an
+    unanswered "needs follow-up" comment on file, asking whether
+    reconnecting resolves it. This one is unconditional: without it, a
+    vehicle recovering with no outstanding question on file reconnected
+    completely silently, visible only as a quiet dashboard entry.
+    """
+    rows = "".join(_recovery_row(v) for v in vehicles)
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Back online</span><br>
+        <span style="font-size:12px;color:{MUTED};">{len(vehicles)} vehicle(s) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 4px;">
+        <span style="font-size:13px;color:{INK};line-height:1.5;">
+          These vehicles were offline and have reconnected since the last check. No action needed - this is
+          purely informational.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>
+      </td></tr>
+    """
+    preheader = f"{len(vehicles)} vehicle(s) reconnected"
+    return _shell(inner), preheader

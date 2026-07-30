@@ -162,6 +162,57 @@ def check_reconnections(classification, recovered, base_url=""):
     return prompted
 
 
+def send_recovery_notice(classification, recovered):
+    """
+    Informational-only notice for every vehicle that came back online
+    this cycle, regardless of whether it also has an outstanding
+    follow-up (that overlapping case still separately gets the
+    two-button reconnect-check above, asking whether reconnecting
+    resolves it - this notice is a plain FYI, no response needed, and
+    goes out alongside that email, not instead of it).
+
+    Added because check_reconnections() only emails about a recovery
+    that has an unanswered "needs follow-up" comment on file - most
+    recoveries don't, and were reconnecting completely silently, with
+    only a quiet dashboard entry (Recovered/New) to show it happened.
+
+    Sent once per import cycle whenever `recovered` is non-empty, to
+    both staff and client - there's no interval gate here like the
+    weekly digests, because this isn't a snapshot of ongoing state to
+    re-send periodically, it's a report of THIS cycle's transitions;
+    gating it on a schedule would just mean the recoveries that happen
+    between sends are never mentioned at all.
+    """
+    result = {"sent": False, "reason": None, "count": 0}
+    if not recovered:
+        result["reason"] = "nothing recovered this cycle"
+        return result
+
+    to = list({*_staff_recipients(), *_client_recipients()})
+    if not to:
+        result["reason"] = "no recipients on file"
+        return result
+
+    from datetime import datetime
+    vehicles = []
+    for plate in recovered:
+        info = classification.get(plate) or {}
+        fb = info.get("feedback")
+        vehicles.append({
+            "plate": plate,
+            "location": info.get("last_location") or "Unknown",
+            "comment": fb["comment"] if fb else None,
+        })
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_recovery_notice_email(vehicles, timestamp)
+    message_id, err = mailer.send(to, f"Back online: {len(vehicles)} vehicle(s)", html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+    result["sent"], result["count"] = True, len(vehicles)
+    return result
+
+
 def _offline_platform_detail(info):
     """
     Names the actual platform(s) that are silent (e.g. "MiX Unity"), not
