@@ -11,20 +11,35 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open http://127.0.0.1:5000, log in with one of the demo accounts
-already created in `database/users.json`:
+Open http://127.0.0.1:5000. Which accounts actually work depends on
+whether Sheets is configured (see `users.py`'s `load_users()`):
 
-| Username     | Password       | Role       |
-|--------------|----------------|------------|
-| justin       | TestPass123!   | admin      |
-| brandon.b    | TestPass123!   | technician |
-| gtl-client   | TestPass123!   | client     |
+- **`GOOGLE_SERVICE_ACCOUNT_JSON` / `FEEDBACK_SHEET_ID` NOT set** (a
+  genuinely fresh clone, nothing configured yet): the demo accounts
+  below, from `database/users.json`, are what you get.
 
-**Change these before going live**, see `users.py`. The demo dataset
-in `data/fleet_today.json` is real output from your actual historical
-files (142 assets, 27 escalations, tested and verified throughout
-this build), so the dashboard works immediately without needing a
-live mailbox connection first.
+  | Username     | Password       | Role       |
+  |--------------|----------------|------------|
+  | justin       | TestPass123!   | admin      |
+  | brandon.b    | TestPass123!   | technician |
+  | gtl-client   | TestPass123!   | client     |
+
+  **Change these before going live**, see `users.py`.
+
+- **Sheets configured** (true for every real deployment, and for local
+  dev once you've set those two env vars): accounts live in the
+  spreadsheet's "Users" tab instead, and `database/users.json` is
+  ignored entirely - the table above will NOT work, real accounts do,
+  and deleted accounts stay deleted (`python users.py delete
+  <username>`, or the "x" next to an account in Manage Users). This is
+  also why account changes survive redeploys: the Sheet, not this repo,
+  is the actual source of truth once it's wired up.
+
+The dataset in `data/fleet_today.json` is real output from your actual
+historical files (142 assets, 27 escalations, tested and verified
+throughout this build), so the dashboard works immediately without
+needing a live mailbox connection first, regardless of which accounts
+path above applies.
 
 ## What's real vs. what needs your credentials to activate
 

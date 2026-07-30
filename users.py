@@ -128,6 +128,19 @@ def set_email(username, email):
     return True
 
 
+def delete_user(username):
+    """Removes an account entirely. Returns True if it existed."""
+    if _sheets_available():
+        import sheets_store
+        return sheets_store.delete_user_sheet(username)
+    users = _load_local()
+    if username not in users:
+        return False
+    del users[username]
+    _save_local(users)
+    return True
+
+
 def notification_recipients(roles=None):
     """
     Addresses to notify, drawn from the accounts themselves - a user with
@@ -198,7 +211,11 @@ if __name__ == "__main__":
     elif len(sys.argv) == 4 and sys.argv[1] == "set-email":
         ok = set_email(sys.argv[2], sys.argv[3])
         print(f"Email {'updated' if ok else 'NOT set - no such account'} for '{sys.argv[2]}'.")
+    elif len(sys.argv) == 3 and sys.argv[1] == "delete":
+        ok = delete_user(sys.argv[2])
+        print(f"User '{sys.argv[2]}' {'deleted' if ok else 'NOT found'}.")
     else:
         print('Usage: python users.py add <username> <role> <password> [email] ["Client A, Client B"]')
         print('       python users.py set-email <username> <email>')
+        print('       python users.py delete <username>')
         print("Roles: admin, technician, client")

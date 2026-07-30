@@ -124,13 +124,18 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
     return result
 
 
-def check_reconnections(classification, base_url=""):
+def check_reconnections(classification, recovered, base_url=""):
     """
     Called once per import cycle (see run_import.py), after
     classify_fleet() has produced this cycle's fresh status for every
-    plate. Compares each plate's status against what was recorded last
-    cycle (sheets_store.load_vehicle_status/save_vehicle_status - there
-    is otherwise NO memory of a previous cycle anywhere in this app).
+    plate and run_import.py's _day_over_day() has already worked out
+    which plates just transitioned Offline->Online (`recovered`) by
+    diffing against what was recorded last cycle
+    (sheets_store.load_vehicle_status/save_vehicle_status - there is
+    otherwise NO memory of a previous cycle anywhere in this app). This
+    function doesn't redo that diff - it only decides, for each plate
+    already known to have just come back online, whether there's
+    anything worth emailing about.
 
     A vehicle that just came back online, and still has an unanswered
     follow-up request on file, gets asked whether that resolves it - the
@@ -143,21 +148,9 @@ def check_reconnections(classification, base_url=""):
     Returns the list of plates a reconnect-check was actually sent for,
     purely for logging/testing.
     """
-    try:
-        previous_status = sheets_store.load_vehicle_status()
-    except Exception as e:
-        print(f"Reconnect-check: could not read previous vehicle status, skipping this cycle's checks: {e}")
-        previous_status = None  # None, not {}: see below - don't treat "couldn't read" as "everything was online"
-
-    current_status = {}
     prompted = []
-    for plate, info in classification.items():
-        is_online = info.get("status") == "Online"
-        current_status[plate] = "Online" if is_online else "Offline"
-        if not is_online or previous_status is None:
-            continue
-        if previous_status.get(plate) != "Offline":
-            continue  # was already online last cycle, or this plate is new - no transition to react to
+    for plate in recovered:
+        info = classification.get(plate) or {}
         fb = info.get("feedback")
         if not fb or fb.get("requiresFollowup") is not True:
             continue  # nothing outstanding to check on for this plate
@@ -166,12 +159,6 @@ def check_reconnections(classification, base_url=""):
                 prompted.append(plate)
         except Exception as e:
             print(f"Reconnect-check email failed for {plate}: {e}")
-
-    try:
-        sheets_store.save_vehicle_status(current_status)
-    except Exception as e:
-        print(f"Reconnect-check: could not persist this cycle's vehicle status: {e}")
-
     return prompted
 
 

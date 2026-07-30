@@ -328,8 +328,11 @@
   .u-none { font-size:11px; color:var(--text-tertiary); font-style:italic; }
   .sheet-link { text-decoration:none; width:fit-content; }
   .btn-icon-trail { margin-right:0; margin-left:6px; opacity:0.6; }
-  .users-list-row { display:grid; grid-template-columns:0.9fr 1.3fr 0.9fr 145px 105px; align-items:center; gap:12px;
+  .users-list-row { display:grid; grid-template-columns:0.9fr 1.3fr 0.9fr 145px 105px 32px; align-items:center; gap:12px;
     padding:11px 4px; border-bottom:1px solid var(--divider); }
+  .u-delete { background:none; border:none; color:var(--text-tertiary); font-size:18px; line-height:1;
+    cursor:pointer; padding:2px 6px; border-radius:6px; }
+  .u-delete:hover { color:var(--danger, #FF5C7A); background:var(--danger, #FF5C7A)1a; }
   .users-list-row:last-child { border-bottom:none; }
   .users-list-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
     color:var(--text-tertiary); font-weight:600; border-bottom:1px solid var(--border); padding-bottom:9px; }
@@ -2401,12 +2404,13 @@ if (usersForm) {
     if (countEl) countEl.textContent = list.length + ' account' + (list.length === 1 ? '' : 's');
     if (!list.length) { el.innerHTML = '<div class="activity-empty">No accounts yet.</div>'; return; }
     const head = '<div class="users-list-row users-list-head">' +
-      '<span>Account</span><span>Email</span><span>Client(s)</span><span>Last signed in</span><span>Role</span></div>';
+      '<span>Account</span><span>Email</span><span>Client(s)</span><span>Last signed in</span><span>Role</span><span></span></div>';
     el.innerHTML = head + list.map(u => {
       const clients = (u.clients || []);
+      const isYou = u.username === CURRENT_USERNAME;
       return '<div class="users-list-row">' +
         '<span class="u-name">' + escapeHTML(u.username) +
-          (u.username === CURRENT_USERNAME ? '<span class="u-you">(you)</span>' : '') + '</span>' +
+          (isYou ? '<span class="u-you">(you)</span>' : '') + '</span>' +
         // A blank address means this person genuinely cannot be reached by
         // any notification, so say that plainly and make it click-to-fix
         // rather than rendering an empty cell nobody questions.
@@ -2419,6 +2423,9 @@ if (usersForm) {
         '<span class="u-lastlogin' + (u.lastLogin ? '' : ' never') + '">' +
           escapeHTML(u.lastLogin || 'Never') + '</span>' +
         '<span class="role-pill ' + escapeHTML(u.role) + '">' + escapeHTML(u.role) + '</span>' +
+        '<span>' + (isYou ? '' :
+          '<button type="button" class="u-delete" data-user="' + escapeHTML(u.username) + '" title="Delete this account">&times;</button>'
+        ) + '</span>' +
       '</div>';
     }).join('');
 
@@ -2434,6 +2441,18 @@ if (usersForm) {
           .then(r => r.json().then(b => ({ok: r.ok, b})))
           .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save that address.'); fetchUsers(); })
           .catch(() => alert('Could not reach the server.'));
+      });
+    });
+
+    el.querySelectorAll('.u-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const username = btn.dataset.user;
+        if (!confirm('Delete the account "' + username + '"? This cannot be undone.')) return;
+        btn.disabled = true;
+        fetch('/api/users/' + encodeURIComponent(username), {method: 'DELETE'})
+          .then(r => r.json().then(b => ({ok: r.ok, b})))
+          .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not delete that account.'); fetchUsers(); })
+          .catch(() => { alert('Could not reach the server.'); btn.disabled = false; });
       });
     });
   }

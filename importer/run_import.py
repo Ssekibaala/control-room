@@ -173,16 +173,55 @@ def _checked_assets_summary(tamper_checks):
     return rows
 
 
-def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None):
+def _day_over_day(results, previous_status):
+    """
+    The one place classify_fleet()'s fresh per-plate status gets diffed
+    against what was recorded last cycle. Returns (recovered,
+    newly_offline, current_status) - current_status is what the caller
+    should persist (sheets_store.save_vehicle_status) so the NEXT
+    cycle has something to diff against.
+
+    previous_status=None means there's nothing to compare against yet
+    (the very first import ever run, or last cycle's read failed) -
+    recovered/newly_offline come back empty rather than guessed at, the
+    same "no history yet" case report_writer.write_report() already
+    has copy for via history_available.
+
+    A plate absent from previous_status (new to the fleet this cycle)
+    is excluded from both lists - it has no prior state to have
+    transitioned FROM, "recovered"/"newly offline" wouldn't be a
+    meaningful thing to say about it yet.
+    """
+    current_status = {
+        plate: ("Online" if info.get("status") == "Online" else "Offline")
+        for plate, info in results.items()
+    }
+    if previous_status is None:
+        return [], [], current_status
+    recovered, newly_offline = [], []
+    for plate, status in current_status.items():
+        if plate not in previous_status:
+            continue
+        was_online = previous_status.get(plate) == "Online"
+        is_online = status == "Online"
+        if is_online and not was_online:
+            recovered.append(plate)
+        elif was_online and not is_online:
+            newly_offline.append(plate)
+    return recovered, newly_offline, current_status
+
+
+def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None, previous_status=None):
     """
     Pure processing, no network. paths is the dict returned by
     fetch_reports() (or, for testing, pointed at the known-good local
     sample files). Returns the same data dict the dashboard serves.
 
-    tamper_checks (sheets_store.load_tamper_checks()'s shape) is loaded
-    by the caller, same reason feedback_rows is: this function stays
-    Sheets/network-free per its own docstring, the caller does the one
-    read and hands the result in as plain data.
+    tamper_checks (sheets_store.load_tamper_checks()'s shape) and
+    previous_status (sheets_store.load_vehicle_status()'s shape) are
+    both loaded by the caller, same reason feedback_rows is: this
+    function stays Sheets/network-free per its own docstring, the
+    caller does the one read and hands the result in as plain data.
     """
     check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
@@ -225,6 +264,9 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     checked_assets = _checked_assets_summary(tamper_checks)
     tampering["checked_assets"] = checked_assets
 
+    recovered, newly_offline, current_status = _day_over_day(results, previous_status)
+    history_available = previous_status is not None
+
     # Generate the actual downloadable .xlsx files - same formatting as
     # the original standalone tool (report_writer.write_report() for
     # Fleet Integrity, tamper_engine.build_workbook() for Tampering Risk)
@@ -233,12 +275,12 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     os.makedirs(DATA_DIR, exist_ok=True)
     integrity_path = os.path.join(DATA_DIR, "GTL_integrity_report.xlsx")
     tamper_path = os.path.join(DATA_DIR, "GTL_tampering_report.xlsx")
-    report_writer.write_report(results, settings, recovered=[], newly_offline=[],
-                                output_path=integrity_path, report_date=now, history_available=False)
+    report_writer.write_report(results, settings, recovered=recovered, newly_offline=newly_offline,
+                                output_path=integrity_path, report_date=now, history_available=history_available)
     build_tamper_workbook(tamper_result, tamper_path)
 
-    data = _build_data(results, settings, tampering, [], [], now, False, integrity_path, tamper_path,
-                        checked_assets=checked_assets)
+    data = _build_data(results, settings, tampering, recovered, newly_offline, now, history_available,
+                        integrity_path, tamper_path, checked_assets=checked_assets)
     data["_skipped_plates"] = sorted(set(skipped))
     # Stashed so run_import() can react to Offline->Online transitions
     # (see notifications.check_reconnections) without this function - kept
@@ -249,6 +291,12 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     data["_classification"] = results
     # Same reasoning, for the weekly tamper risk report email.
     data["_tampering"] = tampering
+    # current_status is what the caller persists for NEXT cycle's
+    # comparison (sheets_store.save_vehicle_status) - recovered is
+    # reused as-is by notifications.check_reconnections so it isn't
+    # recomputed a second time just to decide who to email.
+    data["_current_status"] = current_status
+    data["_recovered"] = recovered
     return data
 
 
@@ -367,9 +415,19 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
         print(f"WARNING: tamper checks unavailable this run ({e}), continuing without them.")
         tamper_checks = {}
 
-    data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks)
+    try:
+        previous_status = sheets_store.load_vehicle_status()
+    except Exception as e:
+        print(f"WARNING: previous vehicle status unavailable this run ({e}), "
+              f"Recovered/New will show empty and no reconnect-check can fire this cycle.")
+        previous_status = None
+
+    data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks,
+                           previous_status=previous_status)
     classification = data.pop("_classification", {})
     tampering = data.pop("_tampering", {})
+    current_status = data.pop("_current_status", {})
+    recovered = data.pop("_recovered", [])
 
     # meta.generated reflects the latest timestamp found IN the report
     # data itself, which naturally lags real time (assets report
@@ -383,16 +441,28 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     with open(os.path.join(DATA_DIR, "fleet_today.json"), "w") as f:
         json.dump(data, f, default=str)
 
+    # This cycle's status becomes NEXT cycle's "previous_status" - saved
+    # regardless of what happens below, since losing this write would
+    # mean the day after this one starts back at "no history yet"
+    # rather than one bad cycle just being skipped.
+    try:
+        sheets_store.save_vehicle_status(current_status)
+    except Exception as e:
+        print(f"Could not persist this cycle's vehicle status: {e}")
+
     # Best-effort and last: the dashboard's own data is already safely
     # written above regardless of anything below. A vehicle whose status
     # just flipped Offline->Online, with an unanswered follow-up still on
     # file, gets asked (not told) whether that resolves it - see
     # notifications.check_reconnections for why this is a question, not
-    # an automatic close.
+    # an automatic close. `recovered` is already the exact same
+    # Offline->Online list computed above - check_reconnections only
+    # has to decide, per plate in it, whether there's anything worth
+    # emailing about, not recompute the transition itself.
     base_url = _public_base_url()
     try:
         import notifications
-        prompted = notifications.check_reconnections(classification, base_url=base_url)
+        prompted = notifications.check_reconnections(classification, recovered, base_url=base_url)
         if prompted:
             print(f"Reconnect-check sent for: {', '.join(prompted)}")
     except Exception as e:

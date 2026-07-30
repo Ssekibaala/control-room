@@ -259,6 +259,30 @@ def api_set_user_email(username):
     return jsonify({"username": username, "email": email})
 
 
+@app.route("/api/users/<username>", methods=["DELETE"])
+@login_required
+def api_delete_user(username):
+    """
+    There was previously no way to remove an account short of editing
+    the Sheet by hand. Blocks deleting your own account specifically -
+    every other account is fair game, but locking yourself out by
+    accident (the one mistake with no recovery path from inside the
+    app) is worth a hard stop rather than a confirm dialog alone.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if username == session["username"]:
+        return jsonify({"error": "You can't delete your own account while logged in as it."}), 400
+
+    try:
+        found = users_store.delete_user(username)
+    except Exception as e:
+        return jsonify({"error": f"Could not delete the account: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+    return jsonify({"ok": True, "username": username})
+
+
 def _valid_emails(raw):
     """raw is a comma-separated string from the UI. Returns
     (clean_list, error_message) - error_message is None when every
@@ -523,6 +547,14 @@ def respond_page():
     payload, error = read_respond_token(token)
     if error:
         return render_template("respond.html", error=error), 400
+    try:
+        import sheets_store
+        if sheets_store.is_token_used(token):
+            return render_template(
+                "respond.html", error="This link has already been used to respond. "
+                "If you need to add anything else, use the in-app comment form or contact us directly."), 400
+    except Exception:
+        pass  # can't check right now - fail open on the read, POST still enforces it authoritatively
     return render_template(
         "respond.html", plate=payload["plate"], action=payload["action"], token=token, error=None,
     )
@@ -540,6 +572,13 @@ def respond_submit():
     payload, error = read_respond_token(token)
     if error:
         return jsonify({"error": error}), 400
+
+    try:
+        import sheets_store
+        if sheets_store.is_token_used(token):
+            return jsonify({"error": "This link has already been used to respond."}), 400
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
 
     # The token proves WHICH vehicle this link may answer for - that's the
     # actual security boundary. The pre-selected action is only a default;
@@ -571,6 +610,14 @@ def respond_submit():
         return jsonify({"error": str(e)}), 503
     except Exception as e:
         return jsonify({"error": f"Could not save your response right now: {e}"}), 503
+
+    # Only mark the token spent once the response is actually saved - a
+    # failed save above must leave the link usable for a retry, not
+    # burn it on an attempt that never took effect.
+    try:
+        sheets_store.mark_token_used(token)
+    except Exception as e:
+        print(f"Could not record token as used for {plate}: {e}")
 
     _notify_async(plate, comment, name, "client", "feedback", requires_followup, None)
 

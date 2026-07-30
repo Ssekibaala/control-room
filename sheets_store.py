@@ -25,6 +25,7 @@ local file nobody's watching.
 
 import os
 import json
+import hashlib
 from datetime import datetime
 
 FEEDBACK_HEADERS = ["Plate", "Comment", "RequiresFollowup", "Status", "DateAdded", "AddedBy", "Role", "EntryType"]
@@ -211,6 +212,20 @@ def set_user_email(username, email):
     if cell is None:
         return False
     ws.update_cell(cell.row, USER_HEADERS.index("Email") + 1, email)
+    return True
+
+
+def delete_user_sheet(username):
+    """Removes one account's row entirely. Returns True if it was found
+    (and removed), False if there was no such account. This is the only
+    way to remove an account short of editing the Sheet by hand - there
+    was previously no delete path anywhere in this app."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return False
+    ws.delete_rows(cell.row)
     return True
 
 
@@ -807,3 +822,47 @@ def load_tamper_checks():
     for plate in out:
         out[plate].sort(key=lambda e: e["checkedAt"] or datetime.min, reverse=True)
     return out
+
+
+# ---- Respond-token single-use tracking -----------------------------
+# A respond token (respond_tokens.py) is a signed, 30-day-valid
+# credential mailed to whoever needs to answer one specific question -
+# there was nothing stopping the exact same link from being submitted
+# repeatedly with different answers for the rest of that month (found
+# during an end-to-end QA pass: resubmitting one link twice, with
+# different names/comments/answers, both succeeded). Storing a hash of
+# every token that's actually been submitted (never the raw token -
+# no reason to keep something that doubles as a bearer credential
+# lying around in plaintext) turns "valid for 30 days" into "valid for
+# one use within 30 days", without touching the token format itself.
+USED_TOKEN_HEADERS = ["TokenHash", "UsedAt"]
+
+
+def _hash_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _get_or_create_used_tokens_tab(client, sheet_id):
+    sh = _open_spreadsheet(client, sheet_id)
+    try:
+        ws = sh.worksheet("UsedRespondTokens")
+    except Exception:
+        ws = sh.add_worksheet(title="UsedRespondTokens", rows=500, cols=len(USED_TOKEN_HEADERS))
+        ws.append_row(USED_TOKEN_HEADERS)
+        return ws
+    if ws.row_values(1) != USED_TOKEN_HEADERS:
+        ws.update("A1", [USED_TOKEN_HEADERS])
+    return ws
+
+
+def is_token_used(token):
+    client, sheet_id = _get_client()
+    ws = _get_or_create_used_tokens_tab(client, sheet_id)
+    target = _hash_token(token)
+    return any(str(row.get("TokenHash", "")).strip() == target for row in ws.get_all_records())
+
+
+def mark_token_used(token):
+    client, sheet_id = _get_client()
+    ws = _get_or_create_used_tokens_tab(client, sheet_id)
+    ws.append_row([_hash_token(token), datetime.now().strftime("%d/%m/%Y %H:%M")])
