@@ -28,6 +28,7 @@ DEFAULTS = {
         "pending_digest_interval_days": "7",     # client digest: vehicles in Pending Customer Confirmation
         "escalation_digest_interval_days": "7",  # staff digest: vehicles in Technical Escalation
         "pending_confirmation_overdue_days": "2",  # visual "overdue" flag inside the client digest only
+        "known_issues_checkin_interval_days": "7",  # client digest: re-confirm vehicles marked Known Issue
     },
 }
 
@@ -58,5 +59,6 @@ def load_settings(path="settings.ini"):
         "PENDING_DIGEST_INTERVAL_DAYS": config.getfloat("digests", "pending_digest_interval_days"),
         "ESCALATION_DIGEST_INTERVAL_DAYS": config.getfloat("digests", "escalation_digest_interval_days"),
         "PENDING_CONFIRMATION_OVERDUE_DAYS": config.getfloat("digests", "pending_confirmation_overdue_days"),
+        "KNOWN_ISSUES_CHECKIN_INTERVAL_DAYS": config.getfloat("digests", "known_issues_checkin_interval_days"),
         "_path": os.path.abspath(path),
     }

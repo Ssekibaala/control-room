@@ -15,8 +15,8 @@ already do for the Sheets API itself.
 
 import os
 import smtplib
+import uuid
 from email.message import EmailMessage
-from email.utils import make_msgid
 
 SMTP_HOST = "mail.teletracfleets.com"
 SMTP_PORT = 587
@@ -49,7 +49,17 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     msg["Subject"] = subject
     msg["From"] = address
     msg["To"] = ", ".join(to_addrs)
-    msg["Message-ID"] = make_msgid(domain=address.split("@")[-1])
+    # Deliberately NOT setting our own Message-ID header - confirmed by a
+    # controlled A/B test (identical message, only this header changed)
+    # that a client-generated Message-ID gets this mail silently dropped
+    # somewhere between this server and the recipient, no SMTP-level
+    # rejection at all (clean 250 OK either way). Leaving it unset lets
+    # the relay (an Exim-based host) assign its own, which is what every
+    # successful send in that test had in common. Threading across a
+    # case's emails already works from the shared subject line alone
+    # (confirmed: multiple sends with the same subject land in one Gmail
+    # thread) - In-Reply-To/References below are a secondary hint only,
+    # not load-bearing, so this doesn't break anything by going missing.
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:
@@ -63,12 +73,17 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     msg.set_content("This message requires an HTML-capable email client to view.")
     msg.add_alternative(preheader_html + html_body, subtype="html")
 
+    # Purely an internal bookkeeping token for sheets_store's thread
+    # ledger (record_sent_message) - never attached to the outgoing
+    # message itself, see the note above on why.
+    local_id = f"<{uuid.uuid4()}@{address.split('@')[-1]}>"
+
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
             smtp.starttls()
             smtp.login(address, password)
             smtp.send_message(msg)
-        return msg["Message-ID"], None
+        return local_id, None
     except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected):
         # Port 587 itself was unreachable (blocked/filtered), not a mailbox
         # or content problem - worth one retry over 465 before giving up,
@@ -81,6 +96,6 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_SSL_PORT, timeout=20) as smtp:
             smtp.login(address, password)
             smtp.send_message(msg)
-        return msg["Message-ID"], None
+        return local_id, None
     except Exception as e:
         return None, str(e)

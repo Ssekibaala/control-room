@@ -328,6 +328,10 @@ def run_import(username=None, password=None, force=False):
             classification, base_url, digest_settings["ESCALATION_DIGEST_INTERVAL_DAYS"])
         if escalation_result["sent"]:
             print(f"Technical-escalation digest sent for {escalation_result['count']} vehicle(s)")
+        checkin_result = notifications.send_known_issues_checkin_digest(
+            classification, base_url, digest_settings["KNOWN_ISSUES_CHECKIN_INTERVAL_DAYS"])
+        if checkin_result["sent"]:
+            print(f"Known-issues check-in digest sent for {checkin_result['count']} vehicle(s)")
     except Exception as e:
         print(f"Digest pass failed: {e}")
 

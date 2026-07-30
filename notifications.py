@@ -198,11 +198,21 @@ def _offline_platform_detail(info):
 def send_pending_confirmation_digest(classification, base_url, interval_days, overdue_days):
     """
     Weekly (configurable, see settings.ini [digests]) rollup to the
-    client of EVERY vehicle currently in Pending Customer Confirmation -
-    a snapshot of current state, not a per-vehicle transition alert like
-    check_reconnections above. A vehicle that's been sitting here for a
-    month reappears in every digest until it actually resolves; that's
-    intentional, not a bug to dedupe away.
+    client of EVERY vehicle currently in Pending Customer Confirmation,
+    PLUS every vehicle already in Technical Escalation that has never
+    had a single feedback entry - a snapshot of current state, not a
+    per-vehicle transition alert like check_reconnections above. A
+    vehicle that's been sitting here for a month reappears in every
+    digest until it actually resolves; that's intentional, not a bug to
+    dedupe away.
+
+    The no-feedback-yet section exists because nothing else in this
+    codebase proactively emails the client about a Technical Escalation
+    vehicle - on_comment_added() only fires once someone has already
+    written a comment, and check_reconnections only fires on an
+    Offline->Online transition. A vehicle that escalates and that
+    nobody ever comments on would otherwise get zero client
+    communication, indefinitely.
 
     Gated purely on elapsed time since the last send
     (sheets_store.get_digest_last_sent/set_digest_last_sent) - escalation
@@ -225,8 +235,12 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
         (plate, info) for plate, info in classification.items()
         if info.get("status") == "Pending Customer Confirmation"
     )
-    if not pending:
-        result["reason"] = "nothing pending"
+    critical_no_feedback = sorted(
+        (plate, info) for plate, info in classification.items()
+        if info.get("status") == "Technical Escalation" and info.get("feedback") is None
+    )
+    if not pending and not critical_no_feedback:
+        result["reason"] = "nothing pending and no unreported critical vehicles"
         return result
 
     to = _client_recipients()
@@ -235,22 +249,25 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
         return result
 
     import respond_tokens
-    overdue_seen = False
-    vehicles = []
-    for plate, info in pending:
-        days = info.get("days_silent") or 0
-        overdue = days >= overdue_days
-        overdue_seen = overdue_seen or overdue
-        vehicles.append({
-            "plate": plate, "detail": _offline_platform_detail(info), "overdue": overdue,
+
+    def _vehicle_dict(plate, info, overdue=None):
+        v = {
+            "plate": plate, "detail": _offline_platform_detail(info),
             "no_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}",
             "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
-        })
+        }
+        if overdue is not None:
+            v["overdue"] = overdue
+        return v
+
+    vehicles = [_vehicle_dict(p, i, overdue=(i.get("days_silent") or 0) >= overdue_days) for p, i in pending]
+    critical_vehicles = [_vehicle_dict(p, i) for p, i in critical_no_feedback]
 
     timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_pending_confirmation_digest_email(vehicles, timestamp)
-    message_id, err = mailer.send(
-        to, f"Weekly check-in: {len(vehicles)} vehicle(s) awaiting your confirmation", html, preheader)
+    html, preheader = email_templates.build_pending_confirmation_digest_email(
+        vehicles, timestamp, critical_no_feedback=critical_vehicles)
+    total = len(vehicles) + len(critical_vehicles)
+    message_id, err = mailer.send(to, f"Weekly check-in: {total} vehicle(s) need your input", html, preheader)
     if err:
         result["reason"] = err
         return result
@@ -259,6 +276,70 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
         sheets_store.set_digest_last_sent("pending_confirmation")
     except Exception as e:
         print(f"Pending-confirmation digest sent but could not record last-sent timestamp: {e}")
+    result["sent"], result["count"] = True, total
+    return result
+
+
+def send_known_issues_checkin_digest(classification, base_url, interval_days):
+    """
+    Client-facing counterpart to send_pending_confirmation_digest: a
+    weekly re-confirmation of every vehicle currently marked Known
+    Issue (classifier.py's known_issue override - an earlier explicit
+    "no follow-up needed"). That's a point-in-time judgement, not a
+    permanent fact - the same problem could recur, or the client's
+    circumstances could have changed - so this keeps asking rather than
+    treating one old answer as settled forever. Same snapshot-not-
+    transition shape and interval-gating as the other two digests.
+    """
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0}
+    try:
+        last_sent = sheets_store.get_digest_last_sent("known_issues_checkin")
+        if last_sent and (datetime.now() - last_sent).days < interval_days:
+            result["reason"] = "interval not elapsed"
+            return result
+    except Exception as e:
+        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
+        return result
+
+    known = sorted(
+        (plate, info) for plate, info in classification.items()
+        if info.get("status") == "Known Issue"
+    )
+    if not known:
+        result["reason"] = "no known issues on file"
+        return result
+
+    to = _client_recipients()
+    if not to:
+        result["reason"] = "no client recipients on file"
+        return result
+
+    import respond_tokens
+    vehicles = []
+    for plate, info in known:
+        fb = info.get("feedback") or {}
+        date = fb.get("date")
+        vehicles.append({
+            "plate": plate,
+            "last_comment": fb.get("comment") or "No follow-up needed.",
+            "last_author": fb.get("addedBy") or "unknown",
+            "last_date": date.strftime("%d %b %Y") if hasattr(date, "strftime") else "",
+            "no_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}",
+            "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
+        })
+
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_known_issues_checkin_digest_email(vehicles, timestamp)
+    message_id, err = mailer.send(to, f"Quick check-in: please reconfirm {len(vehicles)} known issue(s)", html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+
+    try:
+        sheets_store.set_digest_last_sent("known_issues_checkin")
+    except Exception as e:
+        print(f"Known-issues check-in digest sent but could not record last-sent timestamp: {e}")
     result["sent"], result["count"] = True, len(vehicles)
     return result
 

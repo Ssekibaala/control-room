@@ -298,7 +298,28 @@ def _pending_digest_row(v):
     """
 
 
-def build_pending_confirmation_digest_email(vehicles, timestamp):
+def _critical_no_feedback_row(v):
+    """A vehicle in Technical Escalation with zero feedback on file -
+    nobody has told the client about it yet, which is a different (and
+    more urgent) situation than one they've already been asked about
+    and simply haven't answered. Same respond buttons as the pending
+    section: clicking either one creates that vehicle's FIRST feedback
+    entry, exactly like answering any other respond-token email."""
+    return f"""
+      <tr><td style="padding:16px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:15px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>
+        &nbsp;{_badge('No feedback on file', DANGER)}<br>
+        <span style="font-size:11.5px;color:{MUTED};">{_esc(v['detail'])}</span>
+        <div style="margin-top:10px;">
+          {_button("No follow-up needed", v['no_url'], SUCCESS)}
+          &nbsp;&nbsp;
+          {_button("Needs attention", v['need_url'], WARNING)}
+        </div>
+      </td></tr>
+    """
+
+
+def build_pending_confirmation_digest_email(vehicles, timestamp, critical_no_feedback=None):
     """
     One weekly email to the client listing EVERY vehicle currently in
     Pending Customer Confirmation (some, not all, platforms silent) -
@@ -307,14 +328,33 @@ def build_pending_confirmation_digest_email(vehicles, timestamp):
     the single-vehicle update email always has; nothing new for
     /feedback/respond to handle. `vehicles` is a list of dicts:
     {plate, detail, no_url, need_url, overdue}.
+
+    `critical_no_feedback` (same dict shape, minus `overdue`) is a
+    second, separately-labelled section: vehicles already in Technical
+    Escalation that have never had a single feedback entry - actively
+    escalated, but the client has never actually been told. Nothing
+    upstream proactively emails about these otherwise (staff-initiated
+    comments and the reconnect-check both require an entry to already
+    exist), so without this section they could sit silently forever.
     """
+    critical_no_feedback = critical_no_feedback or []
     rows = "".join(_pending_digest_row(v) for v in vehicles)
-    inner = f"""
-      <tr><td style="padding:26px 28px 8px;">
-        <span style="font-size:19px;font-weight:800;color:{INK};">Vehicles awaiting your confirmation</span><br>
-        <span style="font-size:12px;color:{MUTED};">{len(vehicles)} vehicle(s) &middot; {_esc(timestamp)}</span>
+    critical_rows = "".join(_critical_no_feedback_row(v) for v in critical_no_feedback)
+    total = len(vehicles) + len(critical_no_feedback)
+    critical_section = f"""
+      <tr><td style="padding:8px 28px 4px;">
+        <span style="font-size:13px;font-weight:800;color:{DANGER};">Critical &mdash; no feedback on file yet</span><br>
+        <span style="font-size:12px;color:{MUTED};">
+          Every platform has gone silent on these and we haven't heard from you about them at all.
+        </span>
       </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{critical_rows}</table>
+      </td></tr>
+    """ if critical_rows else ""
+    pending_section = f"""
       <tr><td style="padding:0 28px 4px;">
+        {"<span style='font-size:13px;font-weight:800;color:" + INK + ";'>Awaiting your confirmation</span><br>" if critical_rows else ""}
         <span style="font-size:13px;color:{INK};line-height:1.5;">
           These vehicles have one or more tracking platforms not reporting. For each one below, let us know
           whether it needs follow-up from our side.
@@ -323,8 +363,67 @@ def build_pending_confirmation_digest_email(vehicles, timestamp):
       <tr><td style="padding:0 28px 22px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>
       </td></tr>
+    """ if rows else ""
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Vehicles needing your input</span><br>
+        <span style="font-size:12px;color:{MUTED};">{total} vehicle(s) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      {critical_section}
+      {pending_section}
     """
-    preheader = f"{len(vehicles)} vehicle(s) awaiting your confirmation"
+    preheader = f"{total} vehicle(s) need your input"
+    return _shell(inner), preheader
+
+
+def _known_issue_checkin_row(v):
+    """Re-confirmation row: shows what was said last time (comment,
+    author, date) so the client isn't asked blind - they see exactly
+    what they're being asked to reconfirm still holds."""
+    return f"""
+      <tr><td style="padding:16px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:15px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>
+        &nbsp;{_badge('Known issue', SUCCESS)}<br>
+        <span style="font-size:12.5px;color:{INK};display:block;margin:6px 0;">&ldquo;{_esc(v['last_comment'])}&rdquo;</span>
+        <span style="font-size:10.5px;color:{MUTED};">&mdash; {_esc(v['last_author'])}, {_esc(v['last_date'])}</span>
+        <div style="margin-top:10px;">
+          {_button("Still the same", v['no_url'], SUCCESS)}
+          &nbsp;&nbsp;
+          {_button("Actually needs attention", v['need_url'], WARNING)}
+        </div>
+      </td></tr>
+    """
+
+
+def build_known_issues_checkin_digest_email(vehicles, timestamp):
+    """
+    Weekly email to the client re-confirming every vehicle currently
+    marked Known Issue (an earlier "no follow-up needed"). A known
+    issue can stop being accurate - the underlying problem could
+    recur, or what was true a month ago just isn't anymore - so this
+    keeps asking rather than treating one old "no follow-up" as
+    permanent. Same snapshot-not-transition shape as the other two
+    digests: reappears every interval for as long as the vehicle stays
+    a Known Issue, not just once. `vehicles` is a list of dicts:
+    {plate, last_comment, last_author, last_date, no_url, need_url}.
+    """
+    rows = "".join(_known_issue_checkin_row(v) for v in vehicles)
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Quick check-in on known issues</span><br>
+        <span style="font-size:12px;color:{MUTED};">{len(vehicles)} vehicle(s) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 4px;">
+        <span style="font-size:13px;color:{INK};line-height:1.5;">
+          These were previously marked as known issues needing no follow-up. Please confirm each one is
+          still accurate.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>
+      </td></tr>
+    """
+    preheader = f"Please reconfirm {len(vehicles)} known issue(s)"
     return _shell(inner), preheader
 
 
