@@ -41,6 +41,7 @@ PANEL_LABELS = {
     "p-tconfirmed": "Confirmed Cases",
     "p-tunconfirmed": "Unconfirmed Cases",
     "p-tquality": "Data Quality Log",
+    "p-tchecked": "Checked Assets",
 }
 
 # Which data sections each panel needs to render. This is what makes
@@ -59,6 +60,7 @@ PANEL_SECTIONS = {
     "p-tconfirmed":   {"tamperConfirmed"},
     "p-tunconfirmed": {"tamperUnconfirmed"},
     "p-tquality":     {"qualityLog"},
+    "p-tchecked":     {"tamperChecked"},
 }
 
 # Same idea for the KPI counters that belong to a specific panel: shown
@@ -93,6 +95,7 @@ _DEFAULT_PANEL_ACCESS = {
     "p-tconfirmed":    ("admin", "technician"),
     "p-tunconfirmed":  ("admin", "technician"),
     "p-tquality":      ("admin", "technician"),
+    "p-tchecked":      ("admin", "technician"),
 }
 
 # Overrides saved from the Roles & Visibility editor live in their own

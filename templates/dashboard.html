@@ -966,6 +966,12 @@
           <span>Data Quality Log</span><span class="nav-count">0</span>
         </button>
 {% endif %}
+        {% if 'p-tchecked' in allowed_panels %}
+<button class="nav-item" data-panel="p-tchecked" data-label="Checked Assets">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+          <span>Checked Assets</span><span class="nav-count success" id="tchecked-nav-badge">0</span>
+        </button>
+{% endif %}
       </nav>
 
       {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels %}
@@ -1223,6 +1229,12 @@
         <button class="speed-btn" id="tour-speed-btn" title="Auto-tour scroll speed, click to change">
           <span id="tour-speed-label">1x</span>
         </button>
+        {% if can_manage_users %}
+        <span class="header-pill" id="checkin-last-pill" title="Who last sent a manual check-in, and when">Check-in: loading&hellip;</span>
+        <button class="icon-btn" id="checkin-trigger-btn" title="Send a check-in now: pending confirmations, critical assets, and known-issue re-confirmations">
+          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3.5-7.1"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        {% endif %}
         {% if can_export_integrity or can_export_tampering %}
         <div class="export-wrap">
           <button class="btn-primary" id="export-toggle">Export <svg viewBox="0 0 24 24" class="chev"><path d="m6 9 6 6 6-6"/></svg></button>
@@ -1565,6 +1577,16 @@
       {% if 'p-tconfirmed' in allowed_panels %}
 <section id="p-tconfirmed" class="panel">
         <div class="grid-toolbar"><h3>Confirmed Tampering Cases</h3><span class="row-count" id="tconfirmed-count"></span></div>
+        <div class="callout muted tamper-check-form">
+          <b>Mark an asset as checked</b> &mdash; excludes it from these lists (as of the check date) starting
+          with the next import.
+          <div class="ff-row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+            <input type="text" class="tc-plate" placeholder="Plate" style="max-width:140px;">
+            <input type="text" class="tc-comment" placeholder="What did you find?" style="flex:1;min-width:220px;">
+            <button type="button" class="btn-primary tc-submit">Mark Checked</button>
+          </div>
+          <div class="tc-msg" style="font-size:12px;margin-top:6px;"></div>
+        </div>
         <div class="table-wrap"><table id="tconfirmed-table"></table></div>
       </section>
 {% endif %}
@@ -1572,6 +1594,16 @@
       {% if 'p-tunconfirmed' in allowed_panels %}
 <section id="p-tunconfirmed" class="panel">
         <div class="grid-toolbar"><h3>Unconfirmed Tampering Cases</h3><span class="row-count" id="tunconfirmed-count"></span></div>
+        <div class="callout muted tamper-check-form">
+          <b>Mark an asset as checked</b> &mdash; excludes it from these lists (as of the check date) starting
+          with the next import.
+          <div class="ff-row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+            <input type="text" class="tc-plate" placeholder="Plate" style="max-width:140px;">
+            <input type="text" class="tc-comment" placeholder="What did you find?" style="flex:1;min-width:220px;">
+            <button type="button" class="btn-primary tc-submit">Mark Checked</button>
+          </div>
+          <div class="tc-msg" style="font-size:12px;margin-top:6px;"></div>
+        </div>
         <div class="table-wrap"><table id="tunconfirmed-table"></table></div>
       </section>
 {% endif %}
@@ -1581,6 +1613,17 @@
         <div class="callout muted">0 trip boundaries excluded because one side reported a null (0,0) GPS coordinate, a device placeholder for "no signal", not a real position.</div>
         <div class="grid-toolbar"><h3>Data Quality Log</h3></div>
         <div class="table-wrap"><table id="tquality-table"></table></div>
+      </section>
+{% endif %}
+
+      {% if 'p-tchecked' in allowed_panels %}
+<section id="p-tchecked" class="panel">
+        <div class="callout muted">
+          Vehicles physically inspected after a tampering flag. Excluded from Confirmed/Unconfirmed above from
+          their check date onward (a new gap after the check still shows normally).
+        </div>
+        <div class="grid-toolbar"><h3>Checked Assets</h3><span class="row-count" id="tchecked-count"></span></div>
+        <div class="table-wrap"><table id="tchecked-table"></table></div>
       </section>
 {% endif %}
 
@@ -1621,7 +1664,8 @@ function fillMissingSectionsWithSafeDefaults(d) {
   // them with empty defaults means every existing render/chart call
   // below can run unmodified instead of needing a guard at each site.
   const listDefaults = ['tamperConfirmed', 'tamperUnconfirmed', 'qualityLog', 'severityBands',
-                         'topVehicles', 'doubleFlagged', 'tamperCards', 'settingsRows', 'border', 'full'];
+                         'topVehicles', 'doubleFlagged', 'tamperCards', 'settingsRows', 'border', 'full',
+                         'tamperChecked'];
   listDefaults.forEach(k => { if (d[k] === undefined) d[k] = []; });
   const kpiDefaults = ['tamperConfirmed', 'tamperUnconfirmed', 'tamperGapsChecked', 'nullGpsExcluded', 'doubleFlagged', 'border'];
   if (d.kpi) kpiDefaults.forEach(k => { if (d.kpi[k] === undefined) d.kpi[k] = 0; });
@@ -1923,6 +1967,7 @@ const PANEL_SUBS = {
   'p-priority': 'Integrity issues confirmed by tampering evidence', 'p-tsummary': 'Location-continuity analysis overview',
   'p-tconfirmed': 'Location gap plus a power event logged', 'p-tunconfirmed': 'Location gap, no power event, needs a field check',
   'p-tquality': 'Excluded for null GPS fix',
+  'p-tchecked': 'Physically inspected, excluded from the lists above',
   'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
   'p-activity': 'Every feedback comment across every vehicle, newest first',
   'p-users': 'Team accounts and role assignment',
@@ -2117,6 +2162,85 @@ wireOnce('export-menu', () => {
   if (exportIntegrityBtn) exportIntegrityBtn.addEventListener('click', () => { window.location.href = '/api/export/integrity'; });
   const exportTamperBtn = document.getElementById('export-tamper');
   if (exportTamperBtn) exportTamperBtn.addEventListener('click', () => { window.location.href = '/api/export/tampering'; });
+});
+
+// ---- Manual check-in trigger: admin/technician only (server-gated,
+// same as the export menu above). Forces the pending-confirmation,
+// technical-escalation, and known-issues digests out now regardless of
+// their weekly interval - see app.py's /api/checkin/trigger and
+// run_import.py's force_digests. Runs in the background on the server
+// (a real mail fetch), so this just starts it and lets the "last sent"
+// pill catch up on its own poll rather than blocking on the result.
+function refreshCheckinPill() {
+  const pill = document.getElementById('checkin-last-pill');
+  if (!pill) return;
+  fetch('/api/checkin/last').then(r => r.json()).then(d => {
+    pill.textContent = d.lastCheckin
+      ? 'Check-in: ' + d.lastCheckin.by + ' · ' + d.lastCheckin.at
+      : 'Check-in: never sent manually';
+  }).catch(() => { pill.textContent = 'Check-in: unknown'; });
+}
+wireOnce('checkin-trigger', () => {
+  refreshCheckinPill();
+  const btn = document.getElementById('checkin-trigger-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (!confirm('Send a check-in now? This emails the client (pending confirmations, critical assets) and staff (technical escalations) immediately, regardless of the weekly schedule.')) return;
+    btn.disabled = true;
+    const pill = document.getElementById('checkin-last-pill');
+    if (pill) pill.textContent = 'Check-in: sending…';
+    fetch('/api/checkin/trigger', { method: 'POST' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(() => {
+        // The import itself (real mail fetch + Sheets writes) runs in
+        // the background on the server - poll a few times rather than
+        // assume a single fixed delay is always enough.
+        let tries = 0;
+        const poll = setInterval(() => {
+          tries++;
+          refreshCheckinPill();
+          if (tries >= 6) clearInterval(poll);
+        }, 5000);
+      })
+      .catch(() => { if (pill) pill.textContent = 'Check-in: could not start'; })
+      .finally(() => { btn.disabled = false; });
+  });
+});
+
+// ---- Mark a tampering case as checked (POST /api/tamper-check). Takes
+// effect from the NEXT import onward (see run_import.py's
+// _filter_checked_gaps), not this current dashboard load - the message
+// says so explicitly rather than implying it vanished immediately.
+wireOnce('tamper-check-form', () => {
+  document.querySelectorAll('.tamper-check-form').forEach(form => {
+    const submitBtn = form.querySelector('.tc-submit');
+    const plateInput = form.querySelector('.tc-plate');
+    const commentInput = form.querySelector('.tc-comment');
+    const msgEl = form.querySelector('.tc-msg');
+    submitBtn.addEventListener('click', () => {
+      const plate = plateInput.value.trim().toUpperCase();
+      const comment = commentInput.value.trim();
+      if (!plate || !comment) {
+        msgEl.textContent = 'Plate and a comment on what was found are both required.';
+        msgEl.style.color = 'var(--danger, #FF5C7A)';
+        return;
+      }
+      submitBtn.disabled = true;
+      fetch('/api/tamper-check', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({plate, comment}),
+      })
+        .then(r => r.json().then(d => ({ok: r.ok, d})))
+        .then(({ok, d}) => {
+          if (!ok) throw new Error(d.error || 'Could not save');
+          msgEl.style.color = 'var(--success, #2EE6A6)';
+          msgEl.textContent = plate + ' marked checked. Excluded from these lists starting with the next import.';
+          plateInput.value = ''; commentInput.value = '';
+        })
+        .catch(e => { msgEl.style.color = 'var(--danger, #FF5C7A)'; msgEl.textContent = e.message; })
+        .finally(() => { submitBtn.disabled = false; });
+    });
+  });
 });
 
 // ---- Notification bell: badge total + a breakdown dropdown showing
@@ -2643,6 +2767,7 @@ const NAV_COUNT_BY_PANEL = {
   'p-tunconfirmed': () => DATA.tamperUnconfirmed.length,
   'p-tquality': () => DATA.qualityLog.length,
   'p-known': () => (DATA.knownIssues || []).length,
+  'p-tchecked': () => (DATA.tamperChecked || []).length,
 };
 document.querySelectorAll('.nav-item[data-panel]').forEach(btn => {
   const getCount = NAV_COUNT_BY_PANEL[btn.dataset.panel];
@@ -3152,6 +3277,10 @@ const KNOWN_ISSUE_COLS = [
   {key:'feedback', label:'Reported Reason'}, {key:'reportedBy', label:'Reported By'}, {key:'feedbackDate', label:'Reported On'},
   {key:'location', label:'Last Known Location'},
 ];
+const TCHECKED_COLS = [
+  {key:'plate', label:'Plate'}, {key:'checkedBy', label:'Checked By'}, {key:'checkedAt', label:'Checked On'},
+  {key:'comment', label:'What Was Found'},
+];
 const SIMPLE_COLS = [{key:'plate', label:'Plate'}, {key:'status', label:'Current Status'}];
 const SETTINGS_COLS = [{key:'setting', label:'Setting'}, {key:'value', label:'Value Used For This Report'}];
 
@@ -3166,6 +3295,11 @@ renderTable('priority-table', DATA.doubleFlagged, PRIORITY_COLS);
 renderTable('tconfirmed-table', DATA.tamperConfirmed, TAMPER_COLS, 'tconfirmed-count');
 renderTable('tunconfirmed-table', DATA.tamperUnconfirmed, TAMPER_COLS, 'tunconfirmed-count');
 renderTable('tquality-table', DATA.qualityLog, QUALITY_COLS);
+renderTable('tchecked-table', DATA.tamperChecked || [], TCHECKED_COLS, 'tchecked-count');
+{
+  const badge = document.getElementById('tchecked-nav-badge');
+  if (badge) badge.textContent = (DATA.tamperChecked || []).length;
+}
 renderTable('recovered-table', DATA.recoveredList, SIMPLE_COLS);
 renderTable('newlyoffline-table', DATA.newlyOfflineList, SIMPLE_COLS);
 renderTable('settings-table', DATA.settingsRows, SETTINGS_COLS);

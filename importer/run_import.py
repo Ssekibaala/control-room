@@ -126,16 +126,69 @@ def fetch_reports(username, password, work_dir=WORK_DIR):
     return paths
 
 
-def process_reports(paths, settings_path=None, feedback_rows=None):
+def _parse_gap_date(g):
+    """The gap's own date, for comparing against a plate's latest tamper
+    check - ArrivalDate/ArrivalTime is when the vehicle actually went
+    quiet (the start of the unexplained gap), the more meaningful anchor
+    than NextDate (when it reappeared)."""
+    try:
+        return datetime.strptime(f"{g['ArrivalDate']} {g['ArrivalTime']}", "%d/%m/%Y %H:%M:%S")
+    except (ValueError, KeyError):
+        try:
+            return datetime.strptime(g["ArrivalDate"], "%d/%m/%Y")
+        except (ValueError, KeyError):
+            return None
+
+
+def _filter_checked_gaps(cases, tamper_checks):
+    """Drops any gap already explained by a physical check dated on or
+    after it - see sheets_store.load_tamper_checks()'s docstring for
+    why the boundary is a check date, not a blanket per-plate
+    suppression. A plate with no check record at all is untouched."""
+    kept = []
+    for g in cases:
+        checks = tamper_checks.get(g["Plate"])
+        if not checks:
+            kept.append(g)
+            continue
+        latest_check = checks[0]["checkedAt"]  # load_tamper_checks() sorts newest first
+        gap_date = _parse_gap_date(g)
+        if latest_check and gap_date and gap_date <= latest_check:
+            continue  # already physically explained
+        kept.append(g)
+    return kept
+
+
+def _checked_assets_summary(tamper_checks):
+    """Flat list for the dashboard's Checked Assets section and the
+    tamper risk report email - every check record, newest first
+    overall (not just newest-first per plate)."""
+    rows = [
+        {"plate": plate, "checkedBy": c["checkedBy"],
+         "checkedAt": c["checkedAt"].strftime("%d %b %Y, %H:%M") if c["checkedAt"] else "",
+         "comment": c["comment"]}
+        for plate, checks in tamper_checks.items() for c in checks
+    ]
+    rows.sort(key=lambda r: r["checkedAt"], reverse=True)
+    return rows
+
+
+def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None):
     """
     Pure processing, no network. paths is the dict returned by
     fetch_reports() (or, for testing, pointed at the known-good local
     sample files). Returns the same data dict the dashboard serves.
+
+    tamper_checks (sheets_store.load_tamper_checks()'s shape) is loaded
+    by the caller, same reason feedback_rows is: this function stays
+    Sheets/network-free per its own docstring, the caller does the one
+    read and hands the result in as plain data.
     """
     check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
     settings = load_settings(settings_path or os.path.join(DATA_DIR, "settings.ini"))
     feedback = feedback_rows or {}
+    tamper_checks = tamper_checks or {}
 
     all_rows = []
     all_rows += teletrac_csv.parse(paths["teletrac_offline"])
@@ -150,21 +203,27 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
     results = classify_fleet(grouped, settings, feedback, now=now)
 
     tamper_result = run_tamper_analysis(paths["mix_movement"], paths["mix_power_events"])
+    confirmed_cases = _filter_checked_gaps(
+        [_tamper_case_to_loader_shape(g) for g in tamper_result["confirmed"]], tamper_checks)
+    unconfirmed_cases = _filter_checked_gaps(
+        [_tamper_case_to_loader_shape(g) for g in tamper_result["unconfirmed"]], tamper_checks)
     tampering = {
-        "confirmed": [_tamper_case_to_loader_shape(g) for g in tamper_result["confirmed"]],
-        "unconfirmed": [_tamper_case_to_loader_shape(g) for g in tamper_result["unconfirmed"]],
+        "confirmed": confirmed_cases,
+        "unconfirmed": unconfirmed_cases,
         "summary": {
             "gaps_checked": len(tamper_result["gaps"]),
             "mismatches": len(tamper_result["mismatches"]),
-            "confirmed": len(tamper_result["confirmed"]),
-            "unconfirmed": len(tamper_result["unconfirmed"]),
+            "confirmed": len(confirmed_cases),
+            "unconfirmed": len(unconfirmed_cases),
             "null_gps_excluded": len(tamper_result["skipped"]),
             "period_label": "",
         },
-        "severity_bands": _severity_bands_from_tamper_result(tamper_result),
-        "top_vehicles": _top_vehicles_from_tamper_result(tamper_result),
+        "severity_bands": _severity_bands_from_tamper_result(confirmed_cases, unconfirmed_cases),
+        "top_vehicles": _top_vehicles_from_tamper_result(confirmed_cases),
         "quality_log": [_quality_skip_to_loader_shape(s) for s in tamper_result["skipped"]],
     }
+    checked_assets = _checked_assets_summary(tamper_checks)
+    tampering["checked_assets"] = checked_assets
 
     # Generate the actual downloadable .xlsx files - same formatting as
     # the original standalone tool (report_writer.write_report() for
@@ -178,7 +237,8 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
                                 output_path=integrity_path, report_date=now, history_available=False)
     build_tamper_workbook(tamper_result, tamper_path)
 
-    data = _build_data(results, settings, tampering, [], [], now, False, integrity_path, tamper_path)
+    data = _build_data(results, settings, tampering, [], [], now, False, integrity_path, tamper_path,
+                        checked_assets=checked_assets)
     data["_skipped_plates"] = sorted(set(skipped))
     # Stashed so run_import() can react to Offline->Online transitions
     # (see notifications.check_reconnections) without this function - kept
@@ -187,6 +247,8 @@ def process_reports(paths, settings_path=None, feedback_rows=None):
     # JSON is written; it's classify_fleet()'s raw internal shape, not
     # something the frontend has any use for.
     data["_classification"] = results
+    # Same reasoning, for the weekly tamper risk report email.
+    data["_tampering"] = tampering
     return data
 
 
@@ -232,21 +294,28 @@ def _tamper_case_to_loader_shape(g):
     }
 
 
-def _severity_bands_from_tamper_result(result):
+def _severity_bands_from_tamper_result(confirmed_cases, unconfirmed_cases):
+    """Takes the already loader-shaped, already checked-gap-filtered
+    lists (see process_reports) rather than the raw tamper_result, so a
+    physically-checked gap is excluded from these counts too, not just
+    from the confirmed/unconfirmed tables themselves."""
     from tamper_engine import severity
     bands = []
     for sname, rule in [("Critical", "> 100 km"), ("High", "10 - 100 km"), ("Moderate", "2 - 10 km")]:
-        confirmed = sum(1 for g in result["confirmed"] if severity(g["DistanceKm"]) == sname)
-        unconfirmed = sum(1 for g in result["unconfirmed"] if severity(g["DistanceKm"]) == sname)
+        confirmed = sum(1 for g in confirmed_cases if severity(g["DistanceKm"]) == sname)
+        unconfirmed = sum(1 for g in unconfirmed_cases if severity(g["DistanceKm"]) == sname)
         bands.append({"severity": sname, "rule": rule, "confirmed": confirmed, "unconfirmed": unconfirmed})
     return bands
 
 
-def _top_vehicles_from_tamper_result(result):
+def _top_vehicles_from_tamper_result(confirmed_cases):
+    """Same note as above - takes the filtered, loader-shaped confirmed
+    list (Plate/Vehicle/FleetNumber/DistanceKm/AssetID), not the raw
+    tamper_result."""
     stats = {}
-    for g in result["confirmed"]:
+    for g in confirmed_cases:
         k = g["AssetID"]
-        stats.setdefault(k, {"assetId": k, "vehicle": g["AssetName"], "fleetNumber": g["FleetNumber"],
+        stats.setdefault(k, {"assetId": k, "vehicle": g["Vehicle"], "fleetNumber": g["FleetNumber"],
                               "confirmedCases": 0, "worstGapKm": 0})
         stats[k]["confirmedCases"] += 1
         stats[k]["worstGapKm"] = max(stats[k]["worstGapKm"], g["DistanceKm"])
@@ -264,7 +333,17 @@ def already_imported_today(data_path=None):
     return generated.startswith(today_str)
 
 
-def run_import(username=None, password=None, force=False):
+def run_import(username=None, password=None, force=False, force_digests=False, prompted_by=None):
+    """
+    force_digests + prompted_by back the dashboard's "Send check-in now"
+    button (app.py's /api/checkin/trigger): force_digests bypasses each
+    digest's own interval gate for this one run only (the gate itself,
+    and every other call site, is untouched), and prompted_by is who
+    clicked it, recorded via sheets_store.record_manual_checkin() so
+    the dashboard can show "last sent by X on Y" back to everyone, not
+    just whoever happened to trigger it. A no-op for the ordinary
+    scheduled import (both default to "don't force, nobody prompted").
+    """
     if not force and already_imported_today():
         return {"status": "skipped", "reason": "already imported today"}
 
@@ -282,8 +361,15 @@ def run_import(username=None, password=None, force=False):
         print(f"WARNING: feedback unavailable this run ({e}), continuing without it.")
         feedback_rows = {}
 
-    data = process_reports(paths, feedback_rows=feedback_rows)
+    try:
+        tamper_checks = sheets_store.load_tamper_checks()
+    except Exception as e:
+        print(f"WARNING: tamper checks unavailable this run ({e}), continuing without them.")
+        tamper_checks = {}
+
+    data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks)
     classification = data.pop("_classification", {})
+    tampering = data.pop("_tampering", {})
 
     # meta.generated reflects the latest timestamp found IN the report
     # data itself, which naturally lags real time (assets report
@@ -315,27 +401,50 @@ def run_import(username=None, password=None, force=False):
     # Weekly (configurable) rollups - snapshots of current state, not
     # tied to this cycle's transitions, so they're independent of
     # check_reconnections above and of each other.
+    digest_results = {}
     try:
         digest_settings = load_settings(os.path.join(DATA_DIR, "settings.ini"))
         import notifications
+
+        def _interval(key):
+            return 0 if force_digests else digest_settings[key]
+
         pending_result = notifications.send_pending_confirmation_digest(
             classification, base_url,
-            digest_settings["PENDING_DIGEST_INTERVAL_DAYS"],
+            _interval("PENDING_DIGEST_INTERVAL_DAYS"),
             digest_settings["PENDING_CONFIRMATION_OVERDUE_DAYS"])
+        digest_results["pending_confirmation"] = pending_result
         if pending_result["sent"]:
             print(f"Pending-confirmation digest sent for {pending_result['count']} vehicle(s)")
         escalation_result = notifications.send_technical_escalation_digest(
-            classification, base_url, digest_settings["ESCALATION_DIGEST_INTERVAL_DAYS"])
+            classification, base_url, _interval("ESCALATION_DIGEST_INTERVAL_DAYS"))
+        digest_results["technical_escalation"] = escalation_result
         if escalation_result["sent"]:
             print(f"Technical-escalation digest sent for {escalation_result['count']} vehicle(s)")
         checkin_result = notifications.send_known_issues_checkin_digest(
-            classification, base_url, digest_settings["KNOWN_ISSUES_CHECKIN_INTERVAL_DAYS"])
+            classification, base_url, _interval("KNOWN_ISSUES_CHECKIN_INTERVAL_DAYS"))
+        digest_results["known_issues_checkin"] = checkin_result
         if checkin_result["sent"]:
             print(f"Known-issues check-in digest sent for {checkin_result['count']} vehicle(s)")
+
+        # Not part of the manual "check-in" button (that's specifically
+        # pending/escalation/known-issues, see app.py's route) - stays on
+        # its own weekly schedule regardless of force_digests.
+        tamper_result = notifications.send_tamper_risk_report_digest(
+            tampering, base_url, digest_settings["TAMPER_REPORT_INTERVAL_DAYS"])
+        digest_results["tamper_risk_report"] = tamper_result
+        if tamper_result["sent"]:
+            print(f"Tamper risk report sent for {tamper_result['count']} vehicle(s)")
+
+        if force_digests:
+            try:
+                sheets_store.record_manual_checkin(prompted_by or "unknown")
+            except Exception as e:
+                print(f"Manual check-in triggered but could not record who prompted it: {e}")
     except Exception as e:
         print(f"Digest pass failed: {e}")
 
-    return {"status": "ok", "generated": data["meta"]["generated"]}
+    return {"status": "ok", "generated": data["meta"]["generated"], "digests": digest_results}
 
 
 def _public_base_url():

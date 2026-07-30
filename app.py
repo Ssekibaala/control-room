@@ -739,6 +739,84 @@ def api_refresh_if_stale():
     return jsonify({"status": "refresh_triggered", "ageHours": round(age_hours, 1)})
 
 
+@app.route("/api/checkin/trigger", methods=["POST"])
+@login_required
+def api_checkin_trigger():
+    """
+    The dashboard's "Send check-in now" button (admin/technician only -
+    this pulls fresh mail and sends real email to the client, not
+    something to expose to a client-role session). Runs a real import
+    (force=True, same as the stale-refresh path above) so the digests
+    reflect current data, then force-sends the pending-confirmation,
+    technical-escalation, and known-issues-checkin digests regardless
+    of their normal weekly interval - see run_import.py's force_digests
+    param. The tampering report is NOT part of this button; it stays on
+    its own schedule (see notifications.send_tamper_risk_report_digest).
+
+    Runs in the background (a real IMAP fetch + Sheets reads/writes can
+    take a while) - the caller finds out who last triggered it via
+    GET /api/checkin/last below, not from this response.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    username = session["username"]
+
+    def _background_checkin():
+        try:
+            from run_import import run_import as do_import
+            do_import(force=True, force_digests=True, prompted_by=username)
+        except Exception as e:
+            print(f"Manual check-in failed: {e}")
+
+    threading.Thread(target=_background_checkin, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/checkin/last", methods=["GET"])
+@login_required
+def api_checkin_last():
+    """Who last pressed the button, and when - so everyone looking at
+    the dashboard sees the same answer, not just whoever clicked it."""
+    try:
+        import sheets_store
+        last = sheets_store.get_last_manual_checkin()
+    except Exception:
+        last = None
+    if not last:
+        return jsonify({"lastCheckin": None})
+    return jsonify({"lastCheckin": {"by": last["by"], "at": last["at"].strftime("%d %b %Y, %H:%M")}})
+
+
+@app.route("/api/tamper-check", methods=["POST"])
+@login_required
+def api_tamper_check():
+    """
+    Records that staff physically inspected a vehicle flagged by the
+    tampering detector. See sheets_store.add_tamper_check()'s docstring:
+    from this point on, any gap on this plate dated on or before now is
+    excluded from confirmed/unconfirmed on the NEXT import (this
+    doesn't retroactively edit the currently-loaded dashboard data).
+    Admin/technician only - a client isn't the one doing the physical
+    check.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    plate = (body.get("plate") or "").strip()
+    comment = (body.get("comment") or "").strip()
+    if not plate or not comment:
+        return jsonify({"error": "'plate' and 'comment' are required"}), 400
+
+    try:
+        import sheets_store
+        sheets_store.add_tamper_check(plate, session["username"], comment)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the check: {e}"}), 503
+    return jsonify({"ok": True, "plate": plate})
+
+
 @app.route("/api/import", methods=["GET", "POST"])
 def api_import():
     """

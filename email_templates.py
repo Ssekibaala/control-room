@@ -465,3 +465,116 @@ def build_technical_escalation_digest_email(vehicles, timestamp):
     """
     preheader = f"{len(vehicles)} vehicle(s) in Technical Escalation"
     return _shell(inner), preheader
+
+
+def _severity_band_row(b):
+    color = DANGER if b["severity"] == "Critical" else (WARNING if b["severity"] == "High" else INFO)
+    return f"""
+      <tr>
+        <td style="padding:8px 0;border-top:1px solid {BORDER};font-size:12.5px;color:{INK};font-weight:700;">
+          {_badge(b['severity'], color)}&nbsp;<span style="color:{MUTED};font-weight:400;">{_esc(b['rule'])}</span>
+        </td>
+        <td style="padding:8px 0;border-top:1px solid {BORDER};text-align:right;font-size:12.5px;color:{INK};">
+          {b['confirmed']} confirmed &middot; {b['unconfirmed']} unconfirmed
+        </td>
+      </tr>
+    """
+
+
+def _top_vehicle_row(v):
+    return f"""
+      <tr><td style="padding:10px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:13.5px;font-weight:800;color:{INK};">{_esc(v['vehicle'])}</span>
+        <span style="font-size:11px;color:{MUTED};">&nbsp;({_esc(str(v['fleetNumber']))})</span><br>
+        <span style="font-size:11.5px;color:{MUTED};">
+          {v['confirmedCases']} confirmed gap(s) &middot; worst {v['worstGapKm']:.1f} km unexplained relocation
+        </span>
+      </td></tr>
+    """
+
+
+def _checked_asset_row(a):
+    return f"""
+      <tr><td style="padding:10px 0;border-top:1px solid {BORDER};">
+        <span style="font-size:13px;font-weight:800;color:{INK};">{_esc(a['plate'])}</span>
+        &nbsp;{_badge('Reviewed', SUCCESS)}<br>
+        <span style="font-size:12px;color:{INK};display:block;margin:4px 0;">&ldquo;{_esc(a['comment'])}&rdquo;</span>
+        <span style="font-size:10.5px;color:{MUTED};">&mdash; {_esc(a['checkedBy'])}, {_esc(a['checkedAt'])}</span>
+      </td></tr>
+    """
+
+
+def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checked_assets, timestamp):
+    """
+    Weekly email to the client summarising the tampering/location-
+    integrity analysis (importer/tamper_engine.py): unexplained
+    relocations with no logged trip, cross-referenced against power
+    disconnect/reconnect events. `confirmed` means a disconnect was
+    logged inside the gap window - the strongest signal something was
+    deliberately powered down; `unconfirmed` means the location gap
+    exists but no power event explains it, worth a look but weaker.
+
+    top_vehicles are the worst offenders by furthest unexplained
+    relocation distance - the ones this email actually asks to have
+    made available for a physical check, not every single gap.
+
+    checked_assets (sheets_store.load_tamper_checks(), flattened) are
+    shown in their own section, explicitly labelled as already
+    reviewed - these are NOT part of confirmed/unconfirmed above
+    (run_import.py's _filter_checked_gaps excludes any gap dated on or
+    before its check), so without this section a client who'd already
+    had a vehicle checked would see it simply vanish with no
+    explanation of why.
+    """
+    band_rows = "".join(_severity_band_row(b) for b in severity_bands)
+    top_rows = "".join(_top_vehicle_row(v) for v in top_vehicles[:8])
+    checked_rows = "".join(_checked_asset_row(a) for a in checked_assets[:10])
+
+    ask_section = f"""
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{BG};border-radius:10px;padding:16px;">
+          <tr><td style="font-size:13.5px;color:{INK};line-height:1.6;">
+            <b>Please make the vehicle(s) below available for a physical check</b> so we can confirm what
+            actually happened during these gaps - the strongest lead we have on each is listed underneath it.
+          </td></tr>
+          <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{top_rows}</table></td></tr>
+        </table>
+      </td></tr>
+    """ if top_rows else ""
+
+    checked_section = f"""
+      <tr><td style="padding:8px 28px 4px;">
+        <span style="font-size:13px;font-weight:800;color:{SUCCESS};">Already reviewed</span><br>
+        <span style="font-size:12px;color:{MUTED};">
+          These were physically checked already - excluded from the confirmed/unconfirmed counts above.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{checked_rows}</table>
+      </td></tr>
+    """ if checked_rows else ""
+
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Tampering &amp; location-integrity report</span><br>
+        <span style="font-size:12px;color:{MUTED};">{_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 14px;">
+        <span style="font-size:13px;color:{INK};line-height:1.6;">
+          Out of {summary.get('gaps_checked', 0)} location gaps checked this week,
+          <b>{summary.get('confirmed', 0)} are confirmed</b> (a power disconnect was logged during the gap) and
+          <b>{summary.get('unconfirmed', 0)} are unconfirmed</b> (the gap exists, no power event explains it).
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 4px;">
+        <span style="font-size:13px;font-weight:800;color:{INK};">By severity</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{band_rows}</table>
+      </td></tr>
+      {ask_section}
+      {checked_section}
+    """
+    preheader = f"{summary.get('confirmed', 0)} confirmed, {summary.get('unconfirmed', 0)} unconfirmed this week"
+    return _shell(inner), preheader

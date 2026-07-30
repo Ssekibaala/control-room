@@ -669,7 +669,7 @@ def save_vehicle_status(status_by_plate):
 # every import - this is the only place that "when did each one last
 # go out" is remembered, so it survives Render redeploys same as
 # everything else that has to.
-DIGEST_STATE_HEADERS = ["DigestKey", "LastSentAt"]
+DIGEST_STATE_HEADERS = ["DigestKey", "LastSentAt", "PromptedBy"]
 
 
 def _get_or_create_digest_state_tab(client, sheet_id):
@@ -701,7 +701,11 @@ def get_digest_last_sent(digest_key):
     return None
 
 
-def set_digest_last_sent(digest_key, when=None):
+def set_digest_last_sent(digest_key, when=None, prompted_by=None):
+    """prompted_by is set only when a human triggered this send from the
+    dashboard's "Send check-in now" button (see record_manual_checkin
+    below, which also uses this same tab under the "manual_checkin"
+    key) - left blank for the ordinary weekly automatic sends."""
     when = when or datetime.now()
     client, sheet_id = _get_client()
     ws = _get_or_create_digest_state_tab(client, sheet_id)
@@ -709,5 +713,97 @@ def set_digest_last_sent(digest_key, when=None):
     for i, row in enumerate(ws.get_all_records(), start=2):
         if str(row.get("DigestKey", "")).strip() == digest_key:
             ws.update_cell(i, DIGEST_STATE_HEADERS.index("LastSentAt") + 1, stamp)
+            if prompted_by:
+                ws.update_cell(i, DIGEST_STATE_HEADERS.index("PromptedBy") + 1, prompted_by)
             return
-    ws.append_row([digest_key, stamp])
+    row = [digest_key, stamp, prompted_by or ""]
+    ws.append_row(row)
+
+
+def record_manual_checkin(prompted_by, when=None):
+    """Records that a human (not the daily import cycle) pressed "Send
+    check-in now" - shown back in the dashboard so anyone can see who
+    last triggered it and when, same DigestState tab as everything
+    else here, under a dedicated key that's never used by an automatic
+    send."""
+    set_digest_last_sent("manual_checkin", when=when, prompted_by=prompted_by)
+
+
+def get_last_manual_checkin():
+    """Returns {"by": str, "at": datetime} or None if never triggered."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_digest_state_tab(client, sheet_id)
+    for row in ws.get_all_records():
+        if str(row.get("DigestKey", "")).strip() == "manual_checkin":
+            raw = str(row.get("LastSentAt", "")).strip()
+            by = str(row.get("PromptedBy", "")).strip()
+            if not raw:
+                return None
+            try:
+                return {"by": by, "at": datetime.strptime(raw, "%d/%m/%Y %H:%M")}
+            except ValueError:
+                return None
+    return None
+
+
+# ---- Tamper checks ---------------------------------------------------
+# A physical inspection record for a vehicle that tripped the tampering
+# detector (fleet_logic/tamper_engine.py) - append-only, same shape as
+# the Feedback tab, because the same real-world event (someone drove
+# out, looked at the vehicle, and is reporting what they found) is
+# happening here, just for a different question. Once a plate has a
+# check recorded, run_import.py excludes any tamper gap dated on or
+# before that check from confirmed/unconfirmed - already explained,
+# not still-open. A gap that starts AFTER the check is new information
+# and is never suppressed by an earlier check.
+TAMPER_CHECK_HEADERS = ["Plate", "CheckedBy", "CheckedAt", "Comment"]
+
+
+def _get_or_create_tamper_checks_tab(client, sheet_id):
+    sh = _open_spreadsheet(client, sheet_id)
+    try:
+        ws = sh.worksheet("TamperChecks")
+    except Exception:
+        ws = sh.add_worksheet(title="TamperChecks", rows=200, cols=len(TAMPER_CHECK_HEADERS))
+        ws.append_row(TAMPER_CHECK_HEADERS)
+        return ws
+    if ws.row_values(1) != TAMPER_CHECK_HEADERS:
+        ws.update("A1", [TAMPER_CHECK_HEADERS])
+    return ws
+
+
+def add_tamper_check(plate, checked_by, comment):
+    """Appends one physical-check record. Never overwrites a previous
+    check on the same plate - a vehicle can trip the detector again
+    later and get checked again, and the full history of what was
+    found each time is exactly what the dashboard's Checked Assets
+    section (and the tamper risk report email) shows."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_tamper_checks_tab(client, sheet_id)
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ws.append_row([plate, checked_by, now, comment])
+
+
+def load_tamper_checks():
+    """Returns {plate: [{"checkedBy", "checkedAt" (datetime), "comment"}, ...]},
+    newest first per plate."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_tamper_checks_tab(client, sheet_id)
+    out = {}
+    for row in ws.get_all_records():
+        plate = str(row.get("Plate", "")).strip()
+        if not plate:
+            continue
+        raw = str(row.get("CheckedAt", "")).strip()
+        try:
+            checked_at = datetime.strptime(raw, "%d/%m/%Y %H:%M")
+        except ValueError:
+            checked_at = None
+        out.setdefault(plate, []).append({
+            "checkedBy": str(row.get("CheckedBy", "")).strip(),
+            "checkedAt": checked_at,
+            "comment": str(row.get("Comment", "")).strip(),
+        })
+    for plate in out:
+        out[plate].sort(key=lambda e: e["checkedAt"] or datetime.min, reverse=True)
+    return out

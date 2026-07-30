@@ -399,6 +399,63 @@ def send_technical_escalation_digest(classification, base_url, interval_days):
     return result
 
 
+def send_tamper_risk_report_digest(tampering, base_url, interval_days):
+    """
+    Weekly client-facing summary of the tampering/location-integrity
+    analysis (see importer/tamper_engine.py and email_templates.build_
+    tamper_risk_report_email's docstring for the confirmed/unconfirmed
+    distinction). Unlike the other three digests, this isn't triggered
+    by the dashboard's manual "check-in" button - it runs purely on its
+    own weekly schedule, since it isn't the kind of thing a "check in
+    on outstanding items right now" action should also mean.
+
+    `tampering` is process_reports()'s dict (confirmed/unconfirmed
+    already filtered against tamper checks, summary, severity_bands,
+    top_vehicles) plus a checked_assets list threaded in by the caller.
+    Gated the same way as the other digests: nothing to report -> no
+    send, no state write, silently skipped rather than mailing an
+    empty report every week.
+    """
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0}
+    try:
+        last_sent = sheets_store.get_digest_last_sent("tamper_risk_report")
+        if last_sent and (datetime.now() - last_sent).days < interval_days:
+            result["reason"] = "interval not elapsed"
+            return result
+    except Exception as e:
+        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
+        return result
+
+    summary = tampering.get("summary", {})
+    if not summary.get("confirmed") and not summary.get("unconfirmed"):
+        result["reason"] = "nothing confirmed or unconfirmed this cycle"
+        return result
+
+    to = _client_recipients()
+    if not to:
+        result["reason"] = "no client recipients on file"
+        return result
+
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    html, preheader = email_templates.build_tamper_risk_report_email(
+        summary, tampering.get("severity_bands", []), tampering.get("top_vehicles", []),
+        tampering.get("checked_assets", []), timestamp)
+    message_id, err = mailer.send(
+        to, f"Tampering report: {summary.get('confirmed', 0)} confirmed, {summary.get('unconfirmed', 0)} unconfirmed",
+        html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+
+    try:
+        sheets_store.set_digest_last_sent("tamper_risk_report")
+    except Exception as e:
+        print(f"Tamper risk report sent but could not record last-sent timestamp: {e}")
+    result["sent"], result["count"] = True, len(tampering.get("top_vehicles", []))
+    return result
+
+
 def _send_reconnect_check(plate, days_offline, open_comment, base_url):
     from datetime import datetime
     import respond_tokens

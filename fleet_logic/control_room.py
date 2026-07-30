@@ -101,7 +101,7 @@ def _b64_file(path):
 
 
 def _build_data(results, settings, tampering, recovered, newly_offline, report_date, history_available,
-                 xlsx_path, tamper_xlsx_path):
+                 xlsx_path, tamper_xlsx_path, checked_assets=None):
     online = [p for p, v in results.items() if v["status"] == "Online"]
     escalations = [p for p, v in results.items() if v["status"] == "Technical Escalation"]
     pending = [p for p, v in results.items() if v["status"] == "Pending Customer Confirmation"]
@@ -170,6 +170,12 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
         "tamperConfirmed": [_tamper_row(c) for c in sorted(confirmed, key=lambda c: -c.get("DistanceKm", 0))],
         "tamperUnconfirmed": [_tamper_row(c) for c in sorted(unconfirmed, key=lambda c: -c.get("DistanceKm", 0))],
         "qualityLog": [_quality_row(q) for q in quality_log],
+        # Every physical-check record (sheets_store.load_tamper_checks(),
+        # flattened by run_import.py's _checked_assets_summary()) - shown
+        # in its own dashboard section precisely BECAUSE these gaps are
+        # already excluded from tamperConfirmed/tamperUnconfirmed above,
+        # not folded back into them.
+        "tamperChecked": checked_assets or [],
         "recovered": recovered, "newlyOffline": newly_offline,
         "settingsRows": [
             {"setting": "Offline Threshold (days)", "value": settings["OFFLINE_THRESHOLD_DAYS"]},
