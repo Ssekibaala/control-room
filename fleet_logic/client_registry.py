@@ -25,6 +25,7 @@ order and always returns something usable:
 
 import os
 import json
+import time
 import logging
 
 import atomic_json
@@ -81,11 +82,33 @@ def _from_settings(settings):
     }]
 
 
-def load_registry(settings=None, cache_path=None, allow_sheets=True):
+# The registry is read by all three platform pollers on every cycle and
+# changes only when an admin edits it, so going to Sheets each time is
+# pure waste - and measurably harmful: it helped push this project over
+# the Sheets "read requests per minute" quota during testing, which
+# fails unrelated requests app-wide. Cached in memory, invalidated
+# explicitly on write (see invalidate_cache).
+_MEMO_TTL_SECONDS = 300
+_memo = {"clients": None, "fetched_at": 0.0}
+
+
+def invalidate_cache():
+    """Call after any write to the Clients registry so the next read
+    reflects it immediately rather than up to _MEMO_TTL_SECONDS later."""
+    _memo["clients"] = None
+    _memo["fetched_at"] = 0.0
+
+
+def load_registry(settings=None, cache_path=None, allow_sheets=True, force=False):
     """
     The client list, newest-known-good. Never raises: a caller in the
     middle of a poll cycle needs an answer, not an exception.
     """
+    if allow_sheets and not force:
+        memoized = _memo["clients"]
+        if memoized is not None and (time.time() - _memo["fetched_at"]) < _MEMO_TTL_SECONDS:
+            return memoized
+
     if allow_sheets:
         try:
             import sheets_store
@@ -95,6 +118,7 @@ def load_registry(settings=None, cache_path=None, allow_sheets=True):
             # from a misconfigured sheet - and caching it would overwrite
             # a good cache with nothing. Fall through instead.
             if clients:
+                _memo.update({"clients": clients, "fetched_at": time.time()})
                 _write_cache(clients, cache_path)
                 return clients
         except Exception as e:

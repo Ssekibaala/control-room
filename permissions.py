@@ -175,6 +175,161 @@ EXPORT_ACCESS = {
 # and should never be able to provision logins for this platform.
 MANAGE_USERS_ROLES = ("admin", "technician")
 
+# ---- Per-client data access ---------------------------------------------
+# Admin is the highest level of account and sees every client, including
+# ones added after their account was created - so admin is deliberately
+# NOT expressed as "assigned to every client", which would silently go
+# stale the moment a new client is registered.
+#
+# Everyone else sees only the clients explicitly assigned to their
+# account (the Clients column on the Users sheet). An empty assignment
+# therefore means NO data, not all data: defaulting the other way would
+# mean any account created without clients silently gets the whole
+# estate, which is exactly the wrong direction for a mistake to fail in.
+ALL_CLIENTS_ROLES = ("admin",)
+
+# Row lists in the dashboard payload that carry a per-asset "client"
+# field and must therefore be scoped. Anything asset-shaped belongs
+# here; sections without a client field are handled separately below.
+CLIENT_SCOPED_SECTIONS = (
+    "full", "critical", "criticalCards", "pending", "healthy", "knownIssues",
+    "border", "recoveredList", "newlyOfflineList", "doubleFlagged",
+)
+
+# Sections that identify vehicles by plate but carry no client field of
+# their own - the tampering analysis and its quality log are built from
+# the raw report files, which have no concept of a client. They leak
+# just as badly if left unscoped (an unassigned technician was seeing 73
+# GTL plates through these four before they were handled), so they're
+# scoped by resolving each plate back to its owning client.
+PLATE_SCOPED_SECTIONS = (
+    "tamperConfirmed", "tamperUnconfirmed", "tamperCards", "tamperChecked",
+    "qualityLog", "topVehicles", "recentActivity",
+)
+
+# Plain lists of plate strings, same reasoning as above.
+PLATE_LIST_SECTIONS = ("_skipped_plates", "recovered", "newlyOffline")
+
+
+def sees_all_clients(role):
+    return role in ALL_CLIENTS_ROLES
+
+
+def visible_clients(role, assigned_clients):
+    """
+    Which clients this session may see. None means "no restriction"
+    (admin); a set means exactly those. Kept separate from the empty
+    set, which means "restricted, and entitled to nothing".
+    """
+    if sees_all_clients(role):
+        return None
+    return {str(c).strip() for c in (assigned_clients or []) if str(c).strip()}
+
+
+def can_grant_clients(granter_role, granter_clients, requested_clients):
+    """
+    Whether a user may assign this set of clients to someone else.
+    Nobody can hand out access they don't themselves hold - only admin,
+    who holds everything. Returns (ok, disallowed_list) so the caller
+    can name exactly what was refused instead of a blanket "denied".
+    """
+    requested = [str(c).strip() for c in (requested_clients or []) if str(c).strip()]
+    allowed = visible_clients(granter_role, granter_clients)
+    if allowed is None:
+        return True, []
+    disallowed = sorted({c for c in requested if c not in allowed})
+    return (not disallowed), disallowed
+
+
+def filter_payload_for_clients(data: dict, allowed):
+    """
+    Drops every asset row belonging to a client this session may not
+    see. Returns a NEW dict; never mutates the original.
+
+    This is a SECURITY boundary, not a display preference: the rows are
+    removed from the HTTP response itself, so a restricted session
+    cannot recover another client's data from the payload no matter what
+    the frontend does with it.
+
+    allowed=None (admin) short-circuits and returns the data untouched.
+
+    Rows with no client at all are treated as restricted and dropped.
+    That is the safe direction: an unmapped platform account is a
+    configuration gap, and showing its vehicles to someone scoped to a
+    specific client would be a real leak, whereas hiding them is merely
+    incomplete - and visibly so to the admin, who still sees them.
+    """
+    if allowed is None:
+        return data
+
+    filtered = dict(data)
+    for section in CLIENT_SCOPED_SECTIONS:
+        rows = filtered.get(section)
+        if isinstance(rows, list):
+            filtered[section] = [r for r in rows
+                                 if isinstance(r, dict) and str(r.get("client", "")).strip() in allowed]
+
+    # Built from the ORIGINAL rows, before the filtering above - the
+    # whole point is to recognise plates belonging to clients this
+    # session cannot see, and those rows are gone from `filtered`.
+    plate_owner = {
+        str(r.get("plate", "")).strip(): str(r.get("client", "")).strip()
+        for r in (data.get("full") or []) if isinstance(r, dict) and r.get("plate")
+    }
+
+    def plate_visible(plate):
+        # Unknown plate -> not visible. Fail closed, same reasoning as
+        # an unmapped client above.
+        return plate_owner.get(str(plate).strip(), "") in allowed
+
+    for section in PLATE_SCOPED_SECTIONS:
+        rows = filtered.get(section)
+        if isinstance(rows, list):
+            filtered[section] = [r for r in rows
+                                 if isinstance(r, dict) and plate_visible(r.get("plate", ""))]
+    for section in PLATE_LIST_SECTIONS:
+        rows = filtered.get(section)
+        if isinstance(rows, list):
+            filtered[section] = [p for p in rows if isinstance(p, str) and plate_visible(p)]
+
+    # KPIs are counts derived from those same rows, so leaving them
+    # untouched would tell a restricted viewer exactly how many assets
+    # exist outside their scope - the numbers must be recomputed from
+    # what actually survived the filter, not merely re-sent.
+    if isinstance(filtered.get("kpi"), dict):
+        filtered["kpi"] = _recount_kpis(filtered)
+    return filtered
+
+
+def _recount_kpis(filtered):
+    """Recomputes the headline counts from the already-client-filtered
+    rows. Only the asset-derived figures are touched; tampering totals
+    are left alone because their sections aren't asset-shaped and are
+    already gated by the panel matrix."""
+    kpi = dict(filtered.get("kpi") or {})
+    rows = [r for r in filtered.get("full", []) if isinstance(r, dict)]
+    if not rows:
+        # No visible assets at all - report honest zeros rather than
+        # leaving the previous fleet-wide numbers standing.
+        for key in ("total", "online", "escalations", "pending", "border", "knownIssues"):
+            if key in kpi:
+                kpi[key] = 0
+        if "healthPct" in kpi:
+            kpi["healthPct"] = 0
+        return kpi
+
+    def count(pred):
+        return sum(1 for r in rows if pred(r))
+
+    kpi["total"] = len(rows)
+    kpi["online"] = count(lambda r: r.get("status") == "Online")
+    kpi["escalations"] = count(lambda r: r.get("status") == "Technical Escalation")
+    kpi["pending"] = count(lambda r: r.get("status") == "Pending Customer Confirmation")
+    kpi["knownIssues"] = count(lambda r: r.get("status") == "Known Issue")
+    kpi["border"] = count(lambda r: r.get("border") == "Yes")
+    kpi["healthPct"] = round(kpi["online"] / len(rows) * 100) if rows else 0
+    return kpi
+
 
 def allowed_panels(role):
     return [p for p, roles in PANEL_ACCESS.items() if role in roles]

@@ -710,7 +710,13 @@ def refresh_live_snapshot():
 
     try:
         import sheets_store
-        feedback_rows = sheets_store.load_feedback()
+        # Cached variant deliberately: this runs on every poll cycle,
+        # not once a day like run_import(), and an uncached read here
+        # was a material part of this app's Sheets traffic (enough to
+        # hit the read-per-minute quota during testing). The cache is
+        # stamp-aware, so a newly submitted comment still invalidates
+        # it - see sheets_store.load_feedback_cached().
+        feedback_rows = sheets_store.load_feedback_cached()
     except Exception:
         feedback_rows = {}
     try:

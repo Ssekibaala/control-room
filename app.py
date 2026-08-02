@@ -235,6 +235,21 @@ def api_create_user():
     if username in users_store.load_users():
         return jsonify({"error": f"'{username}' already has an account"}), 409
 
+    # Nobody can hand out access they don't hold themselves. A
+    # technician scoped to GTL must not be able to create an account
+    # with access to AGL - that would be a trivial privilege escalation
+    # (create the account, then log in as it). Only admin, who holds
+    # every client, passes this unconditionally.
+    ok, disallowed = permissions.can_grant_clients(
+        session["role"], _assigned_clients(session["username"]), clients)
+    if not ok:
+        return jsonify({"error": "You can only grant access to clients you have access to yourself. "
+                                 f"Not yours to grant: {', '.join(disallowed)}"}), 403
+    # A role that sees every client is likewise not something a
+    # non-admin can create, for the same escalation reason.
+    if permissions.sees_all_clients(role) and not permissions.sees_all_clients(session["role"]):
+        return jsonify({"error": f"Only an admin can create a '{role}' account."}), 403
+
     try:
         users_store.add_user(username, role, password, clients, email)
     except Exception as e:
@@ -430,15 +445,77 @@ def _overlay_feedback(raw):
         return raw, False
 
 
+_user_clients_cache = {}          # username -> (fetched_at, clients list)
+_USER_CLIENTS_TTL_SECONDS = 30
+
+
+def _assigned_clients(username):
+    """
+    This account's client assignments, cached briefly.
+
+    users.load_users() is an uncached full Sheets read, and the
+    dashboard now re-fetches itself every 60s in every open tab, so
+    reading it per request would put a Sheets round trip on the hot
+    path. 30 seconds keeps that cheap while still making an access
+    change (or revocation) take effect almost immediately.
+
+    On a lookup failure the last known good value is reused if there is
+    one, and otherwise access is denied rather than granted - a Sheets
+    outage must not turn into a moment where a restricted account can
+    see every client's data.
+    """
+    now = time.time()
+    cached = _user_clients_cache.get(username)
+    if cached and now - cached[0] < _USER_CLIENTS_TTL_SECONDS:
+        return cached[1]
+    try:
+        user = users_store.get_user(username) or {}
+        clients = user.get("clients", [])
+        _user_clients_cache[username] = (now, clients)
+        return clients
+    except Exception as e:
+        if cached:
+            print(f"Could not refresh client access for {username} ({e}); using the last known assignment")
+            return cached[1]
+        print(f"Could not determine client access for {username} ({e}); denying access this request")
+        return []
+
+
+def _visible_clients_for_session():
+    """None = unrestricted (admin). A set = exactly those clients."""
+    role = session["role"]
+    if permissions.sees_all_clients(role):
+        return None
+    return permissions.visible_clients(role, _assigned_clients(session["username"]))
+
+
 @app.route("/api/dashboard-data")
 @login_required
 def api_dashboard_data():
     role = session["role"]
     raw = load_dashboard_data()
     raw, overlay_ok = _overlay_feedback(raw)
+    # Client scoping runs BEFORE the role filter and on the server, so a
+    # restricted session never receives another client's rows at all -
+    # not hidden in the browser, absent from the response.
+    raw = permissions.filter_payload_for_clients(raw, _visible_clients_for_session())
     filtered = filter_payload_for_role(raw, role)
     filtered = dict(filtered)
-    filtered["meta"] = {**filtered.get("meta", {}), "feedbackApplied": overlay_ok}
+    # The clients actually present in what this session is allowed to
+    # see - drives the header's client filter. Derived from the
+    # client-scoped payload BEFORE the role filter, and across every
+    # scoped section rather than just "full": the client role is never
+    # given "full" at all (see permissions.blocked_sections_for), so
+    # reading only that one would leave client-role users with an empty
+    # dropdown despite having data in critical/pending/healthy.
+    visible = sorted({
+        str(r.get("client", "")).strip()
+        for section in permissions.CLIENT_SCOPED_SECTIONS
+        for r in (raw.get(section) or [])
+        if isinstance(r, dict) and str(r.get("client", "")).strip()
+    })
+    filtered["meta"] = {**filtered.get("meta", {}), "feedbackApplied": overlay_ok,
+                        "clients": visible, "seesAllClients": permissions.sees_all_clients(role)}
     # xlsxB64/tamperB64 never need to reach the browser at all, any role,
     # since /api/export/<name> reads them straight from disk on demand.
     filtered = {k: v for k, v in filtered.items() if k not in ("xlsxB64", "tamperB64")}
@@ -949,6 +1026,19 @@ def _mix_api_poll_once():
     return {"status": "ok", "counts": snapshot["counts"]}
 
 
+_last_live_refresh = {"at": 0.0}
+_live_refresh_lock = threading.Lock()
+# All three pollers share a cadence, so they finish within seconds of
+# each other and each used to trigger a full reclassification - three
+# runs producing near-identical output, each re-reading feedback,
+# tamper checks and vehicle status from Sheets. That tripled the work
+# and the Sheets traffic for no added freshness, and contributed to
+# hitting the Sheets read-per-minute quota. One refresh per window is
+# enough: whichever poller finishes first picks up the other two
+# platforms' snapshots anyway, since they're read from disk.
+_LIVE_REFRESH_MIN_INTERVAL_SECONDS = 60
+
+
 def _refresh_live_snapshot_after_poll(platform_label):
     """
     Shared tail call for every platform's poll loop: once a live API
@@ -960,6 +1050,14 @@ def _refresh_live_snapshot_after_poll(platform_label):
     docstring for why it's safe to call this often (no notifications,
     no day-over-day status persistence, meta.importedAt untouched).
     """
+    with _live_refresh_lock:
+        since = time.time() - _last_live_refresh["at"]
+        if since < _LIVE_REFRESH_MIN_INTERVAL_SECONDS:
+            print(f"Live snapshot refresh skipped after {platform_label} poll: "
+                  f"another ran {since:.0f}s ago")
+            return
+        _last_live_refresh["at"] = time.time()
+
     try:
         from run_import import refresh_live_snapshot
         result = refresh_live_snapshot()
