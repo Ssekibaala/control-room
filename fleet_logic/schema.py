@@ -23,6 +23,7 @@ class AssetReport:
     sim_card: Optional[str] = None
     network_provider: Optional[str] = None
     status_note: Optional[str] = None   # free text, e.g. telecom's "offline since 11/7"
+    organisation_id: Optional[str] = None  # MiX org / Teletrac client this row belongs to (API-sourced rows only)
     raw_row: dict = field(default_factory=dict)   # original row, kept for audit/debug
     ingested_at: datetime = field(default_factory=datetime.utcnow)
 

@@ -211,7 +211,197 @@ def _day_over_day(results, previous_status):
     return recovered, newly_offline, current_status
 
 
-def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None, previous_status=None):
+MIX_API_SNAPSHOT_PATH = os.path.join(DATA_DIR, "mix_api_snapshot.json")
+
+
+def _load_mix_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
+    """
+    Folds the live MiX API poller's most recent snapshot (app.py's
+    background thread, see _mix_api_poll_once - runs in the SAME
+    process as this import on the single Heroku web dyno, so the file
+    is normally at most MIX_API_POLL_INTERVAL_MINUTES old) into this
+    cycle's AssetReport rows, tagged source_platform="MiX Unity" so it
+    competes on an equal footing with the mailed mix_movement/
+    mix_mobile_status reports in classify_fleet's freshest-per-platform
+    selection - being fresher (30 min old vs a day old), it will
+    normally win, which is the point: MiX Unity's Online/Offline signal
+    becomes API-driven in practice without the mailed reports having to
+    be ripped out first.
+
+    Purely additive and best-effort: if the poller hasn't produced a
+    snapshot yet (not configured, or this process doesn't run the
+    poller at all - run_import() is documented as also runnable
+    standalone, outside app.py), this returns [] and behaviour is
+    identical to before the API integration existed.
+
+    max_age_minutes guards against folding in a snapshot from a poller
+    that silently died - a stale-but-present snapshot would otherwise
+    look like a fresh MiX Unity signal to classify_fleet.
+    """
+    snapshot_path = snapshot_path or MIX_API_SNAPSHOT_PATH
+    if not os.path.exists(snapshot_path):
+        return []
+    try:
+        with open(snapshot_path) as f:
+            snapshot = json.load(f)
+        fetched_at = datetime.fromisoformat(snapshot["fetchedAt"])
+    except (ValueError, KeyError, json.JSONDecodeError):
+        print(f"WARNING: MiX API snapshot at {snapshot_path} is unreadable, skipping.")
+        return []
+    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    if age_minutes > max_age_minutes:
+        print(f"WARNING: MiX API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
+              f"skipping - looks like the poller stopped running.")
+        return []
+
+    from schema import AssetReport, normalize_plate
+    rows = []
+    for org_id, entries in snapshot.get("byOrg", {}).items():
+        for e in entries:
+            plate = normalize_plate(e.get("plate", ""))
+            if not plate:
+                continue
+            last_report_time = None
+            if e.get("lastReportTime"):
+                try:
+                    last_report_time = datetime.fromisoformat(e["lastReportTime"])
+                except ValueError:
+                    pass
+            rows.append(AssetReport(
+                asset_plate=plate,
+                source_platform="MiX Unity",
+                report_type="position_api",
+                last_report_time=last_report_time,
+                last_lat=e.get("lat"),
+                last_lon=e.get("lon"),
+                last_location_text=e.get("locationText"),
+                organisation_id=org_id,
+                raw_row=e,
+            ))
+    return rows
+
+
+TELETRAC_API_SNAPSHOT_PATH = os.path.join(DATA_DIR, "teletrac_api_snapshot.json")
+
+
+def _load_teletrac_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
+    """
+    Same idea as _load_mix_api_reports() above, mirrored for the live
+    Teletrac API poller's snapshot (app.py's _teletrac_api_poll_once) -
+    folded in tagged source_platform="Teletrac", the SAME name the
+    mailed teletrac_csv report uses, so the two compete for the
+    freshest-per-platform slot rather than counting as two independent
+    platforms in _investigation_reasons' offline-platform tally.
+    Being fresher, the API rows normally win. Purely additive
+    and best-effort: no snapshot yet, or too old (poller stopped
+    running), returns [] and behaviour is identical to before this
+    integration existed.
+    """
+    snapshot_path = snapshot_path or TELETRAC_API_SNAPSHOT_PATH
+    if not os.path.exists(snapshot_path):
+        return []
+    try:
+        with open(snapshot_path) as f:
+            snapshot = json.load(f)
+        fetched_at = datetime.fromisoformat(snapshot["fetchedAt"])
+    except (ValueError, KeyError, json.JSONDecodeError):
+        print(f"WARNING: Teletrac API snapshot at {snapshot_path} is unreadable, skipping.")
+        return []
+    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    if age_minutes > max_age_minutes:
+        print(f"WARNING: Teletrac API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
+              f"skipping - looks like the poller stopped running.")
+        return []
+
+    from schema import AssetReport, normalize_plate
+    rows = []
+    for client_id, entries in snapshot.get("byClient", {}).items():
+        for e in entries:
+            plate = normalize_plate(e.get("plate", ""))
+            if not plate:
+                continue
+            last_report_time = None
+            if e.get("lastReportTime"):
+                try:
+                    last_report_time = datetime.fromisoformat(e["lastReportTime"])
+                except ValueError:
+                    pass
+            rows.append(AssetReport(
+                asset_plate=plate,
+                source_platform="Teletrac",
+                report_type="position_api",
+                last_report_time=last_report_time,
+                last_lat=e.get("lat"),
+                last_lon=e.get("lon"),
+                last_location_text=e.get("locationText"),
+                imei=e.get("imei"),
+                organisation_id=client_id,
+                raw_row=e,
+            ))
+    return rows
+
+
+FT_CLOUD_API_SNAPSHOT_PATH = os.path.join(DATA_DIR, "ft_cloud_api_snapshot.json")
+
+
+def _load_ft_cloud_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
+    """
+    Same idea as _load_mix_api_reports() above, mirrored for the live
+    FT Cloud API poller's snapshot (app.py's _ft_cloud_api_poll_once) -
+    folded in tagged source_platform="FT Cloud Camera", the SAME name
+    the mailed ft_cloud_camera report uses, so the two compete for the
+    freshest-per-platform slot rather than counting as two independent
+    platforms in _investigation_reasons' offline-platform tally.
+    Being fresher, the API rows normally win. Purely additive and
+    best-effort: no snapshot yet, or too old (poller stopped running),
+    returns [] and behaviour is identical to before this integration
+    existed.
+    """
+    snapshot_path = snapshot_path or FT_CLOUD_API_SNAPSHOT_PATH
+    if not os.path.exists(snapshot_path):
+        return []
+    try:
+        with open(snapshot_path) as f:
+            snapshot = json.load(f)
+        fetched_at = datetime.fromisoformat(snapshot["fetchedAt"])
+    except (ValueError, KeyError, json.JSONDecodeError):
+        print(f"WARNING: FT Cloud API snapshot at {snapshot_path} is unreadable, skipping.")
+        return []
+    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    if age_minutes > max_age_minutes:
+        print(f"WARNING: FT Cloud API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
+              f"skipping - looks like the poller stopped running.")
+        return []
+
+    from schema import AssetReport, normalize_plate
+    rows = []
+    for fleet_id, entries in snapshot.get("byFleet", {}).items():
+        for e in entries:
+            plate = normalize_plate(e.get("plate", ""))
+            if not plate:
+                continue
+            last_report_time = None
+            if e.get("lastReportTime"):
+                try:
+                    last_report_time = datetime.fromisoformat(e["lastReportTime"])
+                except ValueError:
+                    pass
+            rows.append(AssetReport(
+                asset_plate=plate,
+                source_platform="FT Cloud Camera",
+                report_type="camera_status",
+                last_report_time=last_report_time,
+                last_lat=e.get("lat"),
+                last_lon=e.get("lon"),
+                status_note=e.get("statusNote"),
+                organisation_id=fleet_id,
+                raw_row=e,
+            ))
+    return rows
+
+
+def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None, previous_status=None,
+                     mix_api_reports=None, teletrac_api_reports=None, ft_cloud_api_reports=None):
     """
     Pure processing, no network. paths is the dict returned by
     fetch_reports() (or, for testing, pointed at the known-good local
@@ -222,6 +412,12 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     both loaded by the caller, same reason feedback_rows is: this
     function stays Sheets/network-free per its own docstring, the
     caller does the one read and hands the result in as plain data.
+    mix_api_reports is the same idea - see _load_mix_api_reports(),
+    which run_import() calls and passes in here; defaults to [] so
+    calling process_reports() directly (as the tests do) is unaffected.
+    teletrac_api_reports and ft_cloud_api_reports mirror
+    mix_api_reports for the Teletrac and FT Cloud API pollers - see
+    _load_teletrac_api_reports() and _load_ft_cloud_api_reports().
     """
     check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
@@ -235,6 +431,9 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     all_rows += mix_movement.parse(paths["mix_movement"])
     all_rows += mix_power_events.parse(paths["mix_power_events"])
     all_rows += ft_cloud_camera.parse(paths["ft_cloud_camera"])
+    all_rows += mix_api_reports or []
+    all_rows += teletrac_api_reports or []
+    all_rows += ft_cloud_api_reports or []
 
     grouped, skipped = group_by_plate(all_rows)
     timestamps = [r.last_report_time for r in all_rows if r.last_report_time]
@@ -422,8 +621,22 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
               f"Recovered/New will show empty and no reconnect-check can fire this cycle.")
         previous_status = None
 
+    mix_api_reports = _load_mix_api_reports()
+    if mix_api_reports:
+        print(f"Folded in {len(mix_api_reports)} MiX API position(s) from the live poller")
+
+    teletrac_api_reports = _load_teletrac_api_reports()
+    if teletrac_api_reports:
+        print(f"Folded in {len(teletrac_api_reports)} Teletrac API position(s) from the live poller")
+
+    ft_cloud_api_reports = _load_ft_cloud_api_reports()
+    if ft_cloud_api_reports:
+        print(f"Folded in {len(ft_cloud_api_reports)} FT Cloud API status row(s) from the live poller")
+
     data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks,
-                           previous_status=previous_status)
+                           previous_status=previous_status, mix_api_reports=mix_api_reports,
+                           teletrac_api_reports=teletrac_api_reports,
+                           ft_cloud_api_reports=ft_cloud_api_reports)
     classification = data.pop("_classification", {})
     tampering = data.pop("_tampering", {})
     current_status = data.pop("_current_status", {})

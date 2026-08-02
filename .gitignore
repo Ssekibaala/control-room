@@ -3,6 +3,10 @@ __pycache__/
 .env
 data/_incoming/
 data/_refresh_lock.json
+data/mix_api_snapshot.json
+data/teletrac_api_snapshot.json
+data/ft_cloud_api_snapshot.json
+data/ft_cloud_webhook_state.json
 .claude/
 
 # database/users.json and data/fleet_today.json are intentionally

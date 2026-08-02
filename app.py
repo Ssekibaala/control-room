@@ -20,6 +20,7 @@ import re
 import sys
 import json
 import time
+import hmac
 import base64
 import threading
 import functools
@@ -39,6 +40,7 @@ from permissions import (
 from respond_tokens import make_respond_token, read_respond_token
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
@@ -864,6 +866,574 @@ def api_tamper_check():
     return jsonify({"ok": True, "plate": plate})
 
 
+MIX_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_api_snapshot.json")
+
+
+def _mix_api_poll_once():
+    """
+    One fetch-assets-and-positions-for-every-configured-org cycle,
+    written to MIX_API_SNAPSHOT_PATH. Standalone for now (see
+    fleet_logic/adapters/mix_api.py's docstring) - NOT wired into
+    process_reports()/classify_fleet() yet, this is the "look at real
+    live data" step before that cutover happens.
+    """
+    from settings import load_settings
+    from adapters.mix_api_client import MixApiClient
+    from adapters import mix_api
+
+    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+    org_ids = settings["MIX_API_ORG_IDS"]
+    if not org_ids:
+        return {"status": "skipped", "reason": "no org_ids configured in settings.ini [mix_api]"}
+
+    client = MixApiClient(inter_org_delay_seconds=settings["MIX_API_INTER_ORG_DELAY_SECONDS"])
+    if not client.is_configured():
+        return {"status": "skipped", "reason": "MIX_CLIENT_ID/MIX_CLIENT_SECRET/MIX_USERNAME/MIX_PASSWORD not set"}
+
+    reports = mix_api.fetch_all_reports(client, org_ids)
+    by_org = {}
+    for r in reports:
+        by_org.setdefault(r.organisation_id, []).append({
+            "plate": r.asset_plate,
+            "lat": r.last_lat,
+            "lon": r.last_lon,
+            "locationText": r.last_location_text,
+            "lastReportTime": r.last_report_time.isoformat() if r.last_report_time else None,
+            "assetId": r.raw_row["asset"].get("AssetId"),
+            "fleetNumber": r.raw_row["asset"].get("FleetNumber"),
+        })
+    snapshot = {
+        "fetchedAt": datetime.now().isoformat(),
+        "orgIds": org_ids,
+        "counts": {org: len(rows) for org, rows in by_org.items()},
+        "byOrg": by_org,
+    }
+    with open(MIX_API_SNAPSHOT_PATH, "w") as f:
+        json.dump(snapshot, f, indent=2, default=str)
+    return {"status": "ok", "counts": snapshot["counts"]}
+
+
+def _mix_api_poll_loop():
+    while True:
+        try:
+            result = _mix_api_poll_once()
+            if result["status"] == "ok":
+                print(f"MiX API poll: {result['counts']}")
+            else:
+                print(f"MiX API poll skipped: {result['reason']}")
+        except Exception as e:
+            print(f"MiX API poll failed: {e}")
+
+        from settings import load_settings
+        settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+        time.sleep(max(1, settings["MIX_API_POLL_INTERVAL_MINUTES"]) * 60)
+
+
+def _start_mix_api_poller():
+    """
+    Fires once at app startup and keeps running for as long as this
+    process does (see the use_reloader=False note at the bottom of this
+    file for why local dev doesn't double it up). No-op if the process
+    dies/restarts (Heroku dyno cycling, deploys, crashes) - there's no
+    persistence across that, same tradeoff as every other "while the
+    app happens to be running" timer in this codebase.
+    """
+    threading.Thread(target=_mix_api_poll_loop, daemon=True).start()
+
+
+def _mix_api_poller_enabled():
+    """
+    Guards against starting a real background network poller as a side
+    effect of merely importing app.py - test_permissions.py does exactly
+    that (from app import app). Checking sys.modules for "pytest" (set
+    from the moment pytest starts, unlike PYTEST_CURRENT_TEST which
+    only exists during an individual test's execution, not at import/
+    collection time) keeps the test suite from making live MiX API
+    calls. DISABLE_MIX_API_POLLER is the manual escape hatch for anyone
+    else importing this module without meaning to run the real server.
+    """
+    if "pytest" in sys.modules:
+        return False
+    if os.environ.get("DISABLE_MIX_API_POLLER") == "true":
+        return False
+    return True
+
+
+if _mix_api_poller_enabled():
+    _start_mix_api_poller()
+
+
+@app.route("/api/mix/snapshot", methods=["GET"])
+@login_required
+def api_mix_snapshot():
+    """Read-only view of the last MiX API poll, for verifying the new
+    ingestion path before it's wired into the real dashboard data."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if not os.path.exists(MIX_API_SNAPSHOT_PATH):
+        return jsonify({"status": "no_snapshot_yet"})
+    with open(MIX_API_SNAPSHOT_PATH) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/mix/poll-now", methods=["POST"])
+@login_required
+def api_mix_poll_now():
+    """Manual trigger so testing doesn't require waiting for the
+    interval - runs in the background, check /api/mix/snapshot after."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    threading.Thread(target=_mix_api_poll_once, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+TELETRAC_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "teletrac_api_snapshot.json")
+
+
+def _teletrac_api_poll_once():
+    """
+    One fetch-current-data-for-every-configured-client cycle, written
+    to TELETRAC_API_SNAPSHOT_PATH. Same shape as _mix_api_poll_once
+    above, mirrored for Teletrac's Integrate API (see
+    fleet_logic/adapters/teletrac_api_client.py).
+    """
+    from settings import load_settings
+    from adapters.teletrac_api_client import TeletracApiClient
+    from adapters import teletrac_api
+
+    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+    client_ids = settings["TELETRAC_API_CLIENT_IDS"]
+    if not client_ids:
+        return {"status": "skipped", "reason": "no client_ids configured in settings.ini [teletrac_api]"}
+
+    client = TeletracApiClient(inter_client_delay_seconds=settings["TELETRAC_API_INTER_CLIENT_DELAY_SECONDS"])
+    if not client.is_configured():
+        return {"status": "skipped", "reason": "TELETRAC_API_KEY/TELETRAC_API_SECRET not set"}
+
+    reports = teletrac_api.fetch_all_reports(client, client_ids)
+    by_client = {}
+    for r in reports:
+        by_client.setdefault(r.organisation_id, []).append({
+            "plate": r.asset_plate,
+            "lat": r.last_lat,
+            "lon": r.last_lon,
+            "locationText": r.last_location_text,
+            "lastReportTime": r.last_report_time.isoformat() if r.last_report_time else None,
+            "imei": r.imei,
+        })
+    snapshot = {
+        "fetchedAt": datetime.now().isoformat(),
+        "clientIds": client_ids,
+        "counts": {c: len(rows) for c, rows in by_client.items()},
+        "byClient": by_client,
+    }
+    with open(TELETRAC_API_SNAPSHOT_PATH, "w") as f:
+        json.dump(snapshot, f, indent=2, default=str)
+    return {"status": "ok", "counts": snapshot["counts"]}
+
+
+def _teletrac_api_poll_loop():
+    while True:
+        try:
+            result = _teletrac_api_poll_once()
+            if result["status"] == "ok":
+                print(f"Teletrac API poll: {result['counts']}")
+            else:
+                print(f"Teletrac API poll skipped: {result['reason']}")
+        except Exception as e:
+            print(f"Teletrac API poll failed: {e}")
+
+        from settings import load_settings
+        settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+        time.sleep(max(1, settings["TELETRAC_API_POLL_INTERVAL_MINUTES"]) * 60)
+
+
+def _start_teletrac_api_poller():
+    """Fires once at app startup and keeps running for as long as this
+    process does - same lifetime/restart tradeoffs as _start_mix_api_poller."""
+    threading.Thread(target=_teletrac_api_poll_loop, daemon=True).start()
+
+
+def _teletrac_api_poller_enabled():
+    """Same guard as _mix_api_poller_enabled - keeps importing app.py
+    (e.g. test_permissions.py) from starting a real background poller."""
+    if "pytest" in sys.modules:
+        return False
+    if os.environ.get("DISABLE_TELETRAC_API_POLLER") == "true":
+        return False
+    return True
+
+
+if _teletrac_api_poller_enabled():
+    _start_teletrac_api_poller()
+
+
+@app.route("/api/teletrac/snapshot", methods=["GET"])
+@login_required
+def api_teletrac_snapshot():
+    """Read-only view of the last Teletrac API poll, for verifying the
+    new ingestion path before/after it's wired into the real dashboard data."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if not os.path.exists(TELETRAC_API_SNAPSHOT_PATH):
+        return jsonify({"status": "no_snapshot_yet"})
+    with open(TELETRAC_API_SNAPSHOT_PATH) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/teletrac/poll-now", methods=["POST"])
+@login_required
+def api_teletrac_poll_now():
+    """Manual trigger so testing doesn't require waiting for the
+    interval - runs in the background, check /api/teletrac/snapshot after."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    threading.Thread(target=_teletrac_api_poll_once, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/teletrac/clients", methods=["GET"])
+@login_required
+def api_teletrac_clients():
+    """Lists every client visible to these Teletrac API credentials, so
+    an operator can look up the ClientID for 'Globe Trotters Ltd' to put
+    in settings.ini's [teletrac_api] client_ids - there's no other way
+    to discover it short of asking Teletrac support."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    from adapters.teletrac_api_client import TeletracApiClient
+    client = TeletracApiClient()
+    if not client.is_configured():
+        return jsonify({"error": "TELETRAC_API_KEY/TELETRAC_API_SECRET not set"}), 503
+    try:
+        return jsonify({"clients": client.get_all_clients()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+FT_CLOUD_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "ft_cloud_api_snapshot.json")
+
+
+def _ft_cloud_api_poll_once():
+    """
+    One fetch-vehicles-and-device-status-for-every-configured-fleet
+    cycle, written to FT_CLOUD_API_SNAPSHOT_PATH. Same shape as
+    _mix_api_poll_once/_teletrac_api_poll_once above, mirrored for FT
+    Cloud's OpenAPI (see fleet_logic/adapters/ft_cloud_api_client.py).
+    """
+    from settings import load_settings
+    from adapters.ft_cloud_api_client import FtCloudApiClient
+    from adapters import ft_cloud_api
+
+    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+    fleet_ids = settings["FT_CLOUD_API_FLEET_IDS"]
+    if not fleet_ids:
+        return {"status": "skipped", "reason": "no fleet_ids configured in settings.ini [ft_cloud_api]"}
+
+    client = FtCloudApiClient(inter_call_delay_seconds=settings["FT_CLOUD_API_INTER_CALL_DELAY_SECONDS"])
+    if not client.is_configured():
+        return {"status": "skipped", "reason": "FT_CLOUD_API_SIGN/FT_CLOUD_TENANT_ID not set"}
+
+    # Coordinates come from one of three places - see settings.ini's
+    # [ft_cloud_api] position_source. "webhook" is the cheap path: the
+    # positions were already pushed to this app by FT, so the poll
+    # makes ZERO extra calls for them instead of one per device.
+    source = settings["FT_CLOUD_API_POSITION_SOURCE"]
+    webhook_positions = None
+    if source == "webhook":
+        from adapters import ft_cloud_webhook
+        webhook_positions = ft_cloud_webhook.positions_by_unique_id(
+            FT_CLOUD_WEBHOOK_STATE_PATH,
+            max_age_minutes=settings["FT_CLOUD_API_WEBHOOK_POSITION_MAX_AGE_MINUTES"])
+
+    reports = ft_cloud_api.fetch_all_reports(
+        client, fleet_ids,
+        fetch_positions=(source == "trips"),
+        position_lookback_days=settings["FT_CLOUD_API_POSITION_LOOKBACK_DAYS"],
+        preset_positions=webhook_positions)
+    by_fleet = {}
+    for r in reports:
+        by_fleet.setdefault(r.organisation_id, []).append({
+            "plate": r.asset_plate,
+            "lat": r.last_lat,
+            "lon": r.last_lon,
+            "lastReportTime": r.last_report_time.isoformat() if r.last_report_time else None,
+            "statusNote": r.status_note,
+            "uniqueId": r.raw_row["deviceInfo"].get("uniqueId"),
+        })
+    snapshot = {
+        "fetchedAt": datetime.now().isoformat(),
+        "fleetIds": fleet_ids,
+        "positionSource": source,
+        "counts": {f: len(rows) for f, rows in by_fleet.items()},
+        "byFleet": by_fleet,
+    }
+    with open(FT_CLOUD_API_SNAPSHOT_PATH, "w") as f:
+        json.dump(snapshot, f, indent=2, default=str)
+    return {"status": "ok", "counts": snapshot["counts"], "positionSource": source,
+            "withCoordinates": sum(1 for rows in by_fleet.values() for r in rows if r["lat"] is not None)}
+
+
+def _ft_cloud_api_poll_loop():
+    while True:
+        try:
+            result = _ft_cloud_api_poll_once()
+            if result["status"] == "ok":
+                print(f"FT Cloud API poll: {result['counts']}")
+            else:
+                print(f"FT Cloud API poll skipped: {result['reason']}")
+        except Exception as e:
+            print(f"FT Cloud API poll failed: {e}")
+
+        from settings import load_settings
+        settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+        time.sleep(max(1, settings["FT_CLOUD_API_POLL_INTERVAL_MINUTES"]) * 60)
+
+
+def _start_ft_cloud_api_poller():
+    """Fires once at app startup and keeps running for as long as this
+    process does - same lifetime/restart tradeoffs as _start_mix_api_poller."""
+    threading.Thread(target=_ft_cloud_api_poll_loop, daemon=True).start()
+
+
+def _ft_cloud_api_poller_enabled():
+    """Same guard as _mix_api_poller_enabled - keeps importing app.py
+    (e.g. test_permissions.py) from starting a real background poller."""
+    if "pytest" in sys.modules:
+        return False
+    if os.environ.get("DISABLE_FT_CLOUD_API_POLLER") == "true":
+        return False
+    return True
+
+
+if _ft_cloud_api_poller_enabled():
+    _start_ft_cloud_api_poller()
+
+
+@app.route("/api/ftcloud/snapshot", methods=["GET"])
+@login_required
+def api_ft_cloud_snapshot():
+    """Read-only view of the last FT Cloud API poll, for verifying the
+    new ingestion path before/after it's wired into the real dashboard data."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if not os.path.exists(FT_CLOUD_API_SNAPSHOT_PATH):
+        return jsonify({"status": "no_snapshot_yet"})
+    with open(FT_CLOUD_API_SNAPSHOT_PATH) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/ftcloud/poll-now", methods=["POST"])
+@login_required
+def api_ft_cloud_poll_now():
+    """Manual trigger so testing doesn't require waiting for the
+    interval - runs in the background, check /api/ftcloud/snapshot after."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    threading.Thread(target=_ft_cloud_api_poll_once, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/ftcloud/fleets", methods=["GET"])
+@login_required
+def api_ft_cloud_fleets():
+    """Lists every fleet visible to these FT Cloud credentials, so an
+    operator can look up the fleetId for 'Globe Trotters Ltd(GTL)' to
+    put in settings.ini's [ft_cloud_api] fleet_ids."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    from adapters.ft_cloud_api_client import FtCloudApiClient
+    client = FtCloudApiClient()
+    if not client.is_configured():
+        return jsonify({"error": "FT_CLOUD_API_SIGN/FT_CLOUD_TENANT_ID not set"}), 503
+    try:
+        return jsonify({"fleets": client.get_fleets()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+FT_CLOUD_WEBHOOK_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "ft_cloud_webhook_state.json")
+
+
+def _ft_cloud_webhook_secret():
+    """
+    The receiver route below is necessarily PUBLIC - FT posts to it
+    unauthenticated, and its subscribe API accepts only a callbackUrl,
+    with no way to attach a header or credential. So the only place a
+    shared secret can live is the URL path itself, which makes that
+    URL a bearer token: treat it like a password, and rotate it by
+    changing this value and re-subscribing.
+    """
+    return os.environ.get("FT_CLOUD_WEBHOOK_SECRET") or ""
+
+
+def _ft_cloud_subscribed_unique_ids():
+    """
+    The device allowlist for the receiver. Read from the last poll's
+    snapshot rather than by calling FT, so a webhook delivery never
+    triggers an outbound API call - this route is on FT's hot path and
+    must stay fast. Returns None (meaning "allow anything") only when
+    no snapshot exists yet, so a freshly deployed app still captures
+    positions before its first poll completes.
+    """
+    if not os.path.exists(FT_CLOUD_API_SNAPSHOT_PATH):
+        return None
+    try:
+        with open(FT_CLOUD_API_SNAPSHOT_PATH) as f:
+            snapshot = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    ids = {r.get("uniqueId") for rows in snapshot.get("byFleet", {}).values()
+           for r in rows if r.get("uniqueId")}
+    return ids or None
+
+
+@app.route("/webhook/ftcloud/<secret>", methods=["POST"])
+def ft_cloud_webhook_receiver(secret):
+    """
+    Public receiver for FT's push stream. Deliberately NOT
+    @login_required - FT is a machine posting to it, not a browser
+    session. Access control is the secret in the path (see
+    _ft_cloud_webhook_secret) plus the device allowlist.
+
+    Always answers 200 once the secret checks out, even on a payload
+    it could not parse: providers commonly disable a subscription
+    after repeated non-200s, and losing the whole stream because of
+    one malformed message would be a far worse failure than dropping
+    that message. Anything unparsed is retained in the state file for
+    inspection instead.
+    """
+    expected = _ft_cloud_webhook_secret()
+    if not expected or not hmac.compare_digest(secret, expected):
+        return jsonify({"error": "not found"}), 404
+
+    from adapters import ft_cloud_webhook
+    try:
+        body = request.get_json(force=True, silent=True)
+        result = ft_cloud_webhook.record_events(
+            FT_CLOUD_WEBHOOK_STATE_PATH, body,
+            message_type=request.args.get("type"),
+            allowed_unique_ids=_ft_cloud_subscribed_unique_ids())
+    except Exception as e:
+        print(f"FT Cloud webhook receiver error (answering 200 anyway): {e}")
+        return jsonify({"ok": True}), 200
+    return jsonify({"ok": True, **result}), 200
+
+
+@app.route("/api/ftcloud/webhook/subscribe", methods=["POST"])
+@login_required
+def api_ft_cloud_webhook_subscribe():
+    """
+    One-off registration of this app as FT's push target, scoped to
+    the configured fleets' devices only.
+
+    Two things this deliberately refuses rather than guesses at:
+    a base URL it can't verify is publicly reachable, and an empty
+    device list (which FT documents as "subscribe to all devices" -
+    on this reseller tenant that would pull in 10 other companies'
+    vehicles).
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    secret = _ft_cloud_webhook_secret()
+    if not secret:
+        return jsonify({"error": "FT_CLOUD_WEBHOOK_SECRET is not set - refusing to expose an "
+                                  "unauthenticated public webhook endpoint"}), 400
+    base = public_base_url()
+    if not base:
+        return jsonify({"error": "No public base URL available (PUBLIC_BASE_URL / "
+                                  "RENDER_EXTERNAL_URL). FT must be able to reach this app."}), 400
+
+    from settings import load_settings
+    from adapters.ft_cloud_api_client import FtCloudApiClient
+    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+    fleet_ids = settings["FT_CLOUD_API_FLEET_IDS"]
+    if not fleet_ids:
+        return jsonify({"error": "no fleet_ids configured in settings.ini [ft_cloud_api]"}), 400
+
+    client = FtCloudApiClient()
+    if not client.is_configured():
+        return jsonify({"error": "FT_CLOUD_API_SIGN/FT_CLOUD_TENANT_ID not set"}), 503
+
+    types = request.json.get("types") if request.is_json and request.json else None
+    types = types or ["GPS", "ONLINE_STATE"]
+    callback_url = f"{base}/webhook/ftcloud/{secret}"
+
+    try:
+        unique_ids = client.get_fleet_unique_ids(fleet_ids)
+    except Exception as e:
+        return jsonify({"error": f"could not list fleet devices: {e}"}), 502
+
+    results = {}
+    for t in types:
+        try:
+            client.subscribe_webhook(t, f"{callback_url}?type={t}", unique_ids)
+            results[t] = "subscribed"
+        except Exception as e:
+            results[t] = f"failed: {e}"
+    return jsonify({"deviceCount": len(unique_ids), "callbackUrl": callback_url.replace(secret, "***"),
+                     "results": results})
+
+
+@app.route("/api/ftcloud/webhook/status", methods=["GET"])
+@login_required
+def api_ft_cloud_webhook_status():
+    """What FT thinks is subscribed, plus what this app has actually
+    received - the two together are what tell you whether the push
+    stream is genuinely flowing or just registered."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    from adapters.ft_cloud_api_client import FtCloudApiClient
+    from adapters import ft_cloud_webhook
+
+    client = FtCloudApiClient()
+    remote = {}
+    if client.is_configured():
+        for t in ("GPS", "ONLINE_STATE"):
+            try:
+                sub = client.get_webhook_subscription(t)
+                remote[t] = {"subscribed": sub.get("subscribed"),
+                              "deviceCount": len([u for u in (sub.get("uniqueIds") or "").split(",") if u])}
+            except Exception as e:
+                remote[t] = {"error": str(e)}
+
+    state = ft_cloud_webhook.load_state(FT_CLOUD_WEBHOOK_STATE_PATH)
+    return jsonify({
+        "secretConfigured": bool(_ft_cloud_webhook_secret()),
+        "publicBaseUrl": public_base_url() or None,
+        "subscriptions": remote,
+        "received": {
+            "devices": len(state.get("devices", {})),
+            "withCoordinates": sum(1 for d in state.get("devices", {}).values() if d.get("lat") is not None),
+            "updatedAt": state.get("updatedAt"),
+            "unparsedSamples": state.get("unparsed", [])[:3],
+        },
+    })
+
+
+@app.route("/api/ftcloud/webhook/unsubscribe", methods=["POST"])
+@login_required
+def api_ft_cloud_webhook_unsubscribe():
+    """Hands the push stream back. Useful if Teletrac needs the
+    tenant's single callbackUrl-per-type for another integration."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    from adapters.ft_cloud_api_client import FtCloudApiClient
+    client = FtCloudApiClient()
+    if not client.is_configured():
+        return jsonify({"error": "FT_CLOUD_API_SIGN/FT_CLOUD_TENANT_ID not set"}), 503
+    types = (request.json or {}).get("types") if request.is_json else None
+    results = {}
+    for t in (types or ["GPS", "ONLINE_STATE"]):
+        try:
+            client.unsubscribe_webhook(t)
+            results[t] = "unsubscribed"
+        except Exception as e:
+            results[t] = f"failed: {e}"
+    return jsonify({"results": results})
+
+
 @app.route("/api/import", methods=["GET", "POST"])
 def api_import():
     """
@@ -913,4 +1483,9 @@ def login_page():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # use_reloader=False: the reloader re-imports this module in a
+    # separate watcher process, which would start a second copy of the
+    # MiX API poll thread below (see _start_mix_api_poller) racing the
+    # real one - not harmful (idempotent snapshot writes), just double
+    # API traffic for no reason during local dev.
+    app.run(debug=True, port=5000, use_reloader=False)
