@@ -17,6 +17,7 @@ import os
 import sys
 import glob
 import json
+import time
 import tempfile
 import threading
 from datetime import datetime
@@ -35,6 +36,7 @@ from classifier import group_by_plate, classify_fleet
 from settings import load_settings
 from control_room import _build_data
 from schema import now_eat
+import atomic_json
 import report_writer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -42,21 +44,12 @@ WORK_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "_incoming")
 
 
 def _write_json_atomic(path, data):
-    """
-    Write-then-rename instead of writing fleet_today.json directly. Every
-    dashboard request reads this file (app.py's load_dashboard_data())
-    from its own thread with no coordination with the writer beyond
-    _FLEET_TODAY_LOCK (which only serializes writer-vs-writer, not
-    writer-vs-reader) - a plain open(path, "w") + json.dump() is visible
-    to a concurrent reader WHILE it's still being written, which would
-    intermittently serve a truncated/invalid JSON response. os.replace()
-    is atomic on both POSIX and Windows, so a reader only ever sees the
-    fully-old or fully-new file.
-    """
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, default=str)
-    os.replace(tmp_path, path)
+    """Every dashboard request reads fleet_today.json (app.py's
+    load_dashboard_data()) from its own thread, with no coordination
+    with the writer beyond _FLEET_TODAY_LOCK - which serializes
+    writer-vs-writer, not writer-vs-reader. See
+    fleet_logic/atomic_json.py."""
+    atomic_json.write_json_atomic(path, data)
 
 
 class ImportError_(Exception):
@@ -296,9 +289,31 @@ def _load_mix_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
                 last_lon=e.get("lon"),
                 last_location_text=e.get("locationText"),
                 organisation_id=org_id,
+                client=e.get("client"),
                 raw_row=e,
             ))
     return rows
+
+
+def _load_decommissioned_plates(snapshot_path=None):
+    """
+    The retired-vehicle exclusion list published by the MiX poller (see
+    mix_api.decommissioned_plates). Deliberately NOT age-gated the way
+    the position snapshots are: a vehicle that was decommissioned stays
+    decommissioned, so an hours-old list is still correct, and treating
+    it as stale would quietly let retired assets back onto the
+    dashboard - the exact failure this exists to prevent. Returns an
+    empty set when there's no snapshot yet, which just means no
+    exclusions rather than an error.
+    """
+    snapshot_path = snapshot_path or MIX_API_SNAPSHOT_PATH
+    if not os.path.exists(snapshot_path):
+        return set()
+    try:
+        with open(snapshot_path) as f:
+            return set(json.load(f).get("decommissionedPlates") or [])
+    except (ValueError, OSError):
+        return set()
 
 
 TELETRAC_API_SNAPSHOT_PATH = os.path.join(DATA_DIR, "teletrac_api_snapshot.json")
@@ -356,6 +371,7 @@ def _load_teletrac_api_reports(snapshot_path=None, max_age_minutes=90, now=None)
                 last_location_text=e.get("locationText"),
                 imei=e.get("imei"),
                 organisation_id=client_id,
+                client=e.get("client"),
                 raw_row=e,
             ))
     return rows
@@ -415,6 +431,7 @@ def _load_ft_cloud_api_reports(snapshot_path=None, max_age_minutes=90, now=None)
                 last_lon=e.get("lon"),
                 status_note=e.get("statusNote"),
                 organisation_id=fleet_id,
+                client=e.get("client"),
                 raw_row=e,
             ))
     return rows
@@ -454,6 +471,23 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     all_rows += mix_api_reports or []
     all_rows += teletrac_api_reports or []
     all_rows += ft_cloud_api_reports or []
+
+    # Decommissioned vehicles are excluded EVERYWHERE, from every
+    # source. The API adapters already drop them at ingest, but that
+    # alone left a hole: the mailed reports above carry no asset-state
+    # field, so a retired vehicle still present in yesterday's CSV came
+    # straight back in. Confirmed live before this filter existed - 8
+    # decommissioned GTL assets were on the dashboard, all of them
+    # arriving only via the mailed reports. MiX's asset record is the
+    # authority here, published by the poller as
+    # snapshot["decommissionedPlates"].
+    retired = _load_decommissioned_plates()
+    if retired:
+        before = len(all_rows)
+        all_rows = [r for r in all_rows if r.asset_plate not in retired]
+        dropped = before - len(all_rows)
+        if dropped:
+            print(f"Excluded {dropped} row(s) for {len(retired)} decommissioned vehicle(s)")
 
     grouped, skipped = group_by_plate(all_rows)
     timestamps = [r.last_report_time for r in all_rows if r.last_report_time]

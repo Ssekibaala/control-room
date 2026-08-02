@@ -24,9 +24,13 @@ local file nobody's watching.
 """
 
 import os
+import sys
 import json
 import hashlib
 from datetime import datetime
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
+from schema import now_eat
 
 FEEDBACK_HEADERS = ["Plate", "Comment", "RequiresFollowup", "Status", "DateAdded", "AddedBy", "Role", "EntryType"]
 
@@ -198,7 +202,7 @@ def add_user_sheet(username, password_hash, role, clients=None, email=""):
     ws = _get_or_create_users_tab(client, sheet_id)
     ws.append_row([
         username, password_hash, role, ", ".join(clients or []), "",
-        datetime.now().strftime("%d/%m/%Y %H:%M"), email,
+        now_eat().strftime("%d/%m/%Y %H:%M"), email,
     ])
 
 
@@ -240,7 +244,7 @@ def record_login_sheet(username):
     if cell is None:
         return
     ws.update_cell(cell.row, USER_HEADERS.index("LastLogin") + 1,
-                   datetime.now().strftime("%d/%m/%Y %H:%M"))
+                   now_eat().strftime("%d/%m/%Y %H:%M"))
 
 
 def _parse_bool(value):
@@ -411,7 +415,7 @@ def add_feedback(plate: str, comment: str, added_by: str = "", requires_followup
     followup_text = "" if requires_followup is None else ("Yes" if requires_followup else "No")
     ws.append_row([
         plate, comment, followup_text, infer_status(comment, requires_followup),
-        datetime.now().strftime("%d/%m/%Y %H:%M"), added_by, role, entry_type,
+        now_eat().strftime("%d/%m/%Y %H:%M"), added_by, role, entry_type,
     ])
     # Every OTHER worker must drop its cache, or it would keep serving
     # the pre-submit dashboard for up to the cache TTL - exactly the
@@ -508,7 +512,7 @@ def get_or_create_open_case(plate):
 
     next_case_id = max((int(r["CaseId"]) for _, r in plate_rows), default=0) + 1
     subject = f"{plate} — GTL case {next_case_id}"
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    now = now_eat().strftime("%d/%m/%Y %H:%M")
     ws.append_row([plate, next_case_id, subject, "", "", "open", now, ""])
     new_row = len(ws.get_all_values())
     # plate_rows is non-empty here (every row in it is closed, or there'd
@@ -537,7 +541,7 @@ def record_sent_message(plate, case, message_id):
     references = case["references"] + [message_id]
     ws.update(f"D{row}:E{row}", [[root, " ".join(references)]])
     ws.update_cell(row, THREAD_HEADERS.index("LastSentAt") + 1,
-                    datetime.now().strftime("%d/%m/%Y %H:%M"))
+                    now_eat().strftime("%d/%m/%Y %H:%M"))
     case["rootMessageId"], case["references"] = root, references
     return case
 
@@ -557,11 +561,31 @@ def close_case(plate, case_id):
 # ---- Clients registry ---------------------------------------------------
 # A client here is the ORGANISATION (e.g. "Globe Trotters Ltd"), not a
 # login - it exists so notifications can reach people who watch a fleet
-# without needing their own account. Every vehicle currently belongs to
-# the one existing client by default (no per-vehicle assignment yet - see
-# docs/EMAIL_FEEDBACK_DESIGN.md), so registry contacts are additive
-# recipients on every notification, alongside role-tagged user accounts.
-CLIENT_HEADERS = ["Name", "ContactEmails", "CreatedAt"]
+# without needing their own account, AND (since the multi-client build)
+# it is the unit of both data ownership and access control: every asset
+# row carries the client it belongs to, and a user only ever receives
+# rows for the clients assigned to them (see permissions.py).
+#
+# The three *Ids columns are what make that possible. The same real-world
+# client is named differently on every platform - AGL is "AGL" on MiX but
+# "AFRICA GLOBAL LOGISTICS" on Teletrac and "Africa Global Logistics(AGL)"
+# on FT Cloud - so there is no reliable way to merge them automatically.
+# These columns are the explicit, human-set mapping that says "these three
+# platform accounts are all the same client", maintained from the admin UI
+# rather than in code, so adding a client never needs a redeploy.
+# Comma-separated because one client can legitimately own several
+# organisations on the same platform.
+# The three *Ids columns are appended at the END, never inserted before
+# CreatedAt, for exactly the reason USER_HEADERS documents above:
+# gspread maps rows to headers by POSITION, so inserting them mid-list
+# would shift every pre-existing client row one place and silently read
+# its CreatedAt value as MixOrgIds. Rows written before these columns
+# existed just read back with all three blank (= not yet mapped).
+CLIENT_HEADERS = ["Name", "ContactEmails", "CreatedAt", "MixOrgIds", "TeletracClientIds", "FtCloudFleetIds"]
+
+
+def _split_ids(raw):
+    return [p.strip() for p in str(raw or "").split(",") if p.strip()]
 
 
 def _get_or_create_clients_tab(client, sheet_id):
@@ -589,17 +613,25 @@ def load_clients():
         out.append({
             "name": name,
             "emails": [e.strip() for e in emails_raw.split(",") if e.strip()],
+            "mixOrgIds": _split_ids(row.get("MixOrgIds")),
+            "teletracClientIds": _split_ids(row.get("TeletracClientIds")),
+            "ftCloudFleetIds": _split_ids(row.get("FtCloudFleetIds")),
             "createdAt": str(row.get("CreatedAt", "")).strip(),
         })
     return out
 
 
-def add_client(name, emails=None):
+def add_client(name, emails=None, mix_org_ids=None, teletrac_client_ids=None, ft_cloud_fleet_ids=None):
     client, sheet_id = _get_client()
     ws = _get_or_create_clients_tab(client, sheet_id)
     if any(str(r.get("Name", "")).strip().lower() == name.lower() for r in ws.get_all_records()):
         raise ValueError(f"A client named '{name}' already exists")
-    ws.append_row([name, ", ".join(emails or []), datetime.now().strftime("%d/%m/%Y %H:%M")])
+    # Order must match CLIENT_HEADERS exactly, including the three *Ids
+    # columns sitting AFTER CreatedAt - see the note on CLIENT_HEADERS.
+    ws.append_row([name, ", ".join(emails or []),
+                   now_eat().strftime("%d/%m/%Y %H:%M"),
+                   ", ".join(mix_org_ids or []), ", ".join(teletrac_client_ids or []),
+                   ", ".join(ft_cloud_fleet_ids or [])])
 
 
 def set_client_emails(name, emails):
@@ -611,6 +643,29 @@ def set_client_emails(name, emails):
     if cell is None:
         return False
     ws.update_cell(cell.row, CLIENT_HEADERS.index("ContactEmails") + 1, ", ".join(emails or []))
+    return True
+
+
+def set_client_platforms(name, mix_org_ids=None, teletrac_client_ids=None, ft_cloud_fleet_ids=None):
+    """
+    Replaces this client's platform-account mapping - which MiX orgs /
+    Teletrac clients / FT Cloud fleets belong to it. Passing None for a
+    platform leaves that platform's existing mapping alone; passing an
+    empty list clears it (i.e. "this client is no longer on that
+    platform"), which is a meaningful and different instruction.
+    Returns False if no client by that name exists.
+    """
+    client, sheet_id = _get_client()
+    ws = _get_or_create_clients_tab(client, sheet_id)
+    cell = ws.find(name, in_column=1)
+    if cell is None:
+        return False
+    for column, ids in (("MixOrgIds", mix_org_ids),
+                        ("TeletracClientIds", teletrac_client_ids),
+                        ("FtCloudFleetIds", ft_cloud_fleet_ids)):
+        if ids is None:
+            continue
+        ws.update_cell(cell.row, CLIENT_HEADERS.index(column) + 1, ", ".join(ids))
     return True
 
 
@@ -670,7 +725,7 @@ def save_vehicle_status(status_by_plate):
     worth preserving."""
     client, sheet_id = _get_client()
     ws = _get_or_create_vehicle_status_tab(client, sheet_id)
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    now = now_eat().strftime("%d/%m/%Y %H:%M")
     rows = [[plate, status, now] for plate, status in sorted(status_by_plate.items())]
     ws.clear()
     ws.append_row(VEHICLE_STATUS_HEADERS)
@@ -795,7 +850,7 @@ def add_tamper_check(plate, checked_by, comment):
     section (and the tamper risk report email) shows."""
     client, sheet_id = _get_client()
     ws = _get_or_create_tamper_checks_tab(client, sheet_id)
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    now = now_eat().strftime("%d/%m/%Y %H:%M")
     ws.append_row([plate, checked_by, now, comment])
 
 
@@ -865,4 +920,4 @@ def is_token_used(token):
 def mark_token_used(token):
     client, sheet_id = _get_client()
     ws = _get_or_create_used_tokens_tab(client, sheet_id)
-    ws.append_row([_hash_token(token), datetime.now().strftime("%d/%m/%Y %H:%M")])
+    ws.append_row([_hash_token(token), now_eat().strftime("%d/%m/%Y %H:%M")])

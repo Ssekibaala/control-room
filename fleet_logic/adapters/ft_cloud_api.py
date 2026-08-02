@@ -81,8 +81,18 @@ def build_reports(fleet_id, vehicles, device_infos, positions=None):
     reports = []
     skipped_no_plate = 0
     skipped_no_device = 0
+    skipped_disabled = 0
 
     for v in vehicles:
+        # FT's equivalent of MiX's UserState=Decommissioned (see
+        # mix_api.is_decommissioned). Every GTL/AGL vehicle is currently
+        # ENABLE so this filters nothing today - it's here so a vehicle
+        # retired on FT later drops out on its own, the same way a
+        # decommissioned MiX asset does, rather than silently padding
+        # the fleet count until someone notices.
+        if str(v.get("vehicleState", "")).strip().upper() not in ("", "ENABLE"):
+            skipped_disabled += 1
+            continue
         plate = normalize_plate(v.get("vehicleNumber", ""))
         if not plate:
             skipped_no_plate += 1
@@ -113,6 +123,8 @@ def build_reports(fleet_id, vehicles, device_infos, positions=None):
         logger.warning(f"FT Cloud fleet {fleet_id}: {skipped_no_plate} vehicle(s) had no usable plate, skipped")
     if skipped_no_device:
         logger.warning(f"FT Cloud fleet {fleet_id}: {skipped_no_device} vehicle(s) had no attached device, skipped")
+    if skipped_disabled:
+        logger.info(f"FT Cloud fleet {fleet_id}: {skipped_disabled} disabled vehicle(s) excluded")
     return reports
 
 

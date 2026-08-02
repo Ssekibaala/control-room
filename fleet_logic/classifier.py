@@ -12,11 +12,14 @@ Rebuild, per direct feedback:
     Action Required (what to do), not just a status label.
 """
 
+import logging
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from border_risk import border_risk
 from schema import is_valid_plate, now_eat
+
+logger = logging.getLogger(__name__)
 
 
 def _severity_for(days_silent, settings):
@@ -87,6 +90,39 @@ def _recommended_action(status, days_silent, has_border_risk, feedback, settings
     return "Contact customer for status confirmation"
 
 
+def _client_for(plate, reports):
+    """
+    Which client this vehicle belongs to. Rows are merged per plate
+    across platforms, and each API-sourced row carries the client its
+    platform account maps to, so normally every row for a plate agrees
+    and this just picks that value.
+
+    Two cases it deliberately does not paper over:
+      - Mailed-report rows have no client at all (they predate the
+        registry), so they're ignored here rather than voting for
+        "unknown" - a plate seen on both a mailed report and a mapped
+        API account still resolves to the API's client.
+      - If two API rows genuinely disagree, the same plate is claimed by
+        two different clients' platform accounts. That's a real mapping
+        error worth surfacing, not silently resolving, so it's logged
+        and the most common answer wins (ties broken alphabetically so
+        the result is at least deterministic between runs).
+    """
+    named = [r.client for r in reports if getattr(r, "client", None)]
+    if not named:
+        return None
+    distinct = set(named)
+    if len(distinct) == 1:
+        return named[0]
+    counts = Counter(named)
+    winner = min(sorted(distinct), key=lambda c: (-counts[c], c))
+    logger.warning(
+        f"Plate {plate} is claimed by more than one client ({', '.join(sorted(distinct))}); "
+        f"using {winner!r}. Check the platform-account mapping in the Clients registry - "
+        f"the same vehicle should not be in two clients' accounts.")
+    return winner
+
+
 def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=None):
     now = now or now_eat()
     threshold_days = settings["OFFLINE_THRESHOLD_DAYS"]
@@ -95,6 +131,7 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
     for plate, reports in reports_by_plate.items():
         platform_status, latest_per_platform = _platform_status(reports, now, threshold_days)
         platforms = sorted(platform_status.keys())
+        client = _client_for(plate, reports)
         # "No Data" (a report row exists for this platform, but with no
         # usable timestamp inside it) counted as neither Offline nor
         # Online meant a persistently malformed report on ONE platform
@@ -137,7 +174,7 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
             severity = "-"
             action = _recommended_action(status, 0, False, fb, settings)
             result[plate] = {
-                "status": status, "severity": severity, "days_silent": 0,
+                "status": status, "severity": severity, "days_silent": 0, "client": client,
                 "platform_status": platform_status, "platforms": platforms,
                 "border_flag": False, "border_detail": None,
                 "last_location": last_location, "feedback": fb,
@@ -171,7 +208,7 @@ def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=N
         reasons = _investigation_reasons(days_silent, platform_status, fb, is_risk, len(offline_platforms))
 
         result[plate] = {
-            "status": status, "severity": severity, "days_silent": days_silent or 0,
+            "status": status, "severity": severity, "days_silent": days_silent or 0, "client": client,
             "platform_status": platform_status, "platforms": platforms,
             "border_flag": is_risk, "border_detail": risk_detail,
             "last_location": last_location, "feedback": fb,

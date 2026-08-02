@@ -53,6 +53,13 @@ class AssetReport:
     network_provider: Optional[str] = None
     status_note: Optional[str] = None   # free text, e.g. telecom's "offline since 11/7"
     organisation_id: Optional[str] = None  # MiX org / Teletrac client this row belongs to (API-sourced rows only)
+    # Canonical client this asset belongs to, resolved from
+    # organisation_id via the client registry (see
+    # fleet_logic/client_registry.py). This - not organisation_id - is
+    # what access control and the dashboard's client filter key off,
+    # because the same client owns differently-named accounts on each
+    # platform. None on mailed-report rows, which predate clients.
+    client: Optional[str] = None
     raw_row: dict = field(default_factory=dict)   # original row, kept for audit/debug
     ingested_at: datetime = field(default_factory=datetime.utcnow)
 

@@ -90,6 +90,9 @@ def _integrity_row(plate, info, now=None):
         info["platform_status"], now)
     return {
         "plate": plate, "status": info["status"], "severity": info["severity"], "days": info["days_silent"],
+        # Drives both the dashboard's client filter and the server-side
+        # access filter in permissions.py - every row must carry it.
+        "client": info.get("client") or "",
         **_platform_row(info),
         "lastPosition": last_position,
         "tltSeen": per_platform_seen.get("TLT", "No data"),

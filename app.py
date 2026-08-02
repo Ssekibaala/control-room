@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
 
 from schema import now_eat
+import atomic_json
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
@@ -869,52 +870,63 @@ def api_tamper_check():
 
 
 def _write_json_atomic(path, data):
-    """
-    Write-then-rename instead of writing the target file directly. A
-    plain open(path, "w") + json.dump() is visible to readers WHILE
-    it's being written - refresh_live_snapshot() (triggered right after
-    every successful poll, see _refresh_live_snapshot_after_poll) reads
-    these same snapshot files, and a reader landing mid-write sees a
-    truncated/invalid JSON document and silently drops that entire
-    poll's data ("snapshot is unreadable, skipping"). os.replace() is
-    atomic on both POSIX and Windows, so a reader only ever sees the
-    fully-old or fully-new file, never a partial one.
-    """
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
-    os.replace(tmp_path, path)
+    """Poll snapshots are read by refresh_live_snapshot() (fired right
+    after every successful poll) while the next poll may be writing
+    them - see fleet_logic/atomic_json.py for why that needs more care
+    than open()+dump()."""
+    atomic_json.write_json_atomic(path, data, indent=2)
 
 
 MIX_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_api_snapshot.json")
 
 
+def _load_settings():
+    return _load_settings_from(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
+
+
+def _load_settings_from(path):
+    from settings import load_settings
+    return load_settings(path)
+
+
+def _poll_registry(settings):
+    """The client list every poller works from. See
+    client_registry.load_registry() for the Sheets -> cache ->
+    settings.ini fallback chain and why it never raises."""
+    import client_registry
+    return client_registry.load_registry(settings)
+
+
 def _mix_api_poll_once():
     """
-    One fetch-assets-and-positions-for-every-configured-org cycle,
-    written to MIX_API_SNAPSHOT_PATH. Standalone for now (see
-    fleet_logic/adapters/mix_api.py's docstring) - NOT wired into
-    process_reports()/classify_fleet() yet, this is the "look at real
-    live data" step before that cutover happens.
+    One fetch-assets-and-positions cycle across every MiX organisation
+    claimed by a client in the registry, written to
+    MIX_API_SNAPSHOT_PATH. Rows are tagged with the CANONICAL CLIENT
+    NAME, not just the raw org id, so everything downstream (access
+    control, the dashboard's client filter) can group by client without
+    knowing anything about MiX's own ids.
     """
-    from settings import load_settings
+    import client_registry
     from adapters.mix_api_client import MixApiClient
     from adapters import mix_api
 
-    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
-    org_ids = settings["MIX_API_ORG_IDS"]
+    settings = _load_settings()
+    clients = _poll_registry(settings)
+    org_ids = client_registry.ids_for_platform(clients, "mix")
     if not org_ids:
-        return {"status": "skipped", "reason": "no org_ids configured in settings.ini [mix_api]"}
+        return {"status": "skipped", "reason": "no MiX organisations mapped to any client"}
+    owner = client_registry.platform_index(clients)["mix"]
 
     client = MixApiClient(inter_org_delay_seconds=settings["MIX_API_INTER_ORG_DELAY_SECONDS"])
     if not client.is_configured():
         return {"status": "skipped", "reason": "MIX_CLIENT_ID/MIX_CLIENT_SECRET/MIX_USERNAME/MIX_PASSWORD not set"}
 
-    reports = mix_api.fetch_all_reports(client, org_ids)
+    reports, retired_plates = mix_api.fetch_all_reports_and_decommissioned(client, org_ids)
     by_org = {}
     for r in reports:
         by_org.setdefault(r.organisation_id, []).append({
             "plate": r.asset_plate,
+            "client": owner.get(str(r.organisation_id), client_registry.UNASSIGNED),
             "lat": r.last_lat,
             "lon": r.last_lon,
             "locationText": r.last_location_text,
@@ -925,6 +937,11 @@ def _mix_api_poll_once():
     snapshot = {
         "fetchedAt": now_eat().isoformat(),
         "orgIds": org_ids,
+        "clientByOrgId": owner,
+        # Applied by run_import.process_reports() to EVERY source, not
+        # just MiX - see mix_api.decommissioned_plates() for why the
+        # mailed reports would otherwise reintroduce retired vehicles.
+        "decommissionedPlates": sorted(retired_plates),
         "counts": {org: len(rows) for org, rows in by_org.items()},
         "byOrg": by_org,
     }
@@ -1041,14 +1058,16 @@ def _teletrac_api_poll_once():
     above, mirrored for Teletrac's Integrate API (see
     fleet_logic/adapters/teletrac_api_client.py).
     """
-    from settings import load_settings
+    import client_registry
     from adapters.teletrac_api_client import TeletracApiClient
     from adapters import teletrac_api
 
-    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
-    client_ids = settings["TELETRAC_API_CLIENT_IDS"]
+    settings = _load_settings()
+    clients = _poll_registry(settings)
+    client_ids = client_registry.ids_for_platform(clients, "teletrac")
     if not client_ids:
-        return {"status": "skipped", "reason": "no client_ids configured in settings.ini [teletrac_api]"}
+        return {"status": "skipped", "reason": "no Teletrac clients mapped to any client"}
+    owner = client_registry.platform_index(clients)["teletrac"]
 
     client = TeletracApiClient(inter_client_delay_seconds=settings["TELETRAC_API_INTER_CLIENT_DELAY_SECONDS"])
     if not client.is_configured():
@@ -1059,6 +1078,7 @@ def _teletrac_api_poll_once():
     for r in reports:
         by_client.setdefault(r.organisation_id, []).append({
             "plate": r.asset_plate,
+            "client": owner.get(str(r.organisation_id), client_registry.UNASSIGNED),
             "lat": r.last_lat,
             "lon": r.last_lon,
             "locationText": r.last_location_text,
@@ -1068,6 +1088,7 @@ def _teletrac_api_poll_once():
     snapshot = {
         "fetchedAt": now_eat().isoformat(),
         "clientIds": client_ids,
+        "clientByClientId": owner,
         "counts": {c: len(rows) for c, rows in by_client.items()},
         "byClient": by_client,
     }
@@ -1165,14 +1186,16 @@ def _ft_cloud_api_poll_once():
     _mix_api_poll_once/_teletrac_api_poll_once above, mirrored for FT
     Cloud's OpenAPI (see fleet_logic/adapters/ft_cloud_api_client.py).
     """
-    from settings import load_settings
+    import client_registry
     from adapters.ft_cloud_api_client import FtCloudApiClient
     from adapters import ft_cloud_api
 
-    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
-    fleet_ids = settings["FT_CLOUD_API_FLEET_IDS"]
+    settings = _load_settings()
+    clients = _poll_registry(settings)
+    fleet_ids = client_registry.ids_for_platform(clients, "ftCloud")
     if not fleet_ids:
-        return {"status": "skipped", "reason": "no fleet_ids configured in settings.ini [ft_cloud_api]"}
+        return {"status": "skipped", "reason": "no FT Cloud fleets mapped to any client"}
+    owner = client_registry.platform_index(clients)["ftCloud"]
 
     client = FtCloudApiClient(inter_call_delay_seconds=settings["FT_CLOUD_API_INTER_CALL_DELAY_SECONDS"])
     if not client.is_configured():
@@ -1199,6 +1222,7 @@ def _ft_cloud_api_poll_once():
     for r in reports:
         by_fleet.setdefault(r.organisation_id, []).append({
             "plate": r.asset_plate,
+            "client": owner.get(str(r.organisation_id), client_registry.UNASSIGNED),
             "lat": r.last_lat,
             "lon": r.last_lon,
             "lastReportTime": r.last_report_time.isoformat() if r.last_report_time else None,
@@ -1208,6 +1232,7 @@ def _ft_cloud_api_poll_once():
     snapshot = {
         "fetchedAt": now_eat().isoformat(),
         "fleetIds": fleet_ids,
+        "clientByFleetId": owner,
         "positionSource": source,
         "counts": {f: len(rows) for f, rows in by_fleet.items()},
         "byFleet": by_fleet,

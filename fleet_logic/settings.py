@@ -21,12 +21,23 @@ DEFAULTS = {
     },
     "mix_api": {
         # Live MiX Integrate API polling (replaces the mailed report
-        # subscriptions, org by org). org_ids is comma-separated and
-        # empty by default - the poller does nothing until orgs are
-        # listed here. poll_interval_minutes is how often the
-        # in-process poller (see app.py) re-fetches while the app is
-        # running; it does NOT persist across restarts/dyno sleep, so
-        # this is a best-effort cadence, not a guaranteed one.
+        # subscriptions, org by org).
+        #
+        # org_ids is now a LEGACY FALLBACK ONLY and is empty by design.
+        # Which organisations get polled comes from the client registry
+        # (client_registry.load_registry() -> the Sheets "Clients" tab),
+        # so an org is always attached to a named client rather than
+        # floating loose - that mapping is what makes per-client access
+        # control and the dashboard's client filter possible at all.
+        # Anything listed here is only used if Sheets AND the local
+        # cache are both unavailable, and lands under one synthetic
+        # "Unassigned" client. Leave it empty unless you are
+        # deliberately running without Sheets.
+        #
+        # poll_interval_minutes is how often the in-process poller (see
+        # app.py) re-fetches while the app is running; it does NOT
+        # persist across restarts/dyno sleep, so this is a best-effort
+        # cadence, not a guaranteed one.
         "org_ids": "",
         "poll_interval_minutes": "5",
         "inter_org_delay_seconds": "5",
