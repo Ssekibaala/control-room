@@ -17,16 +17,20 @@ the two calls, etc).
 
 import logging
 from datetime import datetime
-from schema import AssetReport, normalize_plate
+from schema import AssetReport, normalize_plate, utc_to_eat
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(ts):
+    """MiX's Timestamp field is UTC (the 'Z' suffix) - converted to EAT
+    here, at the one place this raw value enters the app, so every
+    AssetReport.last_report_time in the whole system is EAT regardless
+    of source (see schema.py's utc_to_eat() docstring)."""
     if not ts:
         return None
     try:
-        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        return utc_to_eat(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
     except ValueError:
         return None
 

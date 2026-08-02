@@ -34,6 +34,7 @@ from adapters import teletrac_csv, mix_mobile_status, mix_power_events, mix_move
 from classifier import group_by_plate, classify_fleet
 from settings import load_settings
 from control_room import _build_data
+from schema import now_eat
 import report_writer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -267,7 +268,7 @@ def _load_mix_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
     except (ValueError, KeyError, json.JSONDecodeError):
         print(f"WARNING: MiX API snapshot at {snapshot_path} is unreadable, skipping.")
         return []
-    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    age_minutes = ((now or now_eat()) - fetched_at).total_seconds() / 60
     if age_minutes > max_age_minutes:
         print(f"WARNING: MiX API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
               f"skipping - looks like the poller stopped running.")
@@ -326,7 +327,7 @@ def _load_teletrac_api_reports(snapshot_path=None, max_age_minutes=90, now=None)
     except (ValueError, KeyError, json.JSONDecodeError):
         print(f"WARNING: Teletrac API snapshot at {snapshot_path} is unreadable, skipping.")
         return []
-    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    age_minutes = ((now or now_eat()) - fetched_at).total_seconds() / 60
     if age_minutes > max_age_minutes:
         print(f"WARNING: Teletrac API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
               f"skipping - looks like the poller stopped running.")
@@ -386,7 +387,7 @@ def _load_ft_cloud_api_reports(snapshot_path=None, max_age_minutes=90, now=None)
     except (ValueError, KeyError, json.JSONDecodeError):
         print(f"WARNING: FT Cloud API snapshot at {snapshot_path} is unreadable, skipping.")
         return []
-    age_minutes = ((now or datetime.now()) - fetched_at).total_seconds() / 60
+    age_minutes = ((now or now_eat()) - fetched_at).total_seconds() / 60
     if age_minutes > max_age_minutes:
         print(f"WARNING: FT Cloud API snapshot is {age_minutes:.0f} min old (> {max_age_minutes}), "
               f"skipping - looks like the poller stopped running.")
@@ -456,7 +457,7 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
 
     grouped, skipped = group_by_plate(all_rows)
     timestamps = [r.last_report_time for r in all_rows if r.last_report_time]
-    now = max(timestamps) if timestamps else datetime.now()
+    now = max(timestamps) if timestamps else now_eat()
     results = classify_fleet(grouped, settings, feedback, now=now)
 
     tamper_result = run_tamper_analysis(paths["mix_movement"], paths["mix_power_events"])
@@ -610,7 +611,7 @@ def already_imported_today(data_path=None):
     with open(data_path) as f:
         existing = json.load(f)
     imported_at = existing.get("meta", {}).get("importedAt", "")
-    today_str = datetime.now().strftime("%d %B %Y")
+    today_str = now_eat().strftime("%d %B %Y")
     return imported_at.startswith(today_str)
 
 
@@ -713,7 +714,7 @@ def refresh_live_snapshot():
         if os.path.exists(existing_path):
             with open(existing_path) as f:
                 data["meta"]["importedAt"] = json.load(f).get("meta", {}).get("importedAt", "")
-        data["meta"]["liveRefreshedAt"] = datetime.now().strftime("%d %B %Y, %H:%M")
+        data["meta"]["liveRefreshedAt"] = now_eat().strftime("%d %B %Y, %H:%M")
 
         os.makedirs(DATA_DIR, exist_ok=True)
         _write_json_atomic(existing_path, data)
@@ -789,7 +790,7 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     # but wrong for detecting "did the scheduled import actually run
     # recently", which needs real wall-clock time instead. Kept
     # separate rather than overloading one field for two questions.
-    data["meta"]["importedAt"] = datetime.now().strftime("%d %B %Y, %H:%M")
+    data["meta"]["importedAt"] = now_eat().strftime("%d %B %Y, %H:%M")
 
     with _FLEET_TODAY_LOCK:
         os.makedirs(DATA_DIR, exist_ok=True)

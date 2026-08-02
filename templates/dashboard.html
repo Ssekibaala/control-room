@@ -749,6 +749,14 @@
   .ticker-wrap { position:fixed; bottom:0; left:var(--sidebar-w); right:0; background:var(--header-bg);
     backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
     border-top:1px solid var(--border); padding:8px 0; overflow:hidden; white-space:nowrap; z-index:20; transition:left 0.3s; }
+  /* .ticker-wrap's left was hardcoded to the EXPANDED sidebar width and
+     never followed the sidebar's own .collapsed state, so collapsing the
+     sidebar left a ~180px dead gap between it and the ticker - the strip
+     never actually reached that corner. Sibling selector keeps them in
+     sync; sidebar and ticker-wrap are siblings (see the "collapse-btn"
+     JS toggling #sidebar's class, and .ticker-wrap's markup right after
+     the main content, both direct children of <body>). */
+  .sidebar.collapsed ~ .ticker-wrap { left:var(--sidebar-w-collapsed); }
   .ticker { display:inline-block; font-family:'JetBrains Mono'; font-size:12px; color:var(--text-secondary); animation:scroll 42s linear infinite; padding-left:100%; }
   @keyframes scroll { from{transform:translateX(0);} to{transform:translateX(-100%);} }
 
@@ -1882,6 +1890,17 @@ async function pollForNewComments() {
 // once per page load - no wireOnce() guard needed here.
 pollForNewComments();
 setInterval(pollForNewComments, 15000);
+
+// pollForNewComments only re-pulls/re-renders when a NEW COMMENT shows
+// up - it has no reason to otherwise, since it only exists to catch
+// feedback posted from someone else's tab. The live MiX/Teletrac/FT
+// Cloud API pollers (see app.py) now regenerate the dashboard's data
+// every ~1-5 minutes independent of any comment activity (fresh
+// positions, Online/Offline flips, the "Updated ..." pill), and none
+// of that reaches an already-open tab without this: same re-fetch +
+// re-render refreshDashboardData() already runs after a feedback
+// submit, just on a timer instead of a user action.
+setInterval(() => refreshDashboardData(), 60000);
 
 // renderEverything() is now re-run on every feedback submit so the
 // dashboard reflects the change instantly. Most of its listeners attach

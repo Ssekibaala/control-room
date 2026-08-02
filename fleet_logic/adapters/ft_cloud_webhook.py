@@ -34,6 +34,7 @@ import json
 import threading
 import logging
 from datetime import datetime
+from schema import now_eat, utc_to_eat
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +49,11 @@ MAX_UNPARSED = 50
 def _parse_ts(value):
     """
     Webhook timestamps arrive either as RFC3339 (matching the REST
-    side) or as epoch milliseconds, depending on message type. Both
-    are normalised to a naive UTC datetime, the same convention every
-    adapter in this codebase uses - the classifier subtracts these
-    from datetime.now(), so a tz-aware value here would raise.
+    side) or as epoch milliseconds, depending on message type. Both are
+    parsed as UTC (what they actually are) then converted to naive EAT
+    via schema.utc_to_eat() - the same convention every adapter in this
+    codebase uses, since classifier compares these against schema.now_eat(),
+    not host-local time (a tz-aware value here would raise on subtraction).
     """
     if value in (None, ""):
         return None
@@ -61,15 +63,31 @@ def _parse_ts(value):
         if ms > 1e11:
             ms /= 1000.0
         try:
-            return datetime.utcfromtimestamp(ms)
+            return utc_to_eat(datetime.utcfromtimestamp(ms))
         except (ValueError, OSError):
             return None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.strptime(str(value), fmt)
+            return utc_to_eat(datetime.strptime(str(value), fmt))
         except ValueError:
             continue
     return None
+
+
+def _parse_stored_ts(value):
+    """
+    For re-reading a timestamp THIS module already wrote to the state
+    file (record_events() stores new_ts.isoformat() - already EAT,
+    post-_parse_ts conversion). Deliberately does NOT call _parse_ts:
+    that function assumes its input is raw incoming UTC and would shift
+    an already-EAT value by another +3h. Plain ISO parse, no offset.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _first(d, *keys):
@@ -200,7 +218,7 @@ def record_events(path, body, message_type=None, allowed_unique_ids=None):
 
             current = devices.get(uid, {})
             new_ts = parsed["time"]
-            old_ts = _parse_ts(current.get("time"))
+            old_ts = _parse_stored_ts(current.get("time"))
             # Out-of-order deliveries are normal on a push stream;
             # never let a late older fix overwrite a newer one.
             if new_ts and old_ts and new_ts < old_ts:
@@ -216,13 +234,13 @@ def record_events(path, body, message_type=None, allowed_unique_ids=None):
                 current["online"] = parsed["online"]
             if message_type:
                 current["lastType"] = message_type
-            current["receivedAt"] = datetime.now().isoformat()
+            current["receivedAt"] = now_eat().isoformat()
             devices[uid] = current
             accepted += 1
 
         if unparsed:
             state["unparsed"] = (state.get("unparsed", []) + unparsed)[-MAX_UNPARSED:]
-        state["updatedAt"] = datetime.now().isoformat()
+        state["updatedAt"] = now_eat().isoformat()
         _save_state(path, state)
 
     if unparsed:
@@ -242,12 +260,12 @@ def positions_by_unique_id(path, max_age_minutes=None, now=None):
     position to the border-risk check.
     """
     state = load_state(path)
-    now = now or datetime.now()
+    now = now or now_eat()
     out = {}
     for uid, d in state.get("devices", {}).items():
         if d.get("lat") is None or d.get("lon") is None:
             continue
-        ts = _parse_ts(d.get("time"))
+        ts = _parse_stored_ts(d.get("time"))
         if max_age_minutes is not None and ts is not None:
             if (now - ts).total_seconds() / 60 > max_age_minutes:
                 continue

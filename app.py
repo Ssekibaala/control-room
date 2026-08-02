@@ -42,6 +42,8 @@ from respond_tokens import make_respond_token, read_respond_token
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
 
+from schema import now_eat
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
 
@@ -693,7 +695,7 @@ def api_feedback_activity():
     # moment either side's month abbreviation or locale differs.
     # "date"/"dateOnly" stay as display-formatted strings for showing
     # in the UI, never for comparison.
-    today_iso = datetime.now().strftime("%Y-%m-%d")
+    today_iso = now_eat().strftime("%Y-%m-%d")
     serialized = [
         {
             "plate": e["plate"], "comment": e["comment"], "requiresFollowup": e["requiresFollowup"],
@@ -767,7 +769,7 @@ def api_refresh_if_stale():
         # since it means no import has run since this feature shipped.
         imported_str = meta.get("importedAt", "")
         imported_at = datetime.strptime(imported_str, "%d %B %Y, %H:%M")
-        age_hours = (datetime.now() - imported_at).total_seconds() / 3600
+        age_hours = (now_eat() - imported_at).total_seconds() / 3600
     except (FileNotFoundError, ValueError, KeyError):
         age_hours = STALE_THRESHOLD_HOURS + 1  # no readable/importedAt-less data - treat as stale
 
@@ -921,7 +923,7 @@ def _mix_api_poll_once():
             "fleetNumber": r.raw_row["asset"].get("FleetNumber"),
         })
     snapshot = {
-        "fetchedAt": datetime.now().isoformat(),
+        "fetchedAt": now_eat().isoformat(),
         "orgIds": org_ids,
         "counts": {org: len(rows) for org, rows in by_org.items()},
         "byOrg": by_org,
@@ -1064,7 +1066,7 @@ def _teletrac_api_poll_once():
             "imei": r.imei,
         })
     snapshot = {
-        "fetchedAt": datetime.now().isoformat(),
+        "fetchedAt": now_eat().isoformat(),
         "clientIds": client_ids,
         "counts": {c: len(rows) for c, rows in by_client.items()},
         "byClient": by_client,
@@ -1204,7 +1206,7 @@ def _ft_cloud_api_poll_once():
             "uniqueId": r.raw_row["deviceInfo"].get("uniqueId"),
         })
     snapshot = {
-        "fetchedAt": datetime.now().isoformat(),
+        "fetchedAt": now_eat().isoformat(),
         "fleetIds": fleet_ids,
         "positionSource": source,
         "counts": {f: len(rows) for f, rows in by_fleet.items()},

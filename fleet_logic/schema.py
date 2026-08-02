@@ -5,8 +5,37 @@ email writer) ever needs to know which platform a row came from.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+
+# East Africa Time - UTC+3 year-round, no DST - where this fleet actually
+# operates. Deliberately a fixed offset added to datetime.utcnow(), NOT
+# the container/host's own system timezone (which defaults to UTC on a
+# bare python:3.12-slim image and was never explicitly set), and NOT
+# zoneinfo/pytz (would need a tzdata package the base image doesn't
+# ship). Every datetime in this codebase is naive and, by convention,
+# assumed to already be EAT wall-clock - these two helpers are the only
+# places that convention gets enforced against a real UTC source.
+_EAT_OFFSET = timedelta(hours=3)
+
+
+def now_eat():
+    """Current wall-clock time in East Africa Time, as a naive datetime -
+    use this instead of datetime.now()/datetime.utcnow() for anything
+    that gets displayed or compared against report timestamps (which are
+    EAT too), so a container whose own system clock is UTC doesn't make
+    the dashboard's timestamps run 3 hours behind reality."""
+    return datetime.utcnow() + _EAT_OFFSET
+
+
+def utc_to_eat(dt):
+    """Converts a naive UTC datetime (e.g. parsed from a '...Z'-suffixed
+    API timestamp) to naive EAT, so it's directly comparable to every
+    other timestamp in this codebase without silently running 3 hours
+    off. None-safe."""
+    if dt is None:
+        return None
+    return dt + _EAT_OFFSET
 
 
 @dataclass

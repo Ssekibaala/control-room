@@ -16,20 +16,21 @@ build_reports()'s skipped counter for that case.
 
 import logging
 from datetime import datetime
-from schema import AssetReport, normalize_plate
+from schema import AssetReport, normalize_plate, utc_to_eat
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(ts):
-    """FT returns RFC3339 with a literal Z. Parsed to a naive UTC
-    datetime to match every other adapter in this codebase - classifier
-    compares these against each other and against datetime.now(), so a
-    tz-aware value here would raise on subtraction."""
+    """FT returns RFC3339 with a literal Z (real UTC, confirmed against
+    tenant-1144 data), converted to EAT here via utc_to_eat() - stays a
+    naive datetime (classifier compares these against each other and
+    against now_eat(), so a tz-aware value here would raise on
+    subtraction), but now correctly EAT rather than 3 hours behind."""
     if not ts:
         return None
     try:
-        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        return utc_to_eat(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
     except (ValueError, TypeError):
         return None
 

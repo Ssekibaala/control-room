@@ -13,16 +13,23 @@ required.
 
 import logging
 from datetime import datetime
-from schema import AssetReport, normalize_plate
+from schema import AssetReport, normalize_plate, utc_to_eat
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(ts):
+    """
+    GPSDateTime carries no timezone marker, but is UTC - confirmed live
+    against real GTL data (client RGYn7A==): the freshest devices'
+    timestamps tracked wall-clock UTC at fetch time, ~3h behind EAT.
+    Converted here so it's directly comparable to every other
+    AssetReport.last_report_time in the app (see schema.utc_to_eat()).
+    """
     if not ts:
         return None
     try:
-        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+        return utc_to_eat(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
     except ValueError:
         return None
 

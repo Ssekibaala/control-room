@@ -15,6 +15,7 @@ you download.
 import json
 import base64
 from datetime import datetime
+from schema import now_eat
 
 PLATFORM_ORDER = ["Teletrac", "MiX Unity", "FT Cloud Camera"]
 PLATFORM_SHORT = {"Teletrac": "TLT", "MiX Unity": "MIX", "FT Cloud Camera": "CAM"}
@@ -241,7 +242,7 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
 
 def build_dashboard(results, settings, tampering, recovered, newly_offline, report_date=None,
                      history_available=True, xlsx_path=None, tamper_xlsx_path=None):
-    report_date = report_date or datetime.now()
+    report_date = report_date or now_eat()
     data = _build_data(results, settings, tampering, recovered, newly_offline, report_date,
                         history_available, xlsx_path, tamper_xlsx_path)
     data_json = json.dumps(data)

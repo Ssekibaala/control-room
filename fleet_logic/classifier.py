@@ -16,7 +16,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from border_risk import border_risk
-from schema import is_valid_plate
+from schema import is_valid_plate, now_eat
 
 
 def _severity_for(days_silent, settings):
@@ -88,7 +88,7 @@ def _recommended_action(status, days_silent, has_border_risk, feedback, settings
 
 
 def classify_fleet(reports_by_plate: dict, settings: dict, feedback: dict, now=None):
-    now = now or datetime.utcnow()
+    now = now or now_eat()
     threshold_days = settings["OFFLINE_THRESHOLD_DAYS"]
     result = {}
 
