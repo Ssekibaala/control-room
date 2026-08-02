@@ -866,6 +866,24 @@ def api_tamper_check():
     return jsonify({"ok": True, "plate": plate})
 
 
+def _write_json_atomic(path, data):
+    """
+    Write-then-rename instead of writing the target file directly. A
+    plain open(path, "w") + json.dump() is visible to readers WHILE
+    it's being written - refresh_live_snapshot() (triggered right after
+    every successful poll, see _refresh_live_snapshot_after_poll) reads
+    these same snapshot files, and a reader landing mid-write sees a
+    truncated/invalid JSON document and silently drops that entire
+    poll's data ("snapshot is unreadable, skipping"). os.replace() is
+    atomic on both POSIX and Windows, so a reader only ever sees the
+    fully-old or fully-new file, never a partial one.
+    """
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+    os.replace(tmp_path, path)
+
+
 MIX_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_api_snapshot.json")
 
 
@@ -908,9 +926,32 @@ def _mix_api_poll_once():
         "counts": {org: len(rows) for org, rows in by_org.items()},
         "byOrg": by_org,
     }
-    with open(MIX_API_SNAPSHOT_PATH, "w") as f:
-        json.dump(snapshot, f, indent=2, default=str)
+    _write_json_atomic(MIX_API_SNAPSHOT_PATH, snapshot)
     return {"status": "ok", "counts": snapshot["counts"]}
+
+
+def _refresh_live_snapshot_after_poll(platform_label):
+    """
+    Shared tail call for every platform's poll loop: once a live API
+    poll has fresh data on disk, immediately reclassify the dashboard
+    from it (run_import.refresh_live_snapshot()) instead of waiting for
+    tomorrow's mail-based run_import() - this is what makes the
+    dashboard's "Updated ..." pill actually track the ~5 min API
+    cadence rather than the once-daily import. See that function's own
+    docstring for why it's safe to call this often (no notifications,
+    no day-over-day status persistence, meta.importedAt untouched).
+    """
+    try:
+        from run_import import refresh_live_snapshot
+        result = refresh_live_snapshot()
+        if result["status"] == "ok":
+            print(f"Live snapshot refreshed after {platform_label} poll: generated {result['generated']}")
+        elif result["status"] == "skipped":
+            print(f"Live snapshot refresh skipped after {platform_label} poll: {result['reason']}")
+        else:
+            print(f"Live snapshot refresh failed after {platform_label} poll: {result.get('reason')}")
+    except Exception as e:
+        print(f"Live snapshot refresh errored after {platform_label} poll: {e}")
 
 
 def _mix_api_poll_loop():
@@ -919,6 +960,7 @@ def _mix_api_poll_loop():
             result = _mix_api_poll_once()
             if result["status"] == "ok":
                 print(f"MiX API poll: {result['counts']}")
+                _refresh_live_snapshot_after_poll("MiX")
             else:
                 print(f"MiX API poll skipped: {result['reason']}")
         except Exception as e:
@@ -1027,8 +1069,7 @@ def _teletrac_api_poll_once():
         "counts": {c: len(rows) for c, rows in by_client.items()},
         "byClient": by_client,
     }
-    with open(TELETRAC_API_SNAPSHOT_PATH, "w") as f:
-        json.dump(snapshot, f, indent=2, default=str)
+    _write_json_atomic(TELETRAC_API_SNAPSHOT_PATH, snapshot)
     return {"status": "ok", "counts": snapshot["counts"]}
 
 
@@ -1038,6 +1079,7 @@ def _teletrac_api_poll_loop():
             result = _teletrac_api_poll_once()
             if result["status"] == "ok":
                 print(f"Teletrac API poll: {result['counts']}")
+                _refresh_live_snapshot_after_poll("Teletrac")
             else:
                 print(f"Teletrac API poll skipped: {result['reason']}")
         except Exception as e:
@@ -1168,8 +1210,7 @@ def _ft_cloud_api_poll_once():
         "counts": {f: len(rows) for f, rows in by_fleet.items()},
         "byFleet": by_fleet,
     }
-    with open(FT_CLOUD_API_SNAPSHOT_PATH, "w") as f:
-        json.dump(snapshot, f, indent=2, default=str)
+    _write_json_atomic(FT_CLOUD_API_SNAPSHOT_PATH, snapshot)
     return {"status": "ok", "counts": snapshot["counts"], "positionSource": source,
             "withCoordinates": sum(1 for rows in by_fleet.values() for r in rows if r["lat"] is not None)}
 
@@ -1180,6 +1221,7 @@ def _ft_cloud_api_poll_loop():
             result = _ft_cloud_api_poll_once()
             if result["status"] == "ok":
                 print(f"FT Cloud API poll: {result['counts']}")
+                _refresh_live_snapshot_after_poll("FT Cloud")
             else:
                 print(f"FT Cloud API poll skipped: {result['reason']}")
         except Exception as e:

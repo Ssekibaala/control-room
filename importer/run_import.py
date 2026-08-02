@@ -18,6 +18,7 @@ import sys
 import glob
 import json
 import tempfile
+import threading
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -37,6 +38,24 @@ import report_writer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 WORK_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "_incoming")
+
+
+def _write_json_atomic(path, data):
+    """
+    Write-then-rename instead of writing fleet_today.json directly. Every
+    dashboard request reads this file (app.py's load_dashboard_data())
+    from its own thread with no coordination with the writer beyond
+    _FLEET_TODAY_LOCK (which only serializes writer-vs-writer, not
+    writer-vs-reader) - a plain open(path, "w") + json.dump() is visible
+    to a concurrent reader WHILE it's still being written, which would
+    intermittently serve a truncated/invalid JSON response. os.replace()
+    is atomic on both POSIX and Windows, so a reader only ever sees the
+    fully-old or fully-new file.
+    """
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, default=str)
+    os.replace(tmp_path, path)
 
 
 class ImportError_(Exception):
@@ -223,7 +242,7 @@ def _load_mix_api_reports(snapshot_path=None, max_age_minutes=90, now=None):
     cycle's AssetReport rows, tagged source_platform="MiX Unity" so it
     competes on an equal footing with the mailed mix_movement/
     mix_mobile_status reports in classify_fleet's freshest-per-platform
-    selection - being fresher (30 min old vs a day old), it will
+    selection - being fresher (minutes old vs a day old), it will
     normally win, which is the point: MiX Unity's Online/Offline signal
     becomes API-driven in practice without the mailed reports having to
     be ripped out first.
@@ -570,14 +589,136 @@ def _top_vehicles_from_tamper_result(confirmed_cases):
 
 
 def already_imported_today(data_path=None):
+    """
+    Gates the once-daily mail-fetch pipeline (run_import(), below) - NOT
+    a general "is the dashboard fresh" check, that's meta.generated's
+    job (see _build_data() and refresh_live_snapshot()). Deliberately
+    checks meta.importedAt (wall-clock time the real mail-based pipeline
+    last actually ran) rather than meta.generated (the freshest
+    timestamp found IN the report data): now that live API polling
+    folds today-dated positions into every cycle's data regardless of
+    whether the daily mail fetch has run yet, meta.generated is
+    effectively always "today" - using it here would make this gate
+    permanently true and silently skip the real mail fetch. importedAt
+    is only ever written by run_import() itself, never by
+    refresh_live_snapshot()'s lightweight regenerations, so it stays an
+    accurate answer to "did the real pipeline run today."
+    """
     data_path = data_path or os.path.join(DATA_DIR, "fleet_today.json")
     if not os.path.exists(data_path):
         return False
     with open(data_path) as f:
         existing = json.load(f)
-    generated = existing.get("meta", {}).get("generated", "")
+    imported_at = existing.get("meta", {}).get("importedAt", "")
     today_str = datetime.now().strftime("%d %B %Y")
-    return generated.startswith(today_str)
+    return imported_at.startswith(today_str)
+
+
+# Guards fleet_today.json's read-merge-write critical section - the once-
+# daily run_import() and the ~5-min refresh_live_snapshot() run on
+# independent timers/threads (see app.py's pollers) and both write this
+# same file; without this, two overlapping writes could interleave and
+# corrupt the JSON rather than just one of them winning cleanly.
+_FLEET_TODAY_LOCK = threading.Lock()
+
+
+def _cached_report_paths():
+    """
+    The paths fetch_reports() would have written today's (or the last
+    run's) mail reports to. Reused by refresh_live_snapshot() so a
+    lightweight API-driven reclassification never touches the mailbox -
+    only files already on disk from the last real mail fetch. Returns
+    None if any expected file is missing (most commonly: no mail-based
+    import has ever run in this environment yet), which the caller
+    treats as "nothing to refresh from yet."
+    """
+    paths = {
+        "teletrac_offline": os.path.join(WORK_DIR, "teletrac_offline.csv"),
+        "mix_mobile_status": os.path.join(WORK_DIR, "mix_mobile_status.csv"),
+        "mix_movement": os.path.join(WORK_DIR, "mix_movement.csv"),
+        "mix_power_events": os.path.join(WORK_DIR, "mix_power_events.csv"),
+        "ft_cloud_camera": os.path.join(WORK_DIR, "ft_cloud_camera.zip"),
+    }
+    if not all(os.path.exists(p) for p in paths.values()):
+        return None
+    return paths
+
+
+def refresh_live_snapshot():
+    """
+    Lightweight companion to run_import(): reclassifies against the SAME
+    mail report files already on disk from the last real import, but
+    with freshly-polled MiX/Teletrac/FT Cloud API snapshots folded in -
+    so the dashboard's Online/Offline status and last-seen times advance
+    on the API poll cadence (minutes, not once-daily) instead of waiting for tomorrow's
+    mail fetch. Called from app.py after each successful platform poll
+    (see _mix_api_poll_once and its Teletrac/FT Cloud counterparts).
+
+    Deliberately does NOT do what run_import() does beyond writing
+    fleet_today.json:
+      - no mail fetch (reuses cached files, see _cached_report_paths())
+      - does not call sheets_store.save_vehicle_status() - that write is
+        the day-over-day anchor Recovered/Newly-Offline and
+        check_reconnections compare against; updating it every 30
+        minutes would compare each cycle to the PREVIOUS cycle instead
+        of to yesterday, making assets look like they "recovered" or
+        "went offline" every half hour instead of once a day
+      - sends no notifications or digests
+      - does not touch meta.importedAt - already_imported_today()'s
+        gate and app.py's /api/refresh-if-stale staleness check both
+        key off that field meaning "the real mail-based pipeline ran";
+        a lightweight refresh must never be mistaken for one of those
+    """
+    paths = _cached_report_paths()
+    if paths is None:
+        return {"status": "skipped", "reason": "no cached mail reports yet - real import hasn't run"}
+
+    try:
+        import sheets_store
+        feedback_rows = sheets_store.load_feedback()
+    except Exception:
+        feedback_rows = {}
+    try:
+        tamper_checks = sheets_store.load_tamper_checks()
+    except Exception:
+        tamper_checks = {}
+    try:
+        previous_status = sheets_store.load_vehicle_status()
+    except Exception:
+        previous_status = None
+
+    mix_api_reports = _load_mix_api_reports()
+    teletrac_api_reports = _load_teletrac_api_reports()
+    ft_cloud_api_reports = _load_ft_cloud_api_reports()
+
+    try:
+        data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks,
+                               previous_status=previous_status, mix_api_reports=mix_api_reports,
+                               teletrac_api_reports=teletrac_api_reports,
+                               ft_cloud_api_reports=ft_cloud_api_reports)
+    except ImportError_ as e:
+        # e.g. check_periods_overlap() tripping on a cached mail-file
+        # pairing issue - not something retrying an API poll fixes.
+        return {"status": "error", "reason": str(e)}
+
+    data.pop("_classification", None)
+    data.pop("_tampering", None)
+    data.pop("_current_status", None)
+    data.pop("_recovered", None)
+
+    existing_path = os.path.join(DATA_DIR, "fleet_today.json")
+    with _FLEET_TODAY_LOCK:
+        # Preserve whatever the last REAL run_import() wrote here - see
+        # this function's own docstring for why this must not become "now".
+        if os.path.exists(existing_path):
+            with open(existing_path) as f:
+                data["meta"]["importedAt"] = json.load(f).get("meta", {}).get("importedAt", "")
+        data["meta"]["liveRefreshedAt"] = datetime.now().strftime("%d %B %Y, %H:%M")
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        _write_json_atomic(existing_path, data)
+
+    return {"status": "ok", "generated": data["meta"]["generated"]}
 
 
 def run_import(username=None, password=None, force=False, force_digests=False, prompted_by=None):
@@ -650,9 +791,9 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     # separate rather than overloading one field for two questions.
     data["meta"]["importedAt"] = datetime.now().strftime("%d %B %Y, %H:%M")
 
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(os.path.join(DATA_DIR, "fleet_today.json"), "w") as f:
-        json.dump(data, f, default=str)
+    with _FLEET_TODAY_LOCK:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        _write_json_atomic(os.path.join(DATA_DIR, "fleet_today.json"), data)
 
     # This cycle's status becomes NEXT cycle's "previous_status" - saved
     # regardless of what happens below, since losing this write would

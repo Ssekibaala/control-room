@@ -24,7 +24,43 @@ def _platform_row(info):
     return {PLATFORM_SHORT[p]: info["platform_status"].get(p, ("N/A", None))[0] for p in PLATFORM_ORDER}
 
 
-def _format_last_position(platform_status):
+def _plural(n, unit):
+    return f"{n} {unit} ago" if n == 1 else f"{n} {unit}s ago"
+
+
+def _relative_age(ts, now):
+    """
+    Compact "how long ago" for a per-platform badge tooltip/subtext -
+    minutes/hours/days/months, always relative to `now` (the same
+    latest-timestamp-across-all-reports reference classify_fleet() used
+    for days_silent, NOT wall-clock datetime.now() - so this stays
+    consistent with every other "days offline" figure already on the
+    dashboard rather than introducing a second, subtly different clock).
+    Spelled-out units ("1 min ago", "1 day ago") rather than abbreviations
+    ("1m ago", "1d ago") - unambiguous at a glance, no risk of reading
+    "1mo" as "1m" in a narrow table cell.
+    """
+    if ts is None or now is None:
+        return None
+    seconds = (now - ts).total_seconds()
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return _plural(minutes, "min")
+    hours = int(seconds // 3600)
+    if hours < 24:
+        return _plural(hours, "hour")
+    days = int(seconds // 86400)
+    if days < 30:
+        return _plural(days, "day")
+    months = int(days // 30)
+    return _plural(months, "month")
+
+
+def _format_last_position(platform_status, now=None):
     """
     Every asset already has a per-platform (status, datetime) pair computed
     by classifier.py. This just picks the most recent timestamp across
@@ -33,19 +69,24 @@ def _format_last_position(platform_status):
     """
     timestamps = [ts for (_, ts) in platform_status.values() if ts is not None]
     if not timestamps:
-        return "No data", None, {}
+        return "No data", None, {}, {}
     latest = max(timestamps)
     per_platform = {
         PLATFORM_SHORT[p]: ts.strftime("%d %b %Y, %H:%M") if ts else "No data"
         for p, (_, ts) in platform_status.items()
     }
-    return latest.strftime("%d %b %Y, %H:%M"), latest, per_platform
+    per_platform_ago = {
+        PLATFORM_SHORT[p]: _relative_age(ts, now) if ts else None
+        for p, (_, ts) in platform_status.items()
+    }
+    return latest.strftime("%d %b %Y, %H:%M"), latest, per_platform, per_platform_ago
 
 
-def _integrity_row(plate, info):
+def _integrity_row(plate, info, now=None):
     border = info.get("border_detail")
     fb = info.get("feedback")
-    last_position, last_position_dt, per_platform_seen = _format_last_position(info["platform_status"])
+    last_position, last_position_dt, per_platform_seen, per_platform_ago = _format_last_position(
+        info["platform_status"], now)
     return {
         "plate": plate, "status": info["status"], "severity": info["severity"], "days": info["days_silent"],
         **_platform_row(info),
@@ -53,6 +94,13 @@ def _integrity_row(plate, info):
         "tltSeen": per_platform_seen.get("TLT", "No data"),
         "mixSeen": per_platform_seen.get("MIX", "No data"),
         "camSeen": per_platform_seen.get("CAM", "No data"),
+        # Relative ("2h ago") companions to the absolute *Seen fields above -
+        # None when that platform has no timestamp at all, distinct from a
+        # genuinely stale one, so the frontend can render an em-dash instead
+        # of a misleading "0m ago".
+        "tltAgo": per_platform_ago.get("TLT"),
+        "mixAgo": per_platform_ago.get("MIX"),
+        "camAgo": per_platform_ago.get("CAM"),
         "border": "Yes" if info["border_flag"] else "No",
         "borderDetail": f"{border[0]} ({border[1]}) {border[2]}km" if border else "",
         # Status and comment stay SEPARATE fields. Concatenating them
@@ -130,7 +178,7 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
         if info and info["status"] != "Online":
             n_confirmed = sum(1 for c in confirmed if c["Plate"] == p)
             n_unconfirmed = sum(1 for c in unconfirmed if c["Plate"] == p)
-            double_flagged.append({**_integrity_row(p, info), "tamperConfirmed": n_confirmed, "tamperUnconfirmed": n_unconfirmed})
+            double_flagged.append({**_integrity_row(p, info, report_date), "tamperConfirmed": n_confirmed, "tamperUnconfirmed": n_unconfirmed})
     double_flagged.sort(key=lambda r: (-r["tamperConfirmed"], -r["days"]))
 
     ranked_critical = sorted(escalations, key=lambda p: -results[p]["days_silent"])
@@ -157,14 +205,14 @@ def _build_data(results, settings, tampering, recovered, newly_offline, report_d
         "severityBands": severity_bands,
         "topVehicles": top_vehicles,
         "doubleFlagged": double_flagged,
-        "criticalCards": [_integrity_row(p, results[p]) for p in ranked_critical[:6]],
+        "criticalCards": [_integrity_row(p, results[p], report_date) for p in ranked_critical[:6]],
         "tamperCards": sorted(confirmed, key=lambda c: -c.get("DistanceKm", 0))[:6],
-        "critical": [_integrity_row(p, results[p]) for p in ranked_critical],
-        "pending": [_integrity_row(p, results[p]) for p in sorted(pending, key=lambda p: -results[p]["days_silent"])],
-        "border": [_integrity_row(p, results[p]) for p in border_plates],
-        "healthy": [_integrity_row(p, results[p]) for p in sorted(online)],
-        "knownIssues": [_integrity_row(p, results[p]) for p in sorted(known_issues, key=lambda p: -results[p]["days_silent"])],
-        "full": [_integrity_row(p, results[p]) for p in sorted(results.keys(), key=lambda p: -results[p]["days_silent"])],
+        "critical": [_integrity_row(p, results[p], report_date) for p in ranked_critical],
+        "pending": [_integrity_row(p, results[p], report_date) for p in sorted(pending, key=lambda p: -results[p]["days_silent"])],
+        "border": [_integrity_row(p, results[p], report_date) for p in border_plates],
+        "healthy": [_integrity_row(p, results[p], report_date) for p in sorted(online)],
+        "knownIssues": [_integrity_row(p, results[p], report_date) for p in sorted(known_issues, key=lambda p: -results[p]["days_silent"])],
+        "full": [_integrity_row(p, results[p], report_date) for p in sorted(results.keys(), key=lambda p: -results[p]["days_silent"])],
         "recoveredList": [{"plate": p, "status": "Online"} for p in recovered],
         "newlyOfflineList": [{"plate": p, "status": results.get(p, {}).get("status", "")} for p in newly_offline],
         "tamperConfirmed": [_tamper_row(c) for c in sorted(confirmed, key=lambda c: -c.get("DistanceKm", 0))],

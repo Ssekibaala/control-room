@@ -28,7 +28,7 @@ DEFAULTS = {
         # running; it does NOT persist across restarts/dyno sleep, so
         # this is a best-effort cadence, not a guaranteed one.
         "org_ids": "",
-        "poll_interval_minutes": "30",
+        "poll_interval_minutes": "5",
         "inter_org_delay_seconds": "5",
     },
     "teletrac_api": {
@@ -38,7 +38,7 @@ DEFAULTS = {
         # comma-separated and empty by default - the poller does
         # nothing until clients are listed here.
         "client_ids": "",
-        "poll_interval_minutes": "30",
+        "poll_interval_minutes": "5",
         "inter_client_delay_seconds": "5",
     },
     "ft_cloud_api": {
@@ -61,7 +61,7 @@ DEFAULTS = {
         #   none    - skip coordinates entirely; online/offline still
         #             works, border-risk loses its input.
         "fleet_ids": "",
-        "poll_interval_minutes": "30",
+        "poll_interval_minutes": "5",
         "inter_call_delay_seconds": "0.2",
         "position_source": "webhook",
         "position_lookback_days": "3",

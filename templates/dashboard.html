@@ -686,6 +686,12 @@
   .pill-online { background:var(--success-surface); color:var(--success); }
   .pill-offline { background:var(--danger-surface); color:var(--danger); }
   .pill-neutral { background:var(--hover-surface); color:var(--text-secondary); }
+  /* Per-platform status cell (TLT/MIX/CAM): the existing Online/Offline
+     pill plus a small "last seen" caption stacked underneath, instead of
+     three more columns - keeps the row's last-seen info reachable
+     without widening the table or forcing sideways scroll. */
+  .platform-cell { display:flex; flex-direction:column; align-items:center; gap:1px; line-height:1.2; }
+  .platform-ago { font-size:9.5px; color:var(--text-tertiary); white-space:nowrap; text-align:center; }
 
   .callout { padding:var(--sp-2) var(--sp-3); border-radius:var(--radius-md); font-size:13px; line-height:1.6;
     margin-bottom:var(--sp-2); border:1px solid var(--border); background:var(--panel-bg); }
@@ -2952,8 +2958,34 @@ function feedbackCellHTML(r) {
     badge + '<span class="fb-text">' + escapeHTML(comment) + '</span></td>';
 }
 
+// TLT/MIX/CAM already carry a per-platform "last seen" absolute
+// timestamp (tltSeen/mixSeen/camSeen) and relative age (tltAgo/mixAgo/
+// camAgo) from control_room.py's _integrity_row() - PLATFORM_SEEN_FIELDS
+// just maps each status column to its own pair of field names.
+const PLATFORM_SEEN_FIELDS = {
+  TLT: {seen: 'tltSeen', ago: 'tltAgo'},
+  MIX: {seen: 'mixSeen', ago: 'mixAgo'},
+  CAM: {seen: 'camSeen', ago: 'camAgo'},
+};
+
+function platformCellHTML(c, r) {
+  const val = r[c.key] !== undefined && r[c.key] !== null ? r[c.key] : '';
+  const safeVal = escapeHTML(val);
+  const pillClass = pillFor(c.key, val);
+  const badge = pillClass && val !== '' ? '<span class="' + pillClass + '">' + safeVal + '</span>' : safeVal;
+  const fields = PLATFORM_SEEN_FIELDS[c.key];
+  const seen = r[fields.seen];
+  const ago = r[fields.ago];
+  // No timestamp at all for this platform (never reported) gets no
+  // caption and no tooltip, rather than a misleading "No data · No data".
+  if (!ago) return '<td><div class="platform-cell">' + badge + '</div></td>';
+  return '<td title="Last reported ' + escapeHTML(seen) + '"><div class="platform-cell">' +
+    badge + '<span class="platform-ago">' + escapeHTML(ago) + '</span></div></td>';
+}
+
 function cellHTML(c, r) {
   if (c.key === 'feedback') return feedbackCellHTML(r);
+  if (c.key === 'TLT' || c.key === 'MIX' || c.key === 'CAM') return platformCellHTML(c, r);
   const val = r[c.key] !== undefined && r[c.key] !== null ? r[c.key] : '';
   const safeVal = escapeHTML(val);
   const pillClass = pillFor(c.key, val);

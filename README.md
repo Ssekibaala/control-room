@@ -20,7 +20,7 @@ whether Sheets is configured (see `users.py`'s `load_users()`):
 
   | Username     | Password       | Role       |
   |--------------|----------------|------------|
-  | justin       | TestPass123!   | admin      |
+  | Alex       | TestPass123!   | admin      |
   | brandon.b    | TestPass123!   | technician |
   | gtl-client   | TestPass123!   | client     |
 
