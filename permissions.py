@@ -328,6 +328,11 @@ def _recount_kpis(filtered):
     kpi["knownIssues"] = count(lambda r: r.get("status") == "Known Issue")
     kpi["border"] = count(lambda r: r.get("border") == "Yes")
     kpi["healthPct"] = round(kpi["online"] / len(rows) * 100) if rows else 0
+    # Derived from a client-scoped section rather than from `full`, so
+    # it needs its own recount - otherwise a scoped viewer sees the
+    # fleet-wide overlap figure above a correctly-filtered table.
+    if "doubleFlagged" in kpi:
+        kpi["doubleFlagged"] = len([r for r in filtered.get("doubleFlagged", []) if isinstance(r, dict)])
     return kpi
 
 

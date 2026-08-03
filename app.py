@@ -481,6 +481,34 @@ def _assigned_clients(username):
         return []
 
 
+_plate_client_cache = {"mtime": None, "map": {}}
+
+
+def _plate_client_map():
+    """
+    {plate: client} for every asset in the current dashboard payload.
+
+    Needed wherever a record identifies a vehicle by plate but carries
+    no client of its own - feedback comments, the tampering sections -
+    since those still have to be scoped to what the session may see.
+    Keyed off fleet_today.json's mtime so it rebuilds when the pollers
+    rewrite it and costs nothing on every other request.
+    """
+    try:
+        mtime = os.path.getmtime(DATA_PATH)
+    except OSError:
+        return {}
+    if _plate_client_cache["mtime"] == mtime:
+        return _plate_client_cache["map"]
+    mapping = {
+        str(r.get("plate", "")).strip(): str(r.get("client", "")).strip()
+        for r in (load_dashboard_data().get("full") or [])
+        if isinstance(r, dict) and r.get("plate")
+    }
+    _plate_client_cache.update({"mtime": mtime, "map": mapping})
+    return mapping
+
+
 def _visible_clients_for_session():
     """None = unrestricted (admin). A set = exactly those clients."""
     role = session["role"]
@@ -773,6 +801,15 @@ def api_feedback_activity():
     # moment either side's month abbreviation or locale differs.
     # "date"/"dateOnly" stay as display-formatted strings for showing
     # in the UI, never for comparison.
+    # Comments are stored per plate with no client of their own, so they
+    # need the same plate-based scoping the tampering sections get -
+    # otherwise this endpoint hands a GTL-scoped user every AGL comment,
+    # neatly bypassing the filtering on /api/dashboard-data.
+    owner = _plate_client_map()
+    allowed = _visible_clients_for_session()
+    if allowed is not None:
+        entries = [e for e in entries if owner.get(str(e.get("plate", "")).strip(), "") in allowed]
+
     today_iso = now_eat().strftime("%Y-%m-%d")
     serialized = [
         {
@@ -781,6 +818,7 @@ def api_feedback_activity():
             "dateOnly": e["date"].strftime("%d %b %Y") if e["date"].year > 1 else "",
             "dateISO": e["date"].strftime("%Y-%m-%d") if e["date"].year > 1 else "",
             "addedBy": e["addedBy"], "role": e["role"], "entryType": e.get("entryType", "feedback"),
+            "client": owner.get(str(e.get("plate", "")).strip(), ""),
         }
         for e in entries
     ]

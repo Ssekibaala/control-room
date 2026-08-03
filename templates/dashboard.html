@@ -690,6 +690,23 @@
      pill plus a small "last seen" caption stacked underneath, instead of
      three more columns - keeps the row's last-seen info reachable
      without widening the table or forcing sideways scroll. */
+  /* Client filter. Styled as a header pill rather than a bare <select>
+     so it reads as part of the same control row as LIVE/Updated. */
+  .client-filter { display:flex; align-items:center; gap:6px; padding:0 10px 0 12px; height:34px;
+    background:var(--hover-surface); border:1px solid var(--border); border-radius:999px; }
+  .client-filter[hidden] { display:none; }
+  .client-filter-icon { width:13px; height:13px; fill:none; stroke:var(--text-tertiary); stroke-width:2;
+    stroke-linecap:round; flex-shrink:0; }
+  .client-filter select { background:transparent; border:none; outline:none; color:var(--text-primary);
+    font-family:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:0 2px; max-width:150px; }
+  .client-filter select option { background:var(--card-bg); color:var(--text-primary); }
+  .client-filter:focus-within { border-color:var(--primary); }
+  /* A filter that's actively hiding data must not look like a neutral
+     default - otherwise "why is this asset missing" is a support call. */
+  .client-filter.filtering { border-color:var(--primary); background:var(--primary-surface); }
+  .client-filter.filtering .client-filter-icon { stroke:var(--primary); }
+  .client-filter.filtering select { color:var(--primary); }
+
   .platform-cell { display:flex; flex-direction:column; align-items:center; gap:1px; line-height:1.2; }
   .platform-ago { font-size:9.5px; color:var(--text-tertiary); white-space:nowrap; text-align:center; }
 
@@ -1221,6 +1238,14 @@
       <div class="topbar-right">
         <div class="header-pill live-pill"><span class="pulse-dot"></span>LIVE</div>
         <div class="header-pill" id="refresh-pill">Updated loading...</div>
+        <!-- Hidden until the payload proves there's more than one client
+             to choose between - a filter with a single option is noise. -->
+        <div class="client-filter" id="client-filter" hidden>
+          <svg viewBox="0 0 24 24" class="client-filter-icon" aria-hidden="true">
+            <path d="M3 5h18M6 12h12M10 19h4"/>
+          </svg>
+          <select id="client-select" aria-label="Filter by client"></select>
+        </div>
         <button class="cmdk-trigger" id="cmdk-trigger" title="Command palette (Ctrl/Cmd+K)" aria-label="Open command palette">
           <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <span>Jump to&hellip;</span>
@@ -1664,6 +1689,96 @@ let DATA = null;
 let CURRENT_ROLE = null;
 let CURRENT_USERNAME = null;
 
+// ---- Client filter -------------------------------------------------
+// DATA is what everything renders from, so the filter works by keeping
+// the server's full (already access-scoped) payload in RAW_DATA and
+// rebuilding DATA as a per-client view of it. That way every existing
+// render/chart/KPI call keeps working untouched, and clearing the
+// filter is just rebuilding from RAW_DATA again - no re-fetch.
+//
+// This is a VIEW filter over data the user is already entitled to. The
+// security boundary is server-side (permissions.filter_payload_for_clients);
+// nothing here is load-bearing for access control.
+let RAW_DATA = null;
+let SELECTED_CLIENT = '';   // '' = all clients this user can see
+const CLIENT_ALL = '';
+
+// Sections whose rows carry a client field, mirroring
+// permissions.CLIENT_SCOPED_SECTIONS on the server.
+const CLIENT_ROW_SECTIONS = ['full', 'critical', 'criticalCards', 'pending', 'healthy',
+                              'knownIssues', 'border', 'doubleFlagged'];
+// Plate-keyed sections with no client field of their own - filtered by
+// resolving the plate, same approach the server takes.
+const CLIENT_PLATE_SECTIONS = ['tamperConfirmed', 'tamperUnconfirmed', 'tamperCards',
+                                'tamperChecked', 'qualityLog', 'topVehicles'];
+
+function applyClientView() {
+  if (!RAW_DATA) return;
+  if (!SELECTED_CLIENT) { DATA = RAW_DATA; return; }
+
+  const view = Object.assign({}, RAW_DATA);
+  CLIENT_ROW_SECTIONS.forEach(key => {
+    if (Array.isArray(view[key])) {
+      view[key] = view[key].filter(r => r && r.client === SELECTED_CLIENT);
+    }
+  });
+  const owner = {};
+  (RAW_DATA.full || []).forEach(r => { if (r && r.plate) owner[r.plate] = r.client; });
+  CLIENT_PLATE_SECTIONS.forEach(key => {
+    if (Array.isArray(view[key])) {
+      view[key] = view[key].filter(r => r && owner[r.plate] === SELECTED_CLIENT);
+    }
+  });
+
+  // Recount the headline KPIs from what survived, for the same reason
+  // the server does: otherwise a filtered view shows fleet-wide totals
+  // above per-client tables and the two visibly disagree.
+  const rows = view.full || [];
+  const countBy = pred => rows.filter(pred).length;
+  view.kpi = Object.assign({}, RAW_DATA.kpi, {
+    total: rows.length,
+    online: countBy(r => r.status === 'Online'),
+    escalations: countBy(r => r.status === 'Technical Escalation'),
+    pending: countBy(r => r.status === 'Pending Customer Confirmation'),
+    knownIssues: countBy(r => r.status === 'Known Issue'),
+    border: countBy(r => r.border === 'Yes'),
+    healthPct: rows.length ? Math.round(countBy(r => r.status === 'Online') / rows.length * 100) : 0,
+    // Derived from a client-scoped section, so it has to be recounted
+    // too - it was left showing the fleet-wide figure above a filtered
+    // Priority Overlap table, which visibly disagreed with itself.
+    doubleFlagged: (view.doubleFlagged || []).length,
+  });
+  DATA = view;
+}
+
+function setDashboardData(payload) {
+  RAW_DATA = fillMissingSectionsWithSafeDefaults(payload);
+  const available = (RAW_DATA.meta && RAW_DATA.meta.clients) || [];
+  // A previously-selected client can disappear (access revoked, client
+  // removed) - fall back to "All" rather than silently rendering an
+  // empty dashboard the user can't explain.
+  if (SELECTED_CLIENT && !available.includes(SELECTED_CLIENT)) SELECTED_CLIENT = CLIENT_ALL;
+  applyClientView();
+  renderClientFilter(available);
+}
+
+function renderClientFilter(available) {
+  const wrap = document.getElementById('client-filter');
+  const select = document.getElementById('client-select');
+  if (!wrap || !select) return;
+  // One client (or none) means nothing to choose between.
+  if (available.length < 2) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const desired = [CLIENT_ALL].concat(available);
+  const current = Array.from(select.options).map(o => o.value);
+  if (current.join('|') !== desired.join('|')) {
+    select.innerHTML = '<option value="">All clients</option>' +
+      available.map(c => '<option value="' + escapeHTML(c) + '">' + escapeHTML(c) + '</option>').join('');
+  }
+  select.value = SELECTED_CLIENT;
+  wrap.classList.toggle('filtering', !!SELECTED_CLIENT);
+}
+
 const HTML_ESCAPES = {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'};
 function escapeHTML(v) {
   return String(v).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
@@ -1718,7 +1833,7 @@ async function boot() {
     const dataResp = await fetch('/api/dashboard-data');
     if (dataResp.status === 401) { window.location.href = '/login'; return; }
     if (!dataResp.ok) throw new Error('dashboard data request failed (status ' + dataResp.status + ')');
-    DATA = fillMissingSectionsWithSafeDefaults(await dataResp.json());
+    setDashboardData(await dataResp.json());
 
     renderEverything();
 
@@ -1845,12 +1960,36 @@ function _commentSignature(e) { return e.plate + '|' + e.date + '|' + e.comment 
 let _lastCommentSig = null;
 let _lastCommentBaselineReady = false;
 
+// Comments posted today, for the ticker. Captured here rather than by a
+// second request because this poll already runs every 15s and the
+// endpoint is already client-scoped server-side.
+let TODAYS_COMMENTS = [];
+
+function tickerCommentItems() {
+  return TODAYS_COMMENTS
+    // Respect the header's client filter, same as every other section.
+    .filter(e => !SELECTED_CLIENT || e.client === SELECTED_CLIENT)
+    .map(e => {
+      const who = e.addedBy ? ' (' + e.addedBy + ')' : '';
+      const text = String(e.comment || '').replace(/\s+/g, ' ').trim();
+      // The ticker is a glance-level strip - a long comment would push
+      // everything else off screen for a full scroll cycle.
+      const short = text.length > 90 ? text.slice(0, 89) + '…' : text;
+      return 'NEW COMMENT: ' + e.plate + ' — ' + short + who;
+    });
+}
+
 async function pollForNewComments() {
   try {
     const resp = await fetch('/api/feedback-activity');
     if (!resp.ok) return;
     const data = await resp.json();
     const entries = data.entries || [];
+    // Set before any early return below - those exit on "nothing NEW
+    // since last poll", which is the normal case and must still leave
+    // today's existing comments in the ticker.
+    const todayISO = data.todayISO;
+    TODAYS_COMMENTS = entries.filter(e => e.dateISO === todayISO);
     if (!entries.length) return;
     const newestSig = _commentSignature(entries[0]);
     if (!_lastCommentBaselineReady) {
@@ -1858,6 +1997,12 @@ async function pollForNewComments() {
       // don't fire a toast for the entire pre-existing history.
       _lastCommentSig = newestSig;
       _lastCommentBaselineReady = true;
+      // This first poll usually lands AFTER the initial render, so the
+      // ticker was built with TODAYS_COMMENTS still empty. Re-render
+      // once here (only when there's actually something to add) so
+      // today's comments appear on load rather than only after the
+      // next one arrives.
+      if (TODAYS_COMMENTS.length && DATA) renderEverything();
       return;
     }
     if (newestSig === _lastCommentSig) return;
@@ -1879,7 +2024,7 @@ async function pollForNewComments() {
       try {
         const freshData = await fetch('/api/dashboard-data');
         if (freshData.ok) {
-          DATA = fillMissingSectionsWithSafeDefaults(await freshData.json());
+          setDashboardData(await freshData.json());
           renderEverything();
         }
       } catch (e) { /* best-effort - next poll tries again */ }
@@ -1962,6 +2107,19 @@ wireOnce('sidebar-chrome', () => {
   document.getElementById('collapse-btn').addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('collapsed');
   });
+  // ---- Client filter ----
+  // Lives here, in wireOnce, because the <select> is part of the static
+  // header rather than markup renderEverything() rewrites - rebinding
+  // it on every render would stack duplicate handlers.
+  const clientSelect = document.getElementById('client-select');
+  if (clientSelect) {
+    clientSelect.addEventListener('change', (e) => {
+      SELECTED_CLIENT = e.target.value || CLIENT_ALL;
+      applyClientView();
+      renderClientFilter((RAW_DATA && RAW_DATA.meta && RAW_DATA.meta.clients) || []);
+      renderEverything();
+    });
+  }
 });
 
 // ---- Recently viewed tracker (new, presentation-only, no data changes) ----
@@ -2913,6 +3071,12 @@ if (mismatchEl) animateCount(mismatchEl, DATA.kpi.tamperConfirmed + DATA.kpi.tam
   DATA.border.forEach(r => items.push('BORDER RISK: ' + r.plate + ' \u2014 ' + r.borderDetail));
   DATA.newlyOffline.forEach(p => items.push('NEWLY OFFLINE: ' + p));
   DATA.recovered.forEach(p => items.push('RECOVERED: ' + p));
+  // Comments posted today. TODAYS_COMMENTS is kept current by
+  // pollForNewComments()'s existing 15s poll (already client-scoped
+  // server-side), so this adds no extra request - and that poller
+  // re-renders on new activity, which is what brings a comment into
+  // the ticker within seconds of someone posting it.
+  tickerCommentItems().forEach(t => items.push(t));
   if (items.length === 0) items.push('No active alerts \u2014 fleet operating within normal parameters');
   const tickerEl = document.getElementById('ticker');
   tickerEl.textContent = items.concat(items, items).join('   \u2022   ');
@@ -3214,7 +3378,7 @@ function refreshDashboardData(plate) {
   return fetch('/api/dashboard-data')
     .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
     .then(fresh => {
-      DATA = fillMissingSectionsWithSafeDefaults(fresh);
+      setDashboardData(fresh);
       const after = (DATA.full || []).find(r => r.plate === plate);
       renderEverything();
       if (after && beforeStatus && after.status !== beforeStatus) {
