@@ -292,6 +292,14 @@ def filter_payload_for_clients(data: dict, allowed):
         if isinstance(rows, list):
             filtered[section] = [p for p in rows if isinstance(p, str) and plate_visible(p)]
 
+    # severityBands has no rows and no plates of its own - it's a
+    # per-band tally over the tampering cases - so the row filters above
+    # leave it whole. ADT was shown "276 flagged gaps" from it while
+    # every table on the page was correctly empty. Recomputed from the
+    # cases that actually survived.
+    if isinstance(filtered.get("severityBands"), list):
+        filtered["severityBands"] = _recount_severity_bands(filtered)
+
     # KPIs are counts derived from those same rows, so leaving them
     # untouched would tell a restricted viewer exactly how many assets
     # exist outside their scope - the numbers must be recomputed from
@@ -299,6 +307,25 @@ def filter_payload_for_clients(data: dict, allowed):
     if isinstance(filtered.get("kpi"), dict):
         filtered["kpi"] = _recount_kpis(filtered)
     return filtered
+
+
+def _recount_severity_bands(filtered):
+    """Re-tallies each severity band over the surviving tampering cases,
+    keeping the band definitions (name/rule) so the table still renders
+    every band - including ones that are now legitimately zero."""
+    def tally(rows, name):
+        return sum(1 for r in rows
+                   if isinstance(r, dict) and (r.get("severity") or r.get("Severity")) == name)
+
+    confirmed = filtered.get("tamperConfirmed") or []
+    unconfirmed = filtered.get("tamperUnconfirmed") or []
+    bands = []
+    for band in filtered.get("severityBands") or []:
+        if not isinstance(band, dict):
+            continue
+        name = band.get("severity")
+        bands.append({**band, "confirmed": tally(confirmed, name), "unconfirmed": tally(unconfirmed, name)})
+    return bands
 
 
 def _recount_kpis(filtered):
@@ -328,11 +355,30 @@ def _recount_kpis(filtered):
     kpi["knownIssues"] = count(lambda r: r.get("status") == "Known Issue")
     kpi["border"] = count(lambda r: r.get("border") == "Yes")
     kpi["healthPct"] = round(kpi["online"] / len(rows) * 100) if rows else 0
-    # Derived from a client-scoped section rather than from `full`, so
-    # it needs its own recount - otherwise a scoped viewer sees the
-    # fleet-wide overlap figure above a correctly-filtered table.
-    if "doubleFlagged" in kpi:
-        kpi["doubleFlagged"] = len([r for r in filtered.get("doubleFlagged", []) if isinstance(r, dict)])
+    # Every KPI derived from a scoped SECTION rather than from `full`
+    # needs its own recount. Missing these showed ADT a summary of "8
+    # confirmed, 268 unconfirmed" tampering cases above a correctly
+    # empty table - all of them GTL's, and none of them ADT's business.
+    # A count is data: it tells a viewer how much exists outside their
+    # scope even when every row has been removed.
+    section_counts = {
+        "doubleFlagged": "doubleFlagged",
+        "tamperConfirmed": "tamperConfirmed",
+        "tamperUnconfirmed": "tamperUnconfirmed",
+        "nullGpsExcluded": "qualityLog",
+    }
+    for kpi_key, section in section_counts.items():
+        if kpi_key in kpi:
+            kpi[kpi_key] = len([r for r in filtered.get(section, []) if isinstance(r, dict)])
+
+    # gaps_checked counts every movement gap the tampering engine
+    # examined across the whole import. It's a processing statistic with
+    # no per-vehicle rows behind it, so it cannot be attributed to a
+    # client at all - and leaving it whole would report another client's
+    # analysis volume. Zero is the honest answer for a scoped viewer:
+    # we cannot say how much of it was theirs.
+    if "tamperGapsChecked" in kpi:
+        kpi["tamperGapsChecked"] = 0
     return kpi
 
 

@@ -53,7 +53,22 @@ def _embedded_logo_src():
         return None
 
 
-def _shell(inner_html):
+DEFAULT_CLIENT_LABEL = "Fleet Intelligence"
+
+
+def _shell(inner_html, client=None):
+    """
+    client names the organisation this email is ABOUT, and appears in
+    the header badge and footer.
+
+    It has to be a parameter rather than a constant: the shell said
+    "GTL FLEET INTELLIGENCE" and "Globe Trotters Ltd" on every message,
+    so once a second client existed, AGL and ADT were receiving mail
+    about their own vehicles branded as another company's. Callers that
+    genuinely aren't about one client fall back to a neutral label
+    rather than naming whichever client happens to be first.
+    """
+    client_label = (client or "").strip() or DEFAULT_CLIENT_LABEL
     # The Teletrac mark sits on its own white plate inside the gradient
     # header, same reasoning as the dashboard sidebar: it's a third-party
     # brand with its own colours, not something to recolour to the app's
@@ -78,7 +93,7 @@ def _shell(inner_html):
             <td>{logo_html}</td>
             <td align="right">
               <span style="color:rgba(255,255,255,0.92);font-size:11.5px;font-weight:700;letter-spacing:0.5px;">
-                GTL FLEET INTELLIGENCE</span>
+                {client_label.upper()}</span>
             </td>
           </tr></table>
         </td>
@@ -87,7 +102,7 @@ def _shell(inner_html):
       <tr>
         <td style="padding:18px 28px;border-top:1px solid {BORDER};">
           <span style="color:{MUTED};font-size:11px;line-height:1.6;">
-            Globe Trotters Ltd &middot; Cross-Platform Integrity Monitor &middot; telemetry by Teletrac Fleet Solutions.<br>
+            {client_label} &middot; Cross-Platform Integrity Monitor &middot; telemetry by Teletrac Fleet Solutions.<br>
             This is an automated message about a specific vehicle. Reply to this email or use the buttons above to respond.
           </span>
         </td>
@@ -171,7 +186,7 @@ def _history_block(entries, title="Comment history"):
 
 
 def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
-                                no_followup_url, needs_attention_url, recent_trail):
+                                no_followup_url, needs_attention_url, recent_trail, client=None):
     """
     Sent when a vehicle that was offline reports back online while it
     still has an unanswered follow-up request on file. Deliberately a
@@ -210,11 +225,11 @@ def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
       {_history_block(recent_trail)}
     """
     preheader = f"{_esc(plate)} is back online - does this resolve the open follow-up?"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def build_update_email(plate, comment, author, role, timestamp, no_followup_url, needs_attention_url,
-                       recent_trail, reopened=False, previous_closed_at=None):
+                       recent_trail, reopened=False, previous_closed_at=None, client=None):
     """
     Sent to the client when a technician/admin adds a comment. Two large
     tap-target buttons, pre-selecting the answer they land on - nothing
@@ -244,11 +259,11 @@ def build_update_email(plate, comment, author, role, timestamp, no_followup_url,
       {_history_block(recent_trail)}
     """
     preheader = f"{comment[:110]}"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def build_outcome_email(plate, resolved_comment, author, requires_followup, timestamp,
-                        recent_trail=None, reopened=False, previous_closed_at=None):
+                        recent_trail=None, reopened=False, previous_closed_at=None, client=None):
     """Sent to everyone in the thread once the client (or anyone) records
     an answer - states the real outcome, never a blanket 'closed' when
     follow-up was actually requested."""
@@ -275,7 +290,7 @@ def build_outcome_email(plate, resolved_comment, author, requires_followup, time
       {_history_block(recent_trail or [])}
     """
     preheader = headline
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def _pending_digest_row(v):
@@ -319,7 +334,7 @@ def _critical_no_feedback_row(v):
     """
 
 
-def build_pending_confirmation_digest_email(vehicles, timestamp, critical_no_feedback=None):
+def build_pending_confirmation_digest_email(vehicles, timestamp, critical_no_feedback=None, client=None):
     """
     One weekly email to the client listing EVERY vehicle currently in
     Pending Customer Confirmation (some, not all, platforms silent) -
@@ -373,7 +388,7 @@ def build_pending_confirmation_digest_email(vehicles, timestamp, critical_no_fee
       {pending_section}
     """
     preheader = f"{total} vehicle(s) need your input"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def _known_issue_checkin_row(v):
@@ -395,7 +410,7 @@ def _known_issue_checkin_row(v):
     """
 
 
-def build_known_issues_checkin_digest_email(vehicles, timestamp):
+def build_known_issues_checkin_digest_email(vehicles, timestamp, client=None):
     """
     Weekly email to the client re-confirming every vehicle currently
     marked Known Issue (an earlier "no follow-up needed"). A known
@@ -424,7 +439,7 @@ def build_known_issues_checkin_digest_email(vehicles, timestamp):
       </td></tr>
     """
     preheader = f"Please reconfirm {len(vehicles)} known issue(s)"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def _escalation_digest_row(v):
@@ -438,7 +453,7 @@ def _escalation_digest_row(v):
     """
 
 
-def build_technical_escalation_digest_email(vehicles, timestamp):
+def build_technical_escalation_digest_email(vehicles, timestamp, client=None):
     """
     One weekly email to staff (admin/technician) listing every vehicle
     currently in Technical Escalation (all platforms silent past the
@@ -464,7 +479,7 @@ def build_technical_escalation_digest_email(vehicles, timestamp):
       </td></tr>
     """
     preheader = f"{len(vehicles)} vehicle(s) in Technical Escalation"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def _severity_band_row(b):
@@ -504,7 +519,7 @@ def _checked_asset_row(a):
     """
 
 
-def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checked_assets, timestamp):
+def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checked_assets, timestamp, client=None):
     """
     Weekly email to the client summarising the tampering/location-
     integrity analysis (importer/tamper_engine.py): unexplained
@@ -577,7 +592,7 @@ def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checke
       {checked_section}
     """
     preheader = f"{summary.get('confirmed', 0)} confirmed, {summary.get('unconfirmed', 0)} unconfirmed this week"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader
 
 
 def _recovery_row(v):
@@ -596,7 +611,7 @@ def _recovery_row(v):
     """
 
 
-def build_recovery_notice_email(vehicles, timestamp):
+def build_recovery_notice_email(vehicles, timestamp, client=None):
     """
     Plain FYI, no response needed: every vehicle that came back online
     this import cycle. Deliberately separate from check_reconnections'
@@ -623,4 +638,4 @@ def build_recovery_notice_email(vehicles, timestamp):
       </td></tr>
     """
     preheader = f"{len(vehicles)} vehicle(s) reconnected"
-    return _shell(inner), preheader
+    return _shell(inner, client), preheader

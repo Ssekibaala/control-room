@@ -273,7 +273,8 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
         need_url = (respond_urls or {}).get("needs_attention", "#")
         html, preheader = email_templates.build_update_email(
             plate, comment, added_by, role, timestamp, no_url, need_url, recent,
-            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"])
+            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"],
+            client=owning_client)
         return _send_and_record(plate, case, to, html, preheader, result)
 
     if role in ("client", "admin", "technician"):
@@ -284,7 +285,8 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
             return result
         html, preheader = email_templates.build_outcome_email(
             plate, comment, added_by, requires_followup, timestamp, recent,
-            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"])
+            reopened=case["reopened"], previous_closed_at=case["previousClosedAt"],
+            client=owning_client)
         sent = _send_and_record(plate, case, to, html, preheader, result)
         if requires_followup is False:
             try:
@@ -384,7 +386,7 @@ def send_recovery_notice(classification, recovered):
             "comment": (info.get("feedback") or {}).get("comment") if info.get("feedback") else None,
         } for plate, info in entries]
         timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-        html, preheader = email_templates.build_recovery_notice_email(vehicles, timestamp)
+        html, preheader = email_templates.build_recovery_notice_email(vehicles, timestamp, client=client)
         message_id, err = mailer.send(to, f"{client} - back online: {len(vehicles)} vehicle(s)",
                                       html, preheader)
         if err:
@@ -477,7 +479,7 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
         critical_vehicles = [_vehicle_dict(p, i) for p, i in critical_no_feedback]
         timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
         html, preheader = email_templates.build_pending_confirmation_digest_email(
-            vehicles, timestamp, critical_no_feedback=critical_vehicles)
+            vehicles, timestamp, critical_no_feedback=critical_vehicles, client=client)
         total = len(vehicles) + len(critical_vehicles)
         return (f"Weekly check-in: {total} vehicle(s) need your input", html, preheader, total)
 
@@ -518,7 +520,7 @@ def send_known_issues_checkin_digest(classification, base_url, interval_days):
                 "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
             })
         timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-        html, preheader = email_templates.build_known_issues_checkin_digest_email(vehicles, timestamp)
+        html, preheader = email_templates.build_known_issues_checkin_digest_email(vehicles, timestamp, client=client)
         return (f"Quick check-in: please reconfirm {len(vehicles)} known issue(s)",
                 html, preheader, len(vehicles))
 
@@ -549,7 +551,7 @@ def send_technical_escalation_digest(classification, base_url, interval_days):
             for plate, info in escalated
         ]
         timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-        html, preheader = email_templates.build_technical_escalation_digest_email(vehicles, timestamp)
+        html, preheader = email_templates.build_technical_escalation_digest_email(vehicles, timestamp, client=client)
         return (f"{client} - weekly check-in: {len(vehicles)} vehicle(s) in Technical Escalation",
                 html, preheader, len(vehicles))
 
@@ -642,7 +644,8 @@ def send_tamper_risk_report_digest(tampering, base_url, interval_days, classific
             return None
         timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
         html, preheader = email_templates.build_tamper_risk_report_email(
-            summary, data["severity_bands"], data["top_vehicles"], data["checked_assets"], timestamp)
+            summary, data["severity_bands"], data["top_vehicles"], data["checked_assets"], timestamp,
+            client=client)
         return (f"{client} - tampering report: {summary.get('confirmed', 0)} confirmed, "
                 f"{summary.get('unconfirmed', 0)} unconfirmed",
                 html, preheader, len(data["top_vehicles"]))
@@ -691,7 +694,8 @@ def _send_reconnect_check(plate, days_offline, open_comment, base_url):
     need_url = f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}"
     timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
     html, preheader = email_templates.build_reconnect_check_email(
-        plate, days_offline, open_comment, timestamp, no_url, need_url, recent)
+        plate, days_offline, open_comment, timestamp, no_url, need_url, recent,
+        client=owning_client)
 
     result = {"sent": False, "reason": None, "case_id": case["caseId"]}
     sent = _send_and_record(plate, case, to, html, preheader, result)

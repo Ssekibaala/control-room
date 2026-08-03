@@ -795,13 +795,15 @@
     backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
     border-top:1px solid var(--border); padding:8px 0; overflow:hidden; white-space:nowrap; z-index:20; transition:left 0.3s; }
   /* .ticker-wrap's left was hardcoded to the EXPANDED sidebar width and
-     never followed the sidebar's own .collapsed state, so collapsing the
-     sidebar left a ~180px dead gap between it and the ticker - the strip
-     never actually reached that corner. Sibling selector keeps them in
-     sync; sidebar and ticker-wrap are siblings (see the "collapse-btn"
-     JS toggling #sidebar's class, and .ticker-wrap's markup right after
-     the main content, both direct children of <body>). */
-  .sidebar.collapsed ~ .ticker-wrap { left:var(--sidebar-w-collapsed); }
+     never followed the sidebar's .collapsed state, so collapsing the
+     sidebar left a ~180px dead gap the ticker never reached.
+
+     Driven off a class on <body>, NOT a sibling selector on .sidebar.
+     An earlier attempt used `.sidebar.collapsed ~ .ticker-wrap`, which
+     silently never matched: .ticker-wrap lives OUTSIDE div.app while
+     .sidebar is inside it, so they are not siblings and no combinator
+     can span that. The collapse handler toggles both classes together. */
+  body.sidebar-collapsed .ticker-wrap { left:var(--sidebar-w-collapsed); }
   .ticker { display:inline-block; font-family:'JetBrains Mono'; font-size:12px; color:var(--text-secondary); animation:scroll 42s linear infinite; padding-left:100%; }
   @keyframes scroll { from{transform:translateX(0);} to{transform:translateX(-100%);} }
 
@@ -1784,6 +1786,17 @@ function applyClientView() {
     }
   });
 
+  // severityBands is a tally, not rows - the plate filter above can't
+  // touch it, so it kept reporting fleet-wide "flagged gaps" above an
+  // empty tampering table. Re-tallied over what survived.
+  if (Array.isArray(view.severityBands)) {
+    const tally = (rows, name) => (rows || []).filter(r => (r.severity || r.Severity) === name).length;
+    view.severityBands = view.severityBands.map(b => Object.assign({}, b, {
+      confirmed: tally(view.tamperConfirmed, b.severity),
+      unconfirmed: tally(view.tamperUnconfirmed, b.severity),
+    }));
+  }
+
   // Recount the headline KPIs from what survived, for the same reason
   // the server does: otherwise a filtered view shows fleet-wide totals
   // above per-client tables and the two visibly disagree.
@@ -1797,10 +1810,17 @@ function applyClientView() {
     knownIssues: countBy(r => r.status === 'Known Issue'),
     border: countBy(r => r.border === 'Yes'),
     healthPct: rows.length ? Math.round(countBy(r => r.status === 'Online') / rows.length * 100) : 0,
-    // Derived from a client-scoped section, so it has to be recounted
-    // too - it was left showing the fleet-wide figure above a filtered
-    // Priority Overlap table, which visibly disagreed with itself.
+    // Every KPI backed by a scoped SECTION rather than by `full` has to
+    // be recounted too, or the summary reports another client's totals
+    // above a correctly-filtered table - ADT was showing GTL's "8
+    // confirmed / 268 unconfirmed" tampering figures this way.
     doubleFlagged: (view.doubleFlagged || []).length,
+    tamperConfirmed: (view.tamperConfirmed || []).length,
+    tamperUnconfirmed: (view.tamperUnconfirmed || []).length,
+    nullGpsExcluded: (view.qualityLog || []).length,
+    // Gaps examined is a whole-import processing statistic with no
+    // per-vehicle rows behind it, so it can't be split per client.
+    tamperGapsChecked: 0,
   });
   DATA = view;
 }
@@ -2184,7 +2204,11 @@ wireOnce('sidebar-chrome', () => {
   document.getElementById('sidebar-backdrop').addEventListener('click', closeMobileSidebar);
   // ---- Sidebar collapse (new, presentation-only) ----
   document.getElementById('collapse-btn').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.toggle('collapsed');
+    const collapsed = document.getElementById('sidebar').classList.toggle('collapsed');
+    // The ticker is fixed-position and lives outside div.app, so it
+    // can't be reached from .sidebar in CSS - it follows this class on
+    // <body> instead. Kept in the same handler so the two can't drift.
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
   });
   // ---- Client filter ----
   // Lives here, in wireOnce, because the <select> is part of the static
