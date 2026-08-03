@@ -106,7 +106,7 @@ def add_user(username, role, password, clients=None, email=""):
         users = _load_local()
         users[username] = {
             "password_hash": password_hash, "role": role,
-            "clients": clients or [], "email": email,
+            "clients": clients or [], "email": email, "active": True,
             "created_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
         }
         _save_local(users)
@@ -124,6 +124,51 @@ def set_email(username, email):
     if username not in users:
         return False
     users[username]["email"] = email
+    _save_local(users)
+    return True
+
+
+def set_clients(username, clients):
+    """Updates the client assignments for a user. Returns True if successful."""
+    clients = [str(c).strip() for c in (clients or []) if str(c).strip()]
+    if _sheets_available():
+        import sheets_store
+        return sheets_store.set_user_clients(username, clients)
+    users = _load_local()
+    if username not in users:
+        return False
+    users[username]["clients"] = clients
+    _save_local(users)
+    return True
+
+
+def set_role(username, role):
+    """Updates the role for a user. Returns True if the account was found."""
+    from permissions import ROLES
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {ROLES}, got {role!r}")
+    if _sheets_available():
+        import sheets_store
+        return sheets_store.set_user_role(username, role)
+    users = _load_local()
+    if username not in users:
+        return False
+    users[username]["role"] = role
+    _save_local(users)
+    return True
+
+
+def set_active(username, active):
+    """Suspends or restores an account without deleting it. A
+    deactivated account keeps its row (clients, role, history) but
+    verify_login() refuses it. Returns True if the account was found."""
+    if _sheets_available():
+        import sheets_store
+        return sheets_store.set_user_active(username, bool(active))
+    users = _load_local()
+    if username not in users:
+        return False
+    users[username]["active"] = bool(active)
     _save_local(users)
     return True
 
@@ -194,16 +239,24 @@ def record_login(username):
         pass
 
 
+DEACTIVATED = "__deactivated__"  # not a real role - see verify_login()
+
+
 def verify_login(username, password):
-    """Returns the role string on success, None on failure. Never
-    reveals whether the failure was a bad username or bad password,
-    same response either way, that's deliberate."""
+    """Returns the role string on success, None on a bad username or
+    password (never reveals which, same response either way, that's
+    deliberate), or DEACTIVATED when the credentials are correct but
+    the account has been suspended - that distinction is safe to reveal
+    since only an admin/technician can suspend an account in the first
+    place, and the person locked out deserves to know why."""
     users = load_users()
     user = users.get(username)
     if not user:
         return None
     if not check_password_hash(user["password_hash"], password):
         return None
+    if not user.get("active", True):
+        return DEACTIVATED
     record_login(username)
     return user["role"]
 

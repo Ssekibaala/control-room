@@ -264,6 +264,11 @@
   .drill-body { overflow:auto; padding:0; }
   .drill-body table { font-size:12px; }
   .drill-body thead th { position:sticky; top:0; z-index:1; }
+  /* Table-based drill-bodies (record detail, client contacts) want their
+     content flush with the box edges; anything that's just a plain form
+     or list needs real breathing room or every row of text runs into
+     the rounded corners - that's what .padded is for. */
+  .drill-body.padded { padding:20px 22px; }
   .drill-foot { padding:12px 22px; border-top:1px solid var(--divider); font-size:11.5px; color:var(--text-tertiary);
     display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
   .drill-foot .btn-primary { padding:7px 13px; font-size:11.5px; }
@@ -288,7 +293,7 @@
 
   .ff-row { margin-bottom:12px; }
   .ff-row label { display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px; }
-  .ff-row input, .ff-row textarea, .ff-row select { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
+  .ff-row input:not([type="checkbox"]), .ff-row textarea, .ff-row select { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
     padding:9px 12px; border-radius:9px; font-size:13px; font-family:inherit; resize:vertical; }
   .ff-row select { cursor:pointer; }
   .ff-row input:focus, .ff-row textarea:focus, .ff-row select:focus { outline:none; border-color:var(--primary); }
@@ -326,30 +331,45 @@
   .client-tag { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:6px;
     background:var(--hover-surface); border:1px solid var(--border); color:var(--text-secondary); }
   .u-none { font-size:11px; color:var(--text-tertiary); font-style:italic; }
+  .u-none.warn { color:var(--warning); font-style:normal; font-weight:600; }
   .sheet-link { text-decoration:none; width:fit-content; }
   .btn-icon-trail { margin-right:0; margin-left:6px; opacity:0.6; }
-  .users-list-row { display:grid; grid-template-columns:0.9fr 1.3fr 0.9fr 145px 105px 32px; align-items:center; gap:12px;
+  .users-list-row { display:grid; grid-template-columns:0.8fr 1.05fr 85px 105px 1fr 104px; align-items:center; gap:12px;
     padding:11px 4px; border-bottom:1px solid var(--divider); }
-  .u-delete { background:none; border:none; color:var(--text-tertiary); font-size:18px; line-height:1;
-    cursor:pointer; padding:2px 6px; border-radius:6px; }
-  .u-delete:hover { color:var(--danger, #FF5C7A); background:var(--danger, #FF5C7A)1a; }
+  .users-list-row.inactive { opacity:0.55; }
+  .u-inactive-tag { font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px;
+    color:var(--text-tertiary); margin-left:6px; }
+  .u-row-actions { display:flex; align-items:center; gap:4px; justify-content:flex-end; }
+  .u-action-btn { background:none; border:none; color:var(--text-tertiary); cursor:pointer; padding:5px;
+    border-radius:6px; display:flex; align-items:center; justify-content:center; }
+  .u-action-btn svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .u-action-btn:hover { color:var(--text-primary); background:var(--hover-surface); }
+  .u-action-btn.danger:hover { color:var(--danger); background:var(--danger-surface); }
+  .u-action-btn.warn:hover { color:var(--warning); background:var(--warning-surface); }
   .users-list-row:last-child { border-bottom:none; }
   .users-list-head { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px;
     color:var(--text-tertiary); font-weight:600; border-bottom:1px solid var(--border); padding-bottom:9px; }
   .users-list-row .u-name { font-family:'JetBrains Mono'; font-size:13px; font-weight:600; color:var(--text-primary); }
-  .users-list-row .u-email { font-size:12px; color:var(--text-secondary); cursor:pointer;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-bottom:1px dashed transparent; }
-  .users-list-row .u-email:hover { color:var(--primary); border-bottom-color:var(--primary); }
+  .users-list-row .u-email { font-size:12px; color:var(--text-secondary);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .users-list-row .u-email.missing { color:var(--warning); font-style:italic; }
   .users-list-row .u-lastlogin { font-family:'JetBrains Mono'; font-size:11.5px; color:var(--text-secondary); }
   .users-list-row .u-lastlogin.never { color:var(--text-tertiary); font-style:italic; }
   .users-list-row .role-pill { justify-self:start; }
   .users-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .client-checklist { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;
+    border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; background:var(--hover-surface); }
+  .client-checklist label { display:flex; align-items:center; gap:9px; padding:6px 2px; margin-bottom:0;
+    font-size:13px; font-weight:500; color:var(--text-primary); cursor:pointer; }
+  .client-checklist label input[type="checkbox"] { flex:0 0 auto; width:15px; height:15px; margin:0; accent-color:var(--primary); }
+  .client-checklist label span { flex:1; }
   /* name | emails | platform chips | Map | delete. The chips column is
      auto-width so it hugs its three fixed-size badges instead of
      stealing space from the email column. */
   .users-list-row.client-row { grid-template-columns:1fr 1.6fr auto 64px 36px; }
   .users-list-row.client-row .client-map { padding:5px 10px; font-size:11px; justify-self:end; }
+  .client-emails { cursor:pointer; border-bottom:1px dashed transparent; }
+  .client-emails:hover { color:var(--primary); border-bottom-color:var(--primary); }
   .client-delete { width:30px; height:30px; color:var(--text-tertiary); }
   .client-delete:hover { color:var(--danger); }
   .client-delete svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; }
@@ -1153,6 +1173,21 @@
     </div>
   </div>
 
+  <!-- Generic confirm modal - replaces window.confirm(), which is
+       unreliable (silently auto-dismissed with no dialog shown at all)
+       in some embedded browser contexts this app runs inside. -->
+  <div class="drill-backdrop" id="confirm-backdrop">
+    <div class="drill-box" style="max-width:420px" role="dialog" aria-modal="true" aria-label="Confirm">
+      <div class="drill-body" style="padding:24px;">
+        <div id="confirm-message" style="font-size:14px; line-height:1.55; color:var(--text-primary); margin-bottom:22px;"></div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button type="button" class="btn-secondary" id="confirm-cancel">Cancel</button>
+          <button type="button" class="btn-primary" id="confirm-ok">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 {% if 'p-users' in allowed_panels %}
   <div class="drill-backdrop" id="createuser-backdrop">
     <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Create account">
@@ -1165,7 +1200,7 @@
           <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="drill-body">
+      <div class="drill-body padded">
         <form id="user-create-form">
           <div class="ff-row">
             <label for="uf-username">Username</label>
@@ -1186,10 +1221,14 @@
               <option value="client">Client &mdash; fleet health &amp; feedback only</option>
             </select>
           </div>
-          <div class="ff-row">
-            <label for="uf-clients">Client(s) <span class="ff-optional">optional</span></label>
-            <input type="text" id="uf-clients" placeholder="e.g. Globe Trotters, Acme Haulage" autocomplete="off">
-            <div class="ff-hint">Separate multiple clients with commas. Leave blank for whole-fleet access.</div>
+          <div class="ff-row" id="uf-clients-row">
+            <label>Client(s)</label>
+            <div class="ff-hint">Which clients this person can see. Required &mdash; without at least one,
+              this account can't see any fleet data.</div>
+            <div id="uf-clients-list" class="client-checklist"><div class="feedback-loading">Loading clients&hellip;</div></div>
+          </div>
+          <div class="ff-row" id="uf-clients-admin-note" style="display:none">
+            <div class="ff-hint">Admin accounts see every client automatically &mdash; nothing to select here.</div>
           </div>
           <div class="ff-row">
             <label for="uf-password">Password</label>
@@ -1217,7 +1256,7 @@
           <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="drill-body">
+      <div class="drill-body padded">
         <div id="roles-matrix"><div class="feedback-loading">Loading roles&hellip;</div></div>
         <div id="roles-msg" class="ff-msg"></div>
       </div>
@@ -1235,7 +1274,7 @@
           <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="drill-body">
+      <div class="drill-body padded">
         <form id="client-create-form">
           <div class="ff-row">
             <label for="cf-name">Client name</label>
@@ -1274,6 +1313,66 @@
           </div>
           <div id="cf-msg" class="ff-msg"></div>
           <button type="submit" id="cf-submit" class="btn-primary user-form-submit">Add Client</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client Contacts Management Modal -->
+  <div class="drill-backdrop" id="clientcontacts-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Manage client contacts">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">Client Contacts</div>
+          <div class="drill-subtitle">Edit email addresses and platform account assignments for your client contacts.</div>
+        </div>
+        <button class="icon-btn" id="clientcontacts-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body" style="max-height: 70vh; overflow-y: auto;">
+        <div id="clientcontacts-list" style="padding: 20px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit User Modal -->
+  <div class="drill-backdrop" id="edituser-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Edit account">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title" id="eu-title">Edit Account</div>
+          <div class="drill-subtitle">Update this person's role, email, and which clients they can see.</div>
+        </div>
+        <button class="icon-btn" id="edituser-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body padded">
+        <form id="edituser-form">
+          <div class="ff-row">
+            <label for="eu-email">Email address</label>
+            <input type="email" id="eu-email" placeholder="Where notifications go" autocomplete="off">
+          </div>
+          <div class="ff-row">
+            <label for="eu-role">Role</label>
+            <select id="eu-role" required>
+              <option value="admin">Admin &mdash; full access, settings, user management</option>
+              <option value="technician">Technician &mdash; full operational access, no settings</option>
+              <option value="client">Client &mdash; fleet health &amp; feedback only</option>
+            </select>
+          </div>
+          <div class="ff-row" id="eu-clients-row">
+            <label>Client(s)</label>
+            <div class="ff-hint">Which clients this person can see. Required &mdash; without at least one,
+              this account can't see any fleet data.</div>
+            <div id="eu-clients-list" class="client-checklist"></div>
+          </div>
+          <div class="ff-row" id="eu-clients-admin-note" style="display:none">
+            <div class="ff-hint">Admin accounts see every client automatically &mdash; nothing to select here.</div>
+          </div>
+          <div id="eu-msg" class="ff-msg"></div>
+          <button type="submit" class="btn-primary user-form-submit">Save Changes</button>
         </form>
       </div>
     </div>
@@ -1552,6 +1651,14 @@
                 <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 Roles &amp; Visibility
               </button>
+              <button class="btn-secondary" id="open-client-contacts">
+                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M16 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4M21 8v6M24 11h-6"/></svg>
+                Client Contacts
+              </button>
+              <button class="btn-secondary" id="open-create-client">
+                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 5v14M5 12h14"/></svg>
+                Add Client
+              </button>
               <button class="btn-primary" id="open-create-user">
                 <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 5v14M5 12h14"/></svg>
                 Create Account
@@ -1567,12 +1674,6 @@
               <h3>Client Contacts</h3>
               <span class="chart-subhead">Who gets emailed about a vehicle, even without a login. Every vehicle
                 currently reaches every client contact below &mdash; per-vehicle assignment isn't built yet.</span>
-            </div>
-            <div class="users-head-actions">
-              <button class="btn-primary" id="open-create-client">
-                <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M12 5v14M5 12h14"/></svg>
-                Add Client
-              </button>
             </div>
           </div>
           <div id="clients-list"><div class="feedback-loading">Loading clients&hellip;</div></div>
@@ -1760,13 +1861,26 @@ let SELECTED_CLIENT = '';   // '' = all clients this user can see
 const CLIENT_ALL = '';
 
 // Sections whose rows carry a client field, mirroring
-// permissions.CLIENT_SCOPED_SECTIONS on the server.
+// permissions.CLIENT_SCOPED_SECTIONS on the server EXACTLY - this list
+// drifting out of sync with that one is precisely how the Recovered/New
+// panel ended up showing other clients' plates while every other panel
+// was correctly scoped: recoveredList/newlyOfflineList were added
+// server-side but never added here. If you add a client-scoped section
+// to permissions.py, add it here in the SAME breath.
 const CLIENT_ROW_SECTIONS = ['full', 'critical', 'criticalCards', 'pending', 'healthy',
-                              'knownIssues', 'border', 'doubleFlagged'];
+                              'knownIssues', 'border', 'doubleFlagged',
+                              'recoveredList', 'newlyOfflineList'];
 // Plate-keyed sections with no client field of their own - filtered by
 // resolving the plate, same approach the server takes.
 const CLIENT_PLATE_SECTIONS = ['tamperConfirmed', 'tamperUnconfirmed', 'tamperCards',
                                 'tamperChecked', 'qualityLog', 'topVehicles'];
+// Plain arrays of plate strings (not row objects) - mirrors
+// permissions.PLATE_LIST_SECTIONS minus _skipped_plates, which the
+// frontend never renders. These feed the ticker's "NEWLY OFFLINE: X" /
+// "RECOVERED: X" items directly, so an unfiltered one leaks another
+// client's plate into the ticker even though the table right above it
+// is correctly scoped.
+const CLIENT_PLATE_LIST_SECTIONS = ['recovered', 'newlyOffline'];
 
 function applyClientView() {
   if (!RAW_DATA) return;
@@ -1783,6 +1897,11 @@ function applyClientView() {
   CLIENT_PLATE_SECTIONS.forEach(key => {
     if (Array.isArray(view[key])) {
       view[key] = view[key].filter(r => r && owner[r.plate] === SELECTED_CLIENT);
+    }
+  });
+  CLIENT_PLATE_LIST_SECTIONS.forEach(key => {
+    if (Array.isArray(view[key])) {
+      view[key] = view[key].filter(p => typeof p === 'string' && owner[p] === SELECTED_CLIENT);
     }
   });
 
@@ -1818,6 +1937,14 @@ function applyClientView() {
     tamperConfirmed: (view.tamperConfirmed || []).length,
     tamperUnconfirmed: (view.tamperUnconfirmed || []).length,
     nullGpsExcluded: (view.qualityLog || []).length,
+    // Same reasoning: recoveredList/newlyOfflineList are already
+    // filtered above, but kpi.recovered/newlyOffline are what the
+    // "Online" card's footer and the day-over-day tiles actually read -
+    // left alone, they kept showing the whole fleet's counts (e.g. "1
+    // recovered, 3 newly offline") directly above tables that correctly
+    // showed zero for the selected client.
+    recovered: (view.recoveredList || []).length,
+    newlyOffline: (view.newlyOfflineList || []).length,
     // Gaps examined is a whole-import processing statistic with no
     // per-vehicle rows behind it, so it can't be split per client.
     tamperGapsChecked: 0,
@@ -2160,6 +2287,30 @@ function wireOnce(key, fn) {
   fn();
 }
 
+// ---- Confirm modal (replaces window.confirm()) ----
+let CONFIRM_CALLBACK = null;
+function showConfirm(message, onConfirm, okLabel) {
+  document.getElementById('confirm-message').textContent = message;
+  document.getElementById('confirm-ok').textContent = okLabel || 'Confirm';
+  CONFIRM_CALLBACK = onConfirm;
+  document.getElementById('confirm-backdrop').classList.add('open');
+}
+function closeConfirmModal() {
+  document.getElementById('confirm-backdrop').classList.remove('open');
+  CONFIRM_CALLBACK = null;
+}
+wireOnce('confirm-modal', () => {
+  const backdrop = document.getElementById('confirm-backdrop');
+  document.getElementById('confirm-cancel').addEventListener('click', closeConfirmModal);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeConfirmModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && backdrop.classList.contains('open')) closeConfirmModal(); });
+  document.getElementById('confirm-ok').addEventListener('click', () => {
+    const cb = CONFIRM_CALLBACK;
+    closeConfirmModal();
+    if (cb) cb();
+  });
+});
+
 function renderEverything() {
 
 // =====================================================================
@@ -2474,25 +2625,26 @@ wireOnce('checkin-trigger', () => {
   const btn = document.getElementById('checkin-trigger-btn');
   if (!btn) return;
   btn.addEventListener('click', () => {
-    if (!confirm('Send a check-in now? This emails the client (pending confirmations, critical assets) and staff (technical escalations) immediately, regardless of the weekly schedule.')) return;
-    btn.disabled = true;
-    const pill = document.getElementById('checkin-last-pill');
-    if (pill) pill.textContent = 'Check-in: sending…';
-    fetch('/api/checkin/trigger', { method: 'POST' })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(() => {
-        // The import itself (real mail fetch + Sheets writes) runs in
-        // the background on the server - poll a few times rather than
-        // assume a single fixed delay is always enough.
-        let tries = 0;
-        const poll = setInterval(() => {
-          tries++;
-          refreshCheckinPill();
-          if (tries >= 6) clearInterval(poll);
-        }, 5000);
-      })
-      .catch(() => { if (pill) pill.textContent = 'Check-in: could not start'; })
-      .finally(() => { btn.disabled = false; });
+    showConfirm('Send a check-in now? This emails the client (pending confirmations, critical assets) and staff (technical escalations) immediately, regardless of the weekly schedule.', () => {
+      btn.disabled = true;
+      const pill = document.getElementById('checkin-last-pill');
+      if (pill) pill.textContent = 'Check-in: sending…';
+      fetch('/api/checkin/trigger', { method: 'POST' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => {
+          // The import itself (real mail fetch + Sheets writes) runs in
+          // the background on the server - poll a few times rather than
+          // assume a single fixed delay is always enough.
+          let tries = 0;
+          const poll = setInterval(() => {
+            tries++;
+            refreshCheckinPill();
+            if (tries >= 6) clearInterval(poll);
+          }, 5000);
+        })
+        .catch(() => { if (pill) pill.textContent = 'Check-in: could not start'; })
+        .finally(() => { btn.disabled = false; });
+    }, 'Send Check-in');
   });
 });
 
@@ -2594,12 +2746,18 @@ const ACTIVITY_FILTER_LABELS = { today: 'today', yesterday: 'yesterday', all: 'o
 function renderActivityFeed(filter) {
   const feedEl = document.getElementById('activity-feed');
   if (!feedEl) return;
-  let filtered = ACTIVITY_ENTRIES;
+  // Respect the header's client filter, same as every other section
+  // (and the ticker right below, which already does this) - this panel
+  // doesn't route through applyClientView() since it's fed by its own
+  // /api/feedback-activity poll rather than DATA, so it needs its own
+  // explicit filter or an admin narrowing to one client sees every
+  // other client's comments here regardless.
+  let filtered = SELECTED_CLIENT ? ACTIVITY_ENTRIES.filter(e => e.client === SELECTED_CLIENT) : ACTIVITY_ENTRIES;
   if (filter === 'today' || filter === 'yesterday') {
     const d = new Date();
     if (filter === 'yesterday') d.setDate(d.getDate() - 1);
     const targetISO = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    filtered = ACTIVITY_ENTRIES.filter(e => e.dateISO === targetISO);
+    filtered = filtered.filter(e => e.dateISO === targetISO);
   }
   if (!filtered.length) {
     feedEl.innerHTML = '<div class="activity-empty">No comments ' + ACTIVITY_FILTER_LABELS[filter] + '.</div>';
@@ -2665,12 +2823,44 @@ fetchActivityFeed();
 // and /api/users double-checks the session role regardless). ----
 const usersForm = document.getElementById('user-create-form');
 if (usersForm) {
+  // ---- Shared client-checklist helpers (Create Account + Edit Account) ----
+  // Admin sees every client already, so its checklist is pointless and
+  // is hidden rather than shown-but-ignored - the two 'ff-row's a form
+  // toggles between are passed in so each form can wire its own pair.
+  function toggleClientsForRole(role, listRow, adminNoteRow) {
+    const isAdmin = role === 'admin';
+    listRow.style.display = isAdmin ? 'none' : '';
+    adminNoteRow.style.display = isAdmin ? '' : 'none';
+    listRow.querySelectorAll('input[type=checkbox]').forEach(cb => { if (isAdmin) cb.checked = false; });
+  }
+  function loadClientChecklist(containerEl, selected) {
+    const sel = new Set(selected || []);
+    fetch('/api/clients')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+      .then(data => {
+        const names = (data.clients || []).map(c => c.name);
+        containerEl.innerHTML = names.length ? names.map(name =>
+          '<label><input type="checkbox" value="' + escapeHTML(name) + '"' +
+            (sel.has(name) ? ' checked' : '') + '><span>' + escapeHTML(name) + '</span></label>'
+        ).join('') : '<div class="activity-empty">No clients yet &mdash; add one under Client Contacts first.</div>';
+      })
+      .catch(() => { containerEl.innerHTML = '<div class="activity-empty">Could not load clients.</div>'; });
+  }
+  function checkedClientValues(containerEl) {
+    return [...containerEl.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+  }
+
   // ---- Create Account modal ----
   const cuBackdrop = document.getElementById('createuser-backdrop');
+  const ufRoleSelect = document.getElementById('uf-role');
+  const ufClientsRow = document.getElementById('uf-clients-row');
+  const ufClientsAdminNote = document.getElementById('uf-clients-admin-note');
   function openCreateUser() {
     document.getElementById('uf-msg').textContent = '';
     document.getElementById('uf-msg').className = 'ff-msg';
     usersForm.reset();
+    toggleClientsForRole('', ufClientsRow, ufClientsAdminNote);
+    loadClientChecklist(document.getElementById('uf-clients-list'), []);
     cuBackdrop.classList.add('open');
     setTimeout(() => document.getElementById('uf-username').focus(), 50);
   }
@@ -2682,7 +2872,13 @@ if (usersForm) {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && cuBackdrop.classList.contains('open')) closeCreateUser();
     });
+    ufRoleSelect.addEventListener('change', () => toggleClientsForRole(ufRoleSelect.value, ufClientsRow, ufClientsAdminNote));
   });
+
+  const EDIT_ICON = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  const PAUSE_ICON = '<svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+  const PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z"/></svg>';
+  const TRASH_ICON = '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>';
 
   function renderUsersList(list) {
     const el = document.getElementById('users-list');
@@ -2690,58 +2886,250 @@ if (usersForm) {
     if (countEl) countEl.textContent = list.length + ' account' + (list.length === 1 ? '' : 's');
     if (!list.length) { el.innerHTML = '<div class="activity-empty">No accounts yet.</div>'; return; }
     const head = '<div class="users-list-row users-list-head">' +
-      '<span>Account</span><span>Email</span><span>Client(s)</span><span>Last signed in</span><span>Role</span><span></span></div>';
+      '<span>Account</span><span>Email</span><span>Role</span><span>Last signed in</span><span>Client(s)</span><span></span></div>';
     el.innerHTML = head + list.map(u => {
       const clients = (u.clients || []);
       const isYou = u.username === CURRENT_USERNAME;
-      return '<div class="users-list-row">' +
+      const isAdmin = u.role === 'admin';
+      const active = u.active !== false;
+      let clientsCell;
+      if (isAdmin) {
+        clientsCell = '<span class="u-none">All clients</span>';
+      } else if (clients.length) {
+        clientsCell = clients.map(c => '<span class="client-tag">' + escapeHTML(c) + '</span>').join('');
+      } else {
+        clientsCell = '<span class="u-none warn" title="This account has no client assigned - it can\'t see any fleet data until one is added.">Unassigned</span>';
+      }
+      return '<div class="users-list-row' + (active ? '' : ' inactive') + '">' +
         '<span class="u-name">' + escapeHTML(u.username) +
-          (isYou ? '<span class="u-you">(you)</span>' : '') + '</span>' +
-        // A blank address means this person genuinely cannot be reached by
-        // any notification, so say that plainly and make it click-to-fix
-        // rather than rendering an empty cell nobody questions.
-        '<span class="u-email' + (u.email ? '' : ' missing') + '" data-user="' + escapeHTML(u.username) + '" ' +
-          'title="' + (u.email ? escapeHTML(u.email) : 'No address on file - click to add') + '">' +
+          (isYou ? '<span class="u-you">(you)</span>' : '') +
+          (active ? '' : '<span class="u-inactive-tag">Deactivated</span>') + '</span>' +
+        '<span class="u-email' + (u.email ? '' : ' missing') + '" title="' + (u.email ? escapeHTML(u.email) : 'No address on file') + '">' +
           escapeHTML(u.email || 'Not set') + '</span>' +
-        '<span class="u-clients">' + (clients.length
-          ? clients.map(c => '<span class="client-tag">' + escapeHTML(c) + '</span>').join('')
-          : '<span class="u-none">All / unassigned</span>') + '</span>' +
-        '<span class="u-lastlogin' + (u.lastLogin ? '' : ' never') + '">' +
-          escapeHTML(u.lastLogin || 'Never') + '</span>' +
         '<span class="role-pill ' + escapeHTML(u.role) + '">' + escapeHTML(u.role) + '</span>' +
-        '<span>' + (isYou ? '' :
-          '<button type="button" class="u-delete" data-user="' + escapeHTML(u.username) + '" title="Delete this account">&times;</button>'
-        ) + '</span>' +
+        '<span class="u-lastlogin' + (u.lastLogin ? '' : ' never') + '">' + escapeHTML(u.lastLogin || 'Never') + '</span>' +
+        '<span class="u-clients">' + clientsCell + '</span>' +
+        '<span class="u-row-actions">' +
+          '<button type="button" class="u-action-btn u-edit-btn" data-user="' + escapeHTML(u.username) + '" title="Edit account" aria-label="Edit ' + escapeHTML(u.username) + '">' + EDIT_ICON + '</button>' +
+          (isYou ? '' :
+            '<button type="button" class="u-action-btn warn u-toggle-active-btn" data-user="' + escapeHTML(u.username) + '" data-active="' + active + '" title="' + (active ? 'Deactivate' : 'Reactivate') + ' account" aria-label="' + (active ? 'Deactivate' : 'Reactivate') + ' ' + escapeHTML(u.username) + '">' + (active ? PAUSE_ICON : PLAY_ICON) + '</button>' +
+            '<button type="button" class="u-action-btn danger u-delete" data-user="' + escapeHTML(u.username) + '" title="Delete this account" aria-label="Delete ' + escapeHTML(u.username) + '">' + TRASH_ICON + '</button>'
+          ) +
+        '</span>' +
       '</div>';
     }).join('');
 
-    el.querySelectorAll('.u-email').forEach(cell => {
-      cell.addEventListener('click', () => {
-        const current = cell.classList.contains('missing') ? '' : cell.textContent;
-        const next = prompt('Email address for ' + cell.dataset.user + ':', current);
-        if (next === null) return;
-        fetch('/api/users/' + encodeURIComponent(cell.dataset.user) + '/email', {
-          method: 'PUT', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({email: next.trim()}),
-        })
-          .then(r => r.json().then(b => ({ok: r.ok, b})))
-          .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save that address.'); fetchUsers(); })
-          .catch(() => alert('Could not reach the server.'));
+    el.querySelectorAll('.u-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const user = list.find(u => u.username === btn.dataset.user);
+        if (user) openEditUserModal(user);
+      });
+    });
+
+    el.querySelectorAll('.u-toggle-active-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const username = btn.dataset.user;
+        const nowActive = btn.dataset.active === 'true';
+        const verb = nowActive ? 'Deactivate' : 'Reactivate';
+        showConfirm(verb + ' the account "' + username + '"?' + (nowActive ? ' They will not be able to log in until reactivated.' : ''), () => {
+          btn.disabled = true;
+          fetch('/api/users/' + encodeURIComponent(username) + '/active', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({active: !nowActive}),
+          })
+            .then(r => r.json().then(b => ({ok: r.ok, b})))
+            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save that change.'); fetchUsers(); })
+            .catch(() => { alert('Could not reach the server.'); btn.disabled = false; });
+        }, verb);
       });
     });
 
     el.querySelectorAll('.u-delete').forEach(btn => {
       btn.addEventListener('click', () => {
         const username = btn.dataset.user;
-        if (!confirm('Delete the account "' + username + '"? This cannot be undone.')) return;
-        btn.disabled = true;
-        fetch('/api/users/' + encodeURIComponent(username), {method: 'DELETE'})
-          .then(r => r.json().then(b => ({ok: r.ok, b})))
-          .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not delete that account.'); fetchUsers(); })
-          .catch(() => { alert('Could not reach the server.'); btn.disabled = false; });
+        showConfirm('Delete the account "' + username + '"? This cannot be undone.', () => {
+          btn.disabled = true;
+          fetch('/api/users/' + encodeURIComponent(username), {method: 'DELETE'})
+            .then(r => r.json().then(b => ({ok: r.ok, b})))
+            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not delete that account.'); fetchUsers(); })
+            .catch(() => { alert('Could not reach the server.'); btn.disabled = false; });
+        }, 'Delete');
       });
     });
   }
+
+  // ---- Edit Account modal (email, role, clients in one place) ----
+  const editUserBackdrop = document.getElementById('edituser-backdrop');
+  const euRoleSelect = document.getElementById('eu-role');
+  const euClientsRow = document.getElementById('eu-clients-row');
+  const euClientsAdminNote = document.getElementById('eu-clients-admin-note');
+  const euClientsList = document.getElementById('eu-clients-list');
+  let EDIT_TARGET_USER = null;
+
+  function putJSON(url, body) {
+    return fetch(url, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+      .then(r => r.json().then(b => ({ok: r.ok, b})));
+  }
+
+  function openEditUserModal(user) {
+    EDIT_TARGET_USER = user;
+    document.getElementById('eu-title').textContent = 'Edit ' + user.username;
+    document.getElementById('eu-email').value = user.email || '';
+    euRoleSelect.value = user.role;
+    const msg = document.getElementById('eu-msg');
+    msg.textContent = ''; msg.className = 'ff-msg';
+    toggleClientsForRole(user.role, euClientsRow, euClientsAdminNote);
+    loadClientChecklist(euClientsList, user.clients || []);
+    editUserBackdrop.classList.add('open');
+  }
+  function closeEditUserModal() { editUserBackdrop.classList.remove('open'); EDIT_TARGET_USER = null; }
+
+  wireOnce('edituser-modal', () => {
+    document.getElementById('edituser-close').addEventListener('click', closeEditUserModal);
+    editUserBackdrop.addEventListener('click', (e) => { if (e.target === editUserBackdrop) closeEditUserModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && editUserBackdrop.classList.contains('open')) closeEditUserModal();
+    });
+    euRoleSelect.addEventListener('change', () => toggleClientsForRole(euRoleSelect.value, euClientsRow, euClientsAdminNote));
+
+    document.getElementById('edituser-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!EDIT_TARGET_USER) return;
+      const username = EDIT_TARGET_USER.username;
+      const msg = document.getElementById('eu-msg');
+      const email = document.getElementById('eu-email').value.trim();
+      const role = euRoleSelect.value;
+      const clients = role === 'admin' ? [] : checkedClientValues(euClientsList);
+      if (role !== 'admin' && !clients.length) {
+        msg.textContent = 'Select at least one client for this account.';
+        msg.className = 'ff-msg err';
+        return;
+      }
+
+      const btn = document.querySelector('#edituser-form .btn-primary');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      msg.textContent = ''; msg.className = 'ff-msg';
+
+      // Role first: changing AWAY from admin needs to land before the
+      // clients call, since the clients endpoint requires a non-admin
+      // target to accept a list.
+      const steps = [];
+      if (role !== EDIT_TARGET_USER.role) steps.push(() => putJSON('/api/users/' + encodeURIComponent(username) + '/role', {role}));
+      steps.push(() => putJSON('/api/users/' + encodeURIComponent(username) + '/email', {email}));
+      if (role !== 'admin') {
+        steps.push(() => putJSON('/api/users/' + encodeURIComponent(username) + '/clients', {clients}));
+      } else if ((EDIT_TARGET_USER.clients || []).length) {
+        // Self-heal: this admin account somehow still has clients on
+        // file (e.g. from before this rule existed) - clear them.
+        steps.push(() => putJSON('/api/users/' + encodeURIComponent(username) + '/clients', {clients: []}));
+      }
+
+      (function runStep(i) {
+        if (i >= steps.length) {
+          btn.disabled = false; btn.textContent = 'Save Changes';
+          msg.textContent = 'Saved.'; msg.className = 'ff-msg ok';
+          setTimeout(() => { closeEditUserModal(); fetchUsers(); }, 500);
+          return;
+        }
+        steps[i]().then(({ok, b}) => {
+          if (!ok) {
+            btn.disabled = false; btn.textContent = 'Save Changes';
+            msg.textContent = b.error || 'Could not save that change.';
+            msg.className = 'ff-msg err';
+            fetchUsers(); // reflect whatever DID save before the failing step
+            return;
+          }
+          runStep(i + 1);
+        }).catch(() => {
+          btn.disabled = false; btn.textContent = 'Save Changes';
+          msg.textContent = 'Could not reach the server.';
+          msg.className = 'ff-msg err';
+        });
+      })(0);
+    });
+  });
+
+  // ---- Client Contacts Management modal ----
+  const clientContactsBackdrop = document.getElementById('clientcontacts-backdrop');
+
+  function renderClientContactsList() {
+    fetch('/api/clients')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+      .then(data => {
+        const clients = data.clients || [];
+        const list = document.getElementById('clientcontacts-list');
+        if (!clients.length) {
+          list.innerHTML = '<div class="activity-empty">No clients yet.</div>';
+          return;
+        }
+        list.innerHTML = clients.map((c, i) =>
+          '<div style="padding: 12px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 12px;">' +
+            '<div style="font-weight: 600; margin-bottom: 8px;">' + escapeHTML(c.name) + '</div>' +
+            '<div style="margin-bottom: 8px;">' +
+              '<label style="display: block; font-size: 12px; margin-bottom: 4px;">Email address(es):</label>' +
+              '<input type="text" class="client-email-input" data-idx="' + i + '" ' +
+                'value="' + escapeHTML((c.emails || []).join(', ')) + '" ' +
+                'placeholder="email@example.com, contact@example.com" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit;">' +
+            '</div>' +
+            '<button type="button" class="btn-secondary" style="font-size: 11px; padding: 6px 10px;" data-idx="' + i + '">Save Email(s)</button>' +
+          '</div>'
+        ).join('');
+
+        // Matched to its client by array index, not by re-querying the
+        // DOM with the name embedded in a CSS selector - a name
+        // containing a quote or other selector-special character would
+        // silently fail to match there.
+        list.querySelectorAll('button[data-idx]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const clientName = clients[Number(btn.dataset.idx)].name;
+            const emailInput = list.querySelector('.client-email-input[data-idx="' + btn.dataset.idx + '"]');
+            const emails = emailInput.value.trim();
+
+            btn.disabled = true;
+            btn.textContent = 'Saving…';
+
+            fetch('/api/clients/' + encodeURIComponent(clientName) + '/emails', {
+              method: 'PUT',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({emails: emails}),
+            })
+              .then(r => r.json().then(b => ({ok: r.ok, b})))
+              .then(({ok, b}) => {
+                btn.disabled = false;
+                btn.textContent = 'Save Email(s)';
+                if (!ok) alert(b.error || 'Could not save.');
+                renderClientContactsList();
+              })
+              .catch(() => {
+                btn.disabled = false;
+                btn.textContent = 'Save Email(s)';
+                alert('Could not reach the server.');
+              });
+          });
+        });
+      })
+      .catch(() => {
+        document.getElementById('clientcontacts-list').innerHTML = '<div class="activity-empty">Could not load clients.</div>';
+      });
+  }
+
+  function openClientContacts() {
+    renderClientContactsList();
+    clientContactsBackdrop.classList.add('open');
+  }
+
+  function closeClientContacts() {
+    clientContactsBackdrop.classList.remove('open');
+  }
+
+  wireOnce('clientcontacts-modal', () => {
+    document.getElementById('open-client-contacts').addEventListener('click', openClientContacts);
+    document.getElementById('clientcontacts-close').addEventListener('click', closeClientContacts);
+    clientContactsBackdrop.addEventListener('click', (e) => { if (e.target === clientContactsBackdrop) closeClientContacts(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && clientContactsBackdrop.classList.contains('open')) closeClientContacts();
+    });
+  });
 
   // ---- Roles & Visibility modal ----
   const rolesBackdrop = document.getElementById('roles-backdrop');
@@ -2960,27 +3348,21 @@ if (usersForm) {
         btn.addEventListener('click', () => openMapClient(btn.dataset.client));
       });
 
+      // Editing happens in the Client Contacts modal (real input fields,
+      // not window.prompt() - prompt() is unreliable/silently swallowed
+      // in some embedded browser contexts, which was why editing an
+      // email here used to appear to do nothing).
       clientsList.querySelectorAll('.client-emails').forEach(cell => {
-        cell.addEventListener('click', () => {
-          const current = cell.classList.contains('missing') ? '' : cell.title;
-          const next = prompt('Contact email(s) for ' + cell.dataset.client + ' (comma-separated):', current);
-          if (next === null) return;
-          fetch('/api/clients/' + encodeURIComponent(cell.dataset.client) + '/emails', {
-            method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({emails: next.trim()}),
-          })
-            .then(r => r.json().then(b => ({ok: r.ok, b})))
-            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not save.'); fetchClients(); })
-            .catch(() => alert('Could not reach the server.'));
-        });
+        cell.addEventListener('click', () => openClientContacts());
       });
       clientsList.querySelectorAll('.client-delete').forEach(btn => {
         btn.addEventListener('click', () => {
-          if (!confirm('Remove "' + btn.dataset.client + '" from Client Contacts? Vehicle updates will stop reaching their address(es).')) return;
-          fetch('/api/clients/' + encodeURIComponent(btn.dataset.client), {method: 'DELETE'})
-            .then(r => r.json().then(b => ({ok: r.ok, b})))
-            .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not remove.'); fetchClients(); })
-            .catch(() => alert('Could not reach the server.'));
+          showConfirm('Remove "' + btn.dataset.client + '" from Client Contacts? Vehicle updates will stop reaching their address(es).', () => {
+            fetch('/api/clients/' + encodeURIComponent(btn.dataset.client), {method: 'DELETE'})
+              .then(r => r.json().then(b => ({ok: r.ok, b})))
+              .then(({ok, b}) => { if (!ok) alert(b.error || 'Could not remove.'); fetchClients(); })
+              .catch(() => alert('Could not reach the server.'));
+          }, 'Remove');
         });
       });
     }
@@ -3121,6 +3503,12 @@ if (usersForm) {
       msgEl.className = 'ff-msg err';
       return;
     }
+    const clients = role === 'admin' ? [] : checkedClientValues(document.getElementById('uf-clients-list'));
+    if (role !== 'admin' && !clients.length) {
+      msgEl.textContent = 'Select at least one client for this account.';
+      msgEl.className = 'ff-msg err';
+      return;
+    }
 
     const submitBtn = document.getElementById('uf-submit');
     submitBtn.disabled = true;
@@ -3129,7 +3517,7 @@ if (usersForm) {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({username, role, password,
         email: document.getElementById('uf-email').value.trim(),
-        clients: document.getElementById('uf-clients').value}),
+        clients}),
     })
       .then(r => r.json().then(body => ({ok: r.ok, body})))
       .then(({ok, body}) => {

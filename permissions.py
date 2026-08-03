@@ -366,6 +366,13 @@ def _recount_kpis(filtered):
         "tamperConfirmed": "tamperConfirmed",
         "tamperUnconfirmed": "tamperUnconfirmed",
         "nullGpsExcluded": "qualityLog",
+        # Same reasoning as the others: recoveredList/newlyOfflineList are
+        # already filtered above, but kpi.recovered/newlyOffline back the
+        # "Online" card's footer and the day-over-day tiles directly - left
+        # alone they reported the whole fleet's counts above a correctly
+        # empty Recovered/New table for a scoped client.
+        "recovered": "recoveredList",
+        "newlyOffline": "newlyOfflineList",
     }
     for kpi_key, section in section_counts.items():
         if kpi_key in kpi:

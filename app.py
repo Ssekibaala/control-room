@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()  # loads .env for local dev; no-op on Render, which injects real env vars directly
 
 import users as users_store
-from users import verify_login
+from users import verify_login, DEACTIVATED
 import permissions
 from permissions import (
     filter_payload_for_role, allowed_panels, EXPORT_ACCESS,
@@ -139,6 +139,8 @@ def api_login():
     role = verify_login(username, password)
     if role is None:
         return jsonify({"error": "Invalid username or password"}), 401
+    if role == DEACTIVATED:
+        return jsonify({"error": "This account has been deactivated. Contact your administrator."}), 403
     session["username"] = username
     session["role"] = role
     return jsonify({"username": username, "role": role, "panels": allowed_panels(role)})
@@ -191,6 +193,7 @@ def api_list_users():
                 # inventing a date that was never recorded.
                 "lastLogin": info.get("last_login", ""),
                 "createdAt": info.get("created_at", ""),
+                "active": info.get("active", True),
             }
             for name, info in sorted(all_users.items())
         ],
@@ -235,6 +238,16 @@ def api_create_user():
     if username in users_store.load_users():
         return jsonify({"error": f"'{username}' already has an account"}), 409
 
+    # A role that sees every client already gets everything - selecting
+    # clients for it would be meaningless and is how an admin account
+    # ended up scoped to three clients by mistake. Force it clear rather
+    # than trusting whatever the form sent.
+    if permissions.sees_all_clients(role):
+        clients = []
+    elif not clients:
+        return jsonify({"error": "Select at least one client for this account - "
+                                 "without one, this role can't see any fleet data at all."}), 400
+
     # Nobody can hand out access they don't hold themselves. A
     # technician scoped to GTL must not be able to create an account
     # with access to AGL - that would be a trivial privilege escalation
@@ -277,6 +290,103 @@ def api_set_user_email(username):
     if not found:
         return jsonify({"error": f"No account called '{username}'"}), 404
     return jsonify({"username": username, "email": email})
+
+
+@app.route("/api/users/<username>/role", methods=["PUT"])
+@login_required
+def api_set_user_role(username):
+    """Changes a user's role. Same escalation rule as creating an
+    account: nobody can hand out a role with more reach than their own."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    target = users_store.get_user(username)
+    if not target:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    role = (body.get("role") or "").strip()
+    if role not in ROLES:
+        return jsonify({"error": f"'role' must be one of {list(ROLES)}"}), 400
+    if permissions.sees_all_clients(role) and not permissions.sees_all_clients(session["role"]):
+        return jsonify({"error": f"Only an admin can grant the '{role}' role."}), 403
+    if username == session["username"] and not permissions.sees_all_clients(role):
+        return jsonify({"error": "You can't demote your own account while logged in as it."}), 400
+
+    try:
+        users_store.set_role(username, role)
+        # A role that sees every client needs no client list of its own -
+        # clear it rather than leaving a stale, meaningless scope behind
+        # (this is exactly how an admin account ended up tagged with
+        # three clients it never needed and couldn't be filtered by).
+        if permissions.sees_all_clients(role):
+            users_store.set_clients(username, [])
+    except Exception as e:
+        return jsonify({"error": f"Could not save the role: {e}"}), 503
+    return jsonify({"username": username, "role": role})
+
+
+@app.route("/api/users/<username>/active", methods=["PUT"])
+@login_required
+def api_set_user_active(username):
+    """Suspends or restores a login without deleting the account."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if username == session["username"]:
+        return jsonify({"error": "You can't deactivate your own account while logged in as it."}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    active = bool(body.get("active", True))
+
+    try:
+        found = users_store.set_active(username, active)
+    except Exception as e:
+        return jsonify({"error": f"Could not save that change: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+    return jsonify({"username": username, "active": active})
+
+
+@app.route("/api/users/<username>/clients", methods=["PUT"])
+@login_required
+def api_set_user_clients(username):
+    """Updates the client assignments for a user."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    target = users_store.get_user(username)
+    if not target:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    clients_raw = body.get("clients") or []
+    if isinstance(clients_raw, str):
+        clients_raw = [c.strip() for c in clients_raw.split(",")]
+    clients = [str(c).strip() for c in clients_raw if str(c).strip()]
+
+    # A role that already sees every client (admin) has no use for a
+    # client list - force it clear instead of storing (or rejecting) a
+    # selection that would just be dead weight.
+    if permissions.sees_all_clients(target.get("role", "")):
+        clients = []
+    elif not clients:
+        return jsonify({"error": "Select at least one client for this account - "
+                                 "without one, this role can't see any fleet data at all."}), 400
+    else:
+        # Users cannot grant clients they don't have access to themselves
+        ok, disallowed = permissions.can_grant_clients(
+            session["role"], _assigned_clients(session["username"]), clients)
+        if not ok:
+            return jsonify({"error": "You can only assign clients you have access to yourself. "
+                                     f"Not yours to assign: {', '.join(disallowed)}"}), 403
+
+    try:
+        found = users_store.set_clients(username, clients)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the clients: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No account called '{username}'"}), 404
+    return jsonify({"username": username, "clients": clients})
 
 
 @app.route("/api/users/<username>", methods=["DELETE"])
@@ -1689,17 +1799,25 @@ def _ft_cloud_api_poll_once():
     # makes ZERO extra calls for them instead of one per device.
     source = settings["FT_CLOUD_API_POSITION_SOURCE"]
     webhook_positions = None
+    webhook_last_seen = None
     if source == "webhook":
         from adapters import ft_cloud_webhook
         webhook_positions = ft_cloud_webhook.positions_by_unique_id(
             FT_CLOUD_WEBHOOK_STATE_PATH,
             max_age_minutes=settings["FT_CLOUD_API_WEBHOOK_POSITION_MAX_AGE_MINUTES"])
+        # NOT freshness-filtered on purpose - a device whose last webhook
+        # report was over a week ago must still show that stale
+        # timestamp for online/offline purposes, not fall back to FT's
+        # connectivity flag (which stayed "online" the whole time). See
+        # ft_cloud_api._last_seen().
+        webhook_last_seen = ft_cloud_webhook.last_seen_by_unique_id(FT_CLOUD_WEBHOOK_STATE_PATH)
 
     reports = ft_cloud_api.fetch_all_reports(
         client, fleet_ids,
         fetch_positions=(source == "trips"),
         position_lookback_days=settings["FT_CLOUD_API_POSITION_LOOKBACK_DAYS"],
-        preset_positions=webhook_positions)
+        preset_positions=webhook_positions,
+        webhook_last_seen=webhook_last_seen)
     by_fleet = {}
     for r in reports:
         by_fleet.setdefault(r.organisation_id, []).append({
@@ -2036,4 +2154,5 @@ if __name__ == "__main__":
     # MiX API poll thread below (see _start_mix_api_poller) racing the
     # real one - not harmful (idempotent snapshot writes), just double
     # API traffic for no reason during local dev.
-    app.run(debug=True, port=5000, use_reloader=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, port=port, use_reloader=False)

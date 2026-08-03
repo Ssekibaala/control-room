@@ -48,7 +48,16 @@ def _platform_status(reports, now, threshold_days):
             status[platform] = ("No Data", None)
         else:
             days = (now - r.last_report_time).total_seconds() / 86400
-            status[platform] = ("Offline" if days >= threshold_days else "Online", r.last_report_time)
+            computed = "Offline" if days >= threshold_days else "Online"
+            # A platform's own confirmed-offline verdict (e.g. FT Cloud's
+            # onlineState) wins over the threshold read even when
+            # last_report_time looks fresh. It looks fresh here precisely
+            # because the fallback timestamp for a just-flipped device IS
+            # the transition moment - see ft_cloud_api._reported_offline()
+            # for why that makes the age-based computation alone wrong.
+            if r.reported_offline is True:
+                computed = "Offline"
+            status[platform] = (computed, r.last_report_time)
     return status, latest_per_platform
 
 

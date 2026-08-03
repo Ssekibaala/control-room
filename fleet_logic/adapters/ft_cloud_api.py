@@ -8,10 +8,10 @@ attachment.
 
 Vehicles carry vehicleNumber (the plate, prefixed "GTL-" on this
 tenant) and deviceList[].uniqueId; device infos carry the same
-uniqueId plus lastOnlineTime/lastOfflineTime; positions are keyed by
-uniqueId. So uniqueId is the join key across all three, and a vehicle
-with no device attached has no last-seen signal at all - see
-build_reports()'s skipped counter for that case.
+uniqueId plus updateTime; positions are keyed by uniqueId. So uniqueId
+is the join key across all three, and a vehicle with no device attached
+has no last-seen signal at all - see build_reports()'s skipped counter
+for that case.
 """
 
 import logging
@@ -35,27 +35,33 @@ def _parse_timestamp(ts):
         return None
 
 
-def _last_seen(info):
+def _last_seen(info, webhook_last_seen=None):
     """
-    When this device was last in contact with FT. Confirmed against
-    real tenant-1144 data that lastOnlineTime and lastOfflineTime are
-    mutually exclusive, never both: a connected device carries
-    lastOnlineTime and a null lastOfflineTime, a disconnected one the
-    reverse. So neither field alone answers "when was this last seen"
-    for the whole fleet - reading only lastOnlineTime silently loses
-    the timestamp for every offline vehicle, which is precisely the
-    set this dashboard exists to report on. Together they are the same
-    pair the mailed report exposed as its "Last Online Time" and
-    "Offline Time" columns.
+    When this device was last VERIFIABLY in contact with FT.
 
-    updateTime is the last resort for the handful of devices with
-    neither (never-connected or freshly-registered units); it is when
-    FT last touched the record at all, which is weaker but still
-    better than reporting No Data.
+    webhook_last_seen, when given, is the timestamp of the last webhook
+    event FT actually pushed us for this device (see
+    ft_cloud_webhook.last_seen_by_unique_id) - a real report, not merely
+    a connectivity flag - and it wins whenever present, however old.
+
+    Otherwise, updateTime ("the time when the device last reported
+    status", per FT's own field description) - not lastOnlineTime or
+    lastOfflineTime. Those two are transition timestamps, not
+    last-report timestamps: they flip which one is populated based on
+    the device's CURRENT state, so a device that just went offline shows
+    a lastOfflineTime of right now regardless of how stale its actual
+    data is - RAI932W's own FT Cloud page still read "off-line" while
+    this fallback made it look freshly seen, for the same reason
+    lastOnlineTime made it look Online in the first place: neither field
+    answers "when did this device last actually report", only "when did
+    its connectivity state last change". updateTime does answer that -
+    confirmed against real tenant-1144 data, where it lines up with the
+    device's true last full report regardless of whether it's currently
+    ONLINE or OFFLINE.
     """
-    return (_parse_timestamp(info.get("lastOnlineTime"))
-            or _parse_timestamp(info.get("lastOfflineTime"))
-            or _parse_timestamp(info.get("updateTime")))
+    if webhook_last_seen is not None:
+        return webhook_last_seen
+    return _parse_timestamp(info.get("updateTime"))
 
 
 def _status_note(vehicle, info):
@@ -69,14 +75,45 @@ def _status_note(vehicle, info):
     return state or None
 
 
-def build_reports(fleet_id, vehicles, device_infos, positions=None):
+def _reported_offline(vehicle):
+    """
+    FT's own connectivity verdict for this vehicle (the same onlineState
+    that drives the "off-line" badge on FT's Device List page), so the
+    dashboard's Online/Offline can match FT's directly rather than
+    re-derive it from last_report_time's age.
+
+    This matters specifically for devices FT has JUST flagged offline:
+    _last_seen()'s fallback for that case is lastOfflineTime, which is
+    the transition moment itself and therefore always looks fresh - a
+    device that went offline an hour ago would otherwise pass the
+    staleness threshold and still show "Online" for up to
+    OFFLINE_THRESHOLD_DAYS. Confirmed against RAI932W/Gezira: FT's own
+    Device List already read "off-line" while this app still said
+    Online, purely because "recently went offline" and "recently
+    reported" produce the same fresh timestamp.
+
+    Only returns True (a confirmed OFFLINE) or None - never False. FT
+    reporting ONLINE is only a connectivity heartbeat, not proof of a
+    real report, and must not suppress the opposite finding produced by
+    webhook staleness (see _last_seen()'s webhook_last_seen branch,
+    which exists for exactly that case).
+    """
+    return True if vehicle.get("onlineState") == "OFFLINE" else None
+
+
+def build_reports(fleet_id, vehicles, device_infos, positions=None, webhook_last_seen=None):
     """
     fleet_id: the FT fleet these vehicles belong to.
     vehicles / device_infos / positions: raw values from FtCloudApiClient.
+    webhook_last_seen: {uniqueId: datetime}, see
+    ft_cloud_webhook.last_seen_by_unique_id - unlike positions, not
+    freshness-filtered, since _last_seen() needs the true last-report
+    time even when it's too stale for positions to have kept it.
     Returns a list of AssetReport, one per vehicle with a usable plate
     and an attached device.
     """
     positions = positions or {}
+    webhook_last_seen = webhook_last_seen or {}
     info_by_uid = {i["uniqueId"]: i for i in device_infos if i.get("uniqueId")}
     reports = []
     skipped_no_plate = 0
@@ -105,7 +142,7 @@ def build_reports(fleet_id, vehicles, device_infos, positions=None):
 
         info = info_by_uid.get(unique_id, {})
         gps = positions.get(unique_id) or {}
-        last_report_time = _last_seen(info)
+        last_report_time = _last_seen(info, webhook_last_seen.get(unique_id))
 
         reports.append(AssetReport(
             asset_plate=plate,
@@ -115,6 +152,7 @@ def build_reports(fleet_id, vehicles, device_infos, positions=None):
             last_lat=gps.get("lat"),
             last_lon=gps.get("lng"),
             status_note=_status_note(v, info),
+            reported_offline=_reported_offline(v),
             organisation_id=str(fleet_id),
             raw_row={"vehicle": v, "deviceInfo": info, "position": gps},
         ))
@@ -129,7 +167,7 @@ def build_reports(fleet_id, vehicles, device_infos, positions=None):
 
 
 def fetch_all_reports(client, fleet_ids, fetch_positions=True, position_lookback_days=3,
-                       preset_positions=None):
+                       preset_positions=None, webhook_last_seen=None):
     """
     client: an FtCloudApiClient. fleet_ids: list of FT fleet ids to poll.
     Returns a flat list of AssetReport across every fleet, each still
@@ -142,6 +180,9 @@ def fetch_all_reports(client, fleet_ids, fetch_positions=True, position_lookback
     combination is what removes the one-call-per-device trips loop
     entirely. The two sources share a shape deliberately, so which one
     is in play changes nothing below this line.
+
+    webhook_last_seen: {uniqueId: datetime}, passed straight through to
+    build_reports() - see its docstring and _last_seen().
     """
     all_reports = []
     fetched = client.get_fleet_snapshot(
@@ -151,5 +192,6 @@ def fetch_all_reports(client, fleet_ids, fetch_positions=True, position_lookback
         if preset_positions:
             # Anything freshly fetched still wins; preset only fills gaps.
             positions = {**preset_positions, **positions}
-        all_reports += build_reports(fleet_id, data["vehicles"], data["deviceInfos"], positions)
+        all_reports += build_reports(fleet_id, data["vehicles"], data["deviceInfos"], positions,
+                                      webhook_last_seen=webhook_last_seen)
     return all_reports

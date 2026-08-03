@@ -271,3 +271,29 @@ def positions_by_unique_id(path, max_age_minutes=None, now=None):
                 continue
         out[uid] = {"lat": d["lat"], "lng": d["lon"], "time": d.get("time")}
     return out
+
+
+def last_seen_by_unique_id(path):
+    """
+    Every device's last WEBHOOK-reported timestamp, however old -
+    deliberately NOT freshness-filtered the way positions_by_unique_id()
+    is, because this answers a different question. positions_by_unique_id
+    exists so a week-old fix can never masquerade as the device's
+    current location; this exists so a device that stopped actually
+    reporting doesn't get to hide behind FT's own connectivity flag,
+    which stays "online" from a live modem heartbeat with no
+    corresponding report ever arriving here. See
+    ft_cloud_api._last_seen() for where this overrides that flag.
+
+    Returns {uniqueId: parsed datetime}, only for devices with a stored
+    timestamp at all - a device this webhook has never heard from isn't
+    "never seen", it's simply not in scope for this signal, and the
+    caller falls back to FT's connectivity fields for it.
+    """
+    state = load_state(path)
+    out = {}
+    for uid, d in state.get("devices", {}).items():
+        ts = _parse_stored_ts(d.get("time"))
+        if ts is not None:
+            out[uid] = ts
+    return out

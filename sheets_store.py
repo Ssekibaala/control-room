@@ -150,11 +150,20 @@ def _get_or_create_feedback_tab(client, sheet_id):
     return ws
 
 
-# Email is appended at the END, never inserted mid-list: gspread maps rows to
-# headers by POSITION, so inserting a column would shift every existing user's
-# data one place left and silently read their Clients value as their Email.
-# Rows written before this column existed simply read back with a blank Email.
-USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "CreatedAt", "Email"]
+# Email and Active are appended at the END, never inserted mid-list: gspread
+# maps rows to headers by POSITION, so inserting a column would shift every
+# existing user's data one place left and silently read their Clients value
+# as their Email. Rows written before a column existed simply read back
+# blank for it (Active reads as "active" - see _parse_active below).
+USER_HEADERS = ["Username", "PasswordHash", "Role", "Clients", "LastLogin", "CreatedAt", "Email", "Active"]
+
+
+def _parse_active(value):
+    """Blank (every row written before this column existed) means
+    active - defaulting an unmarked account to locked-out would silently
+    sign everyone out on the day this column was added."""
+    text = str(value).strip().lower()
+    return text not in ("false", "no", "0", "inactive")
 
 
 def _get_or_create_users_tab(client, sheet_id):
@@ -193,6 +202,7 @@ def load_users_sheet():
             "last_login": str(row.get("LastLogin", "")).strip(),
             "created_at": str(row.get("CreatedAt", "")).strip(),
             "email": str(row.get("Email", "")).strip(),
+            "active": _parse_active(row.get("Active", "")),
         }
     return result
 
@@ -202,7 +212,7 @@ def add_user_sheet(username, password_hash, role, clients=None, email=""):
     ws = _get_or_create_users_tab(client, sheet_id)
     ws.append_row([
         username, password_hash, role, ", ".join(clients or []), "",
-        now_eat().strftime("%d/%m/%Y %H:%M"), email,
+        now_eat().strftime("%d/%m/%Y %H:%M"), email, "TRUE",
     ])
 
 
@@ -216,6 +226,47 @@ def set_user_email(username, email):
     if cell is None:
         return False
     ws.update_cell(cell.row, USER_HEADERS.index("Email") + 1, email)
+    return True
+
+
+def set_user_clients(username, clients):
+    """Updates the client assignments for a user. Clients is a comma-separated
+    string or list. Single-cell update so concurrent writes can't clobber it."""
+    if isinstance(clients, (list, tuple)):
+        clients_str = ", ".join(str(c).strip() for c in clients if str(c).strip())
+    else:
+        clients_str = str(clients or "").strip()
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return False
+    ws.update_cell(cell.row, USER_HEADERS.index("Clients") + 1, clients_str)
+    return True
+
+
+def set_user_role(username, role):
+    """Updates the role for a user. Single-cell update so concurrent
+    writes elsewhere in the tab can't clobber it."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return False
+    ws.update_cell(cell.row, USER_HEADERS.index("Role") + 1, role)
+    return True
+
+
+def set_user_active(username, active):
+    """Flips an account between active and deactivated. Deactivated
+    accounts fail login (see users.verify_login) but keep their row -
+    this is a suspend, not a delete."""
+    client, sheet_id = _get_client()
+    ws = _get_or_create_users_tab(client, sheet_id)
+    cell = ws.find(username, in_column=1)
+    if cell is None:
+        return False
+    ws.update_cell(cell.row, USER_HEADERS.index("Active") + 1, "TRUE" if active else "FALSE")
     return True
 
 

@@ -52,6 +52,15 @@ class AssetReport:
     sim_card: Optional[str] = None
     network_provider: Optional[str] = None
     status_note: Optional[str] = None   # free text, e.g. telecom's "offline since 11/7"
+    # Vendor-confirmed connectivity state, for platforms that expose one
+    # directly (FT Cloud's vehicle onlineState) rather than requiring it
+    # to be inferred from last_report_time's age. True/False when the
+    # platform gave an explicit answer, None when it didn't (mailed
+    # reports, MiX, Teletrac). See classifier._platform_status(): only
+    # True overrides the threshold computation, and only towards
+    # Offline - a platform saying "online" is just a connectivity
+    # heartbeat and must not suppress a genuine staleness finding.
+    reported_offline: Optional[bool] = None
     organisation_id: Optional[str] = None  # MiX org / Teletrac client this row belongs to (API-sourced rows only)
     # Canonical client this asset belongs to, resolved from
     # organisation_id via the client registry (see
