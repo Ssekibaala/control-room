@@ -11,38 +11,205 @@ as a value, never allowed to turn a successful save into an error the
 user sees.
 """
 
+import os
+import json
+
 import sheets_store
 import mailer
 import email_templates
 from users import notification_recipients
 
 
-def _client_recipients():
-    """Union of client-role user accounts AND the Clients registry's
-    contact emails, deduplicated - a client contact doesn't need a login
-    to be notified, and a client-role account works even before the
-    registry has an entry for them. Every vehicle currently defaults to
-    the one existing client (see docs/EMAIL_FEEDBACK_DESIGN.md), so
-    registry contacts are additive recipients on every notification,
-    not routed per-vehicle yet."""
+def _client_recipients(client=None):
+    """
+    Who to email about ONE client's vehicles: that client's registry
+    contacts, plus client-role accounts assigned to them.
+
+    `client` is effectively mandatory for anything vehicle-related.
+    This used to return every client contact in the system for every
+    notification, which was correct only while there was exactly one
+    client - the moment a second existed, every digest mailed one
+    client's registration numbers, locations and fault history to
+    another company's external contacts. That is the single worst
+    failure mode this app has, because unlike a UI leak it cannot be
+    taken back once sent.
+
+    client=None keeps the old union and is reserved for the cases where
+    it is genuinely correct: nothing vehicle-scoped, only operational
+    mail that isn't about a particular fleet. Callers must pass a client
+    for anything listing vehicles.
+    """
     seen, out = set(), []
-    for email in [r["email"] for r in notification_recipients(roles=("client",))]:
-        if email.lower() not in seen:
+
+    def add(email):
+        if email and email.lower() not in seen:
             seen.add(email.lower())
             out.append(email)
+
+    for r in notification_recipients(roles=("client",), client=client):
+        add(r["email"])
     try:
         for c in sheets_store.load_clients():
+            if client is not None and c["name"].strip() != client:
+                continue
             for email in c["emails"]:
-                if email.lower() not in seen:
-                    seen.add(email.lower())
-                    out.append(email)
+                add(email)
     except Exception:
         pass  # registry unreachable - role-tagged accounts above still get notified
     return out
 
 
-def _staff_recipients():
-    return [r["email"] for r in notification_recipients(roles=("admin", "technician"))]
+def _clients_of(classification):
+    """
+    Splits a classification into {client: {plate: info}} so each digest
+    can be built and addressed per client.
+
+    A vehicle with no client is grouped under None and skipped by the
+    client-facing digests: an unmapped platform account is a
+    configuration gap, and there is no defensible way to choose which
+    client should receive mail about it. Staff-facing mail still covers
+    it, so it isn't silently lost - see send_technical_escalation_digest.
+    """
+    grouped = {}
+    for plate, info in classification.items():
+        name = (info.get("client") or "").strip() or None
+        grouped.setdefault(name, {})[plate] = info
+    return grouped
+
+
+def _client_of_plate(plate, classification):
+    return ((classification.get(plate) or {}).get("client") or "").strip() or None
+
+
+_PLATE_OWNER_PATH = os.path.join(os.path.dirname(__file__), "data", "fleet_today.json")
+_plate_owner_cache = {"mtime": None, "map": {}}
+
+
+def client_for_plate(plate):
+    """
+    Which client owns this vehicle, for the per-vehicle emails that only
+    ever receive a plate (on_comment_added, the reconnect check, the
+    recovery notice).
+
+    Read from the dashboard payload rather than threaded through every
+    caller: the alternative is adding a client argument to each of them
+    and to every one of their call sites, where a single missed site
+    silently reverts to mailing everyone - the exact failure being
+    fixed. Doing the lookup here means a caller cannot forget.
+
+    Returns None when the plate is unknown or unmapped, which callers
+    MUST treat as "do not send to clients" rather than "send to all".
+    """
+    try:
+        mtime = os.path.getmtime(_PLATE_OWNER_PATH)
+    except OSError:
+        return None
+    if _plate_owner_cache["mtime"] != mtime:
+        try:
+            with open(_PLATE_OWNER_PATH) as f:
+                rows = json.load(f).get("full") or []
+            _plate_owner_cache.update({
+                "mtime": mtime,
+                "map": {str(r.get("plate", "")).strip(): (r.get("client") or "").strip() or None
+                        for r in rows if isinstance(r, dict) and r.get("plate")},
+            })
+        except (ValueError, OSError):
+            return None
+    return _plate_owner_cache["map"].get(str(plate).strip())
+
+
+def _send_per_client(classification, digest_key, interval_days, build, recipients=None):
+    """
+    Shared driver for every client-facing digest: one email per client,
+    containing only that client's vehicles, to only that client's
+    recipients.
+
+    build(client, subset, to) returns (subject, html, preheader, count),
+    or None when that client has nothing worth sending this cycle.
+
+    The interval gate is keyed PER CLIENT ("<digest>:<client>"). A
+    single shared key would mean the first client sent suppresses every
+    other client's digest for the whole interval - they'd each get mail
+    roughly once per N clients instead of once per interval, and which
+    client won would depend on dict ordering. One client failing to
+    send (no recipients, SMTP error) likewise must not consume the
+    gate for the others, so the timestamp is only written on success.
+
+    Note this resets each digest's clock once, on first run after
+    deploy: the old un-keyed timestamps no longer match. One extra
+    digest is a much better failure than a silent month of none.
+    """
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0, "perClient": {}}
+
+    grouped = _clients_of(classification)
+    if not grouped:
+        result["reason"] = "no vehicles"
+        return result
+
+    for client in sorted(k for k in grouped if k):
+        subset = grouped[client]
+        key = f"{digest_key}:{client}"
+        try:
+            last_sent = sheets_store.get_digest_last_sent(key)
+            if last_sent and (datetime.now() - last_sent).days < interval_days:
+                result["perClient"][client] = "interval not elapsed"
+                continue
+        except Exception as e:
+            result["perClient"][client] = f"could not check last-sent, skipping to avoid spamming: {e}"
+            continue
+
+        to = (recipients or _client_recipients)(client)
+        if not to:
+            result["perClient"][client] = "no recipients on file for this client"
+            continue
+
+        built = build(client, subset, to)
+        if built is None:
+            result["perClient"][client] = "nothing to report"
+            continue
+        subject, html, preheader, count = built
+
+        message_id, err = mailer.send(to, subject, html, preheader)
+        if err:
+            result["perClient"][client] = err
+            continue
+        try:
+            sheets_store.set_digest_last_sent(key)
+        except Exception as e:
+            print(f"{digest_key} sent to {client} but could not record last-sent: {e}")
+        result["sent"] = True
+        result["count"] += count
+        result["perClient"][client] = f"sent, {count} vehicle(s)"
+
+    # Vehicles nobody can be emailed about are worth saying out loud -
+    # silently skipping them looks identical to there being none.
+    unmapped = grouped.get(None)
+    if unmapped:
+        print(f"{digest_key}: {len(unmapped)} vehicle(s) have no client mapping and were not "
+              f"included in any client digest - check the platform-account mapping.")
+    if not result["sent"] and not result["reason"]:
+        result["reason"] = "; ".join(f"{c}: {r}" for c, r in result["perClient"].items()) or "no clients"
+    return result
+
+
+def _staff_recipients(client=None):
+    """
+    Internal recipients. With a client, that means every admin (admin
+    sees all clients by definition - permissions.ALL_CLIENTS_ROLES) plus
+    only the technicians assigned to that client, mirroring exactly what
+    each of them can already open in the dashboard. Without one, every
+    admin and technician, for mail that isn't about a particular fleet.
+    """
+    if client is None:
+        return [r["email"] for r in notification_recipients(roles=("admin", "technician"))]
+    seen, out = set(), []
+    for r in (notification_recipients(roles=("admin",))
+              + notification_recipients(roles=("technician",), client=client)):
+        if r["email"].lower() not in seen:
+            seen.add(r["email"].lower())
+            out.append(r["email"])
+    return out
 
 
 def on_comment_added(plate, comment, added_by, role, entry_type, requires_followup,
@@ -91,10 +258,16 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
     # both under one "ask" branch meant a technician explicitly closing
     # something themselves still made the client answer a question that
     # had already been answered - real bug, confirmed against a live send.
-    if role in ("admin", "technician") and requires_followup is not False:
-        to = _client_recipients()
+    # Only this vehicle's own client, never every client - see
+    # _client_recipients(). An unmapped plate has no defensible client
+    # audience, so it falls through to staff-only below rather than
+    # being broadcast.
+    owning_client = client_for_plate(plate)
+
+    if role in ("admin", "technician") and requires_followup is not False and owning_client:
+        to = _client_recipients(owning_client)
         if not to:
-            result["reason"] = "no client recipients on file"
+            result["reason"] = f"no client recipients on file for {owning_client}"
             return result
         no_url = (respond_urls or {}).get("no_followup", "#")
         need_url = (respond_urls or {}).get("needs_attention", "#")
@@ -104,7 +277,8 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
         return _send_and_record(plate, case, to, html, preheader, result)
 
     if role in ("client", "admin", "technician"):
-        to = list({*_staff_recipients(), *_client_recipients()})
+        to = list({*_staff_recipients(owning_client),
+                   *(_client_recipients(owning_client) if owning_client else [])})
         if not to:
             result["reason"] = "no recipients on file"
             return result
@@ -183,33 +357,49 @@ def send_recovery_notice(classification, recovered):
     gating it on a schedule would just mean the recoveries that happen
     between sends are never mentioned at all.
     """
-    result = {"sent": False, "reason": None, "count": 0}
+    from datetime import datetime
+    result = {"sent": False, "reason": None, "count": 0, "perClient": {}}
     if not recovered:
         result["reason"] = "nothing recovered this cycle"
         return result
 
-    to = list({*_staff_recipients(), *_client_recipients()})
-    if not to:
-        result["reason"] = "no recipients on file"
-        return result
-
-    from datetime import datetime
-    vehicles = []
+    # One notice per client, listing only their own recoveries. Sending
+    # a single combined notice would tell every client which of every
+    # other client's vehicles had been offline and where they are.
+    by_client = {}
     for plate in recovered:
         info = classification.get(plate) or {}
-        fb = info.get("feedback")
-        vehicles.append({
+        client = (info.get("client") or "").strip() or None
+        by_client.setdefault(client, []).append((plate, info))
+
+    for client in sorted(k for k in by_client if k):
+        entries = by_client[client]
+        to = list({*_staff_recipients(client), *_client_recipients(client)})
+        if not to:
+            result["perClient"][client] = "no recipients on file"
+            continue
+        vehicles = [{
             "plate": plate,
             "location": info.get("last_location") or "Unknown",
-            "comment": fb["comment"] if fb else None,
-        })
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_recovery_notice_email(vehicles, timestamp)
-    message_id, err = mailer.send(to, f"Back online: {len(vehicles)} vehicle(s)", html, preheader)
-    if err:
-        result["reason"] = err
-        return result
-    result["sent"], result["count"] = True, len(vehicles)
+            "comment": (info.get("feedback") or {}).get("comment") if info.get("feedback") else None,
+        } for plate, info in entries]
+        timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+        html, preheader = email_templates.build_recovery_notice_email(vehicles, timestamp)
+        message_id, err = mailer.send(to, f"{client} - back online: {len(vehicles)} vehicle(s)",
+                                      html, preheader)
+        if err:
+            result["perClient"][client] = err
+            continue
+        result["sent"] = True
+        result["count"] += len(vehicles)
+        result["perClient"][client] = f"sent, {len(vehicles)} vehicle(s)"
+
+    unmapped = by_client.get(None)
+    if unmapped:
+        print(f"Recovery notice: {len(unmapped)} recovered vehicle(s) have no client mapping "
+              f"and were not included in any notice.")
+    if not result["sent"] and not result["reason"]:
+        result["reason"] = "; ".join(f"{c}: {r}" for c, r in result["perClient"].items()) or "no clients"
     return result
 
 
@@ -259,33 +449,6 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
     an additive notification layer, not a gate.
     """
     from datetime import datetime
-    result = {"sent": False, "reason": None, "count": 0}
-    try:
-        last_sent = sheets_store.get_digest_last_sent("pending_confirmation")
-        if last_sent and (datetime.now() - last_sent).days < interval_days:
-            result["reason"] = "interval not elapsed"
-            return result
-    except Exception as e:
-        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
-        return result
-
-    pending = sorted(
-        (plate, info) for plate, info in classification.items()
-        if info.get("status") == "Pending Customer Confirmation"
-    )
-    critical_no_feedback = sorted(
-        (plate, info) for plate, info in classification.items()
-        if info.get("status") == "Technical Escalation" and info.get("feedback") is None
-    )
-    if not pending and not critical_no_feedback:
-        result["reason"] = "nothing pending and no unreported critical vehicles"
-        return result
-
-    to = _client_recipients()
-    if not to:
-        result["reason"] = "no client recipients on file"
-        return result
-
     import respond_tokens
 
     def _vehicle_dict(plate, info, overdue=None):
@@ -298,24 +461,27 @@ def send_pending_confirmation_digest(classification, base_url, interval_days, ov
             v["overdue"] = overdue
         return v
 
-    vehicles = [_vehicle_dict(p, i, overdue=(i.get("days_silent") or 0) >= overdue_days) for p, i in pending]
-    critical_vehicles = [_vehicle_dict(p, i) for p, i in critical_no_feedback]
+    def build(client, subset, to):
+        pending = sorted(
+            (plate, info) for plate, info in subset.items()
+            if info.get("status") == "Pending Customer Confirmation"
+        )
+        critical_no_feedback = sorted(
+            (plate, info) for plate, info in subset.items()
+            if info.get("status") == "Technical Escalation" and info.get("feedback") is None
+        )
+        if not pending and not critical_no_feedback:
+            return None
 
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_pending_confirmation_digest_email(
-        vehicles, timestamp, critical_no_feedback=critical_vehicles)
-    total = len(vehicles) + len(critical_vehicles)
-    message_id, err = mailer.send(to, f"Weekly check-in: {total} vehicle(s) need your input", html, preheader)
-    if err:
-        result["reason"] = err
-        return result
+        vehicles = [_vehicle_dict(p, i, overdue=(i.get("days_silent") or 0) >= overdue_days) for p, i in pending]
+        critical_vehicles = [_vehicle_dict(p, i) for p, i in critical_no_feedback]
+        timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+        html, preheader = email_templates.build_pending_confirmation_digest_email(
+            vehicles, timestamp, critical_no_feedback=critical_vehicles)
+        total = len(vehicles) + len(critical_vehicles)
+        return (f"Weekly check-in: {total} vehicle(s) need your input", html, preheader, total)
 
-    try:
-        sheets_store.set_digest_last_sent("pending_confirmation")
-    except Exception as e:
-        print(f"Pending-confirmation digest sent but could not record last-sent timestamp: {e}")
-    result["sent"], result["count"] = True, total
-    return result
+    return _send_per_client(classification, "pending_confirmation", interval_days, build)
 
 
 def send_known_issues_checkin_digest(classification, base_url, interval_days):
@@ -330,56 +496,33 @@ def send_known_issues_checkin_digest(classification, base_url, interval_days):
     transition shape and interval-gating as the other two digests.
     """
     from datetime import datetime
-    result = {"sent": False, "reason": None, "count": 0}
-    try:
-        last_sent = sheets_store.get_digest_last_sent("known_issues_checkin")
-        if last_sent and (datetime.now() - last_sent).days < interval_days:
-            result["reason"] = "interval not elapsed"
-            return result
-    except Exception as e:
-        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
-        return result
-
-    known = sorted(
-        (plate, info) for plate, info in classification.items()
-        if info.get("status") == "Known Issue"
-    )
-    if not known:
-        result["reason"] = "no known issues on file"
-        return result
-
-    to = _client_recipients()
-    if not to:
-        result["reason"] = "no client recipients on file"
-        return result
-
     import respond_tokens
-    vehicles = []
-    for plate, info in known:
-        fb = info.get("feedback") or {}
-        date = fb.get("date")
-        vehicles.append({
-            "plate": plate,
-            "last_comment": fb.get("comment") or "No follow-up needed.",
-            "last_author": fb.get("addedBy") or "unknown",
-            "last_date": date.strftime("%d %b %Y") if hasattr(date, "strftime") else "",
-            "no_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}",
-            "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
-        })
 
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_known_issues_checkin_digest_email(vehicles, timestamp)
-    message_id, err = mailer.send(to, f"Quick check-in: please reconfirm {len(vehicles)} known issue(s)", html, preheader)
-    if err:
-        result["reason"] = err
-        return result
+    def build(client, subset, to):
+        known = sorted(
+            (plate, info) for plate, info in subset.items()
+            if info.get("status") == "Known Issue"
+        )
+        if not known:
+            return None
+        vehicles = []
+        for plate, info in known:
+            fb = info.get("feedback") or {}
+            date = fb.get("date")
+            vehicles.append({
+                "plate": plate,
+                "last_comment": fb.get("comment") or "No follow-up needed.",
+                "last_author": fb.get("addedBy") or "unknown",
+                "last_date": date.strftime("%d %b %Y") if hasattr(date, "strftime") else "",
+                "no_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'no_followup')}",
+                "need_url": f"{base_url}/feedback/respond?token={respond_tokens.make_respond_token(plate, 'needs_attention')}",
+            })
+        timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+        html, preheader = email_templates.build_known_issues_checkin_digest_email(vehicles, timestamp)
+        return (f"Quick check-in: please reconfirm {len(vehicles)} known issue(s)",
+                html, preheader, len(vehicles))
 
-    try:
-        sheets_store.set_digest_last_sent("known_issues_checkin")
-    except Exception as e:
-        print(f"Known-issues check-in digest sent but could not record last-sent timestamp: {e}")
-    result["sent"], result["count"] = True, len(vehicles)
-    return result
+    return _send_per_client(classification, "known_issues_checkin", interval_days, build)
 
 
 def send_technical_escalation_digest(classification, base_url, interval_days):
@@ -389,55 +532,80 @@ def send_technical_escalation_digest(classification, base_url, interval_days):
     clicking an email button - see the "Open in dashboard" deep link,
     handled by templates/dashboard.html's boot())."""
     from datetime import datetime
-    result = {"sent": False, "reason": None, "count": 0}
-    try:
-        last_sent = sheets_store.get_digest_last_sent("technical_escalation")
-        if last_sent and (datetime.now() - last_sent).days < interval_days:
-            result["reason"] = "interval not elapsed"
-            return result
-    except Exception as e:
-        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
-        return result
 
-    escalated = sorted(
-        (plate, info) for plate, info in classification.items()
-        if info.get("status") == "Technical Escalation"
-    )
-    if not escalated:
-        result["reason"] = "nothing escalated"
-        return result
+    def build(client, subset, to):
+        escalated = sorted(
+            (plate, info) for plate, info in subset.items()
+            if info.get("status") == "Technical Escalation"
+        )
+        if not escalated:
+            return None
+        vehicles = [
+            {
+                "plate": plate, "detail": _offline_platform_detail(info),
+                "severity": info.get("severity") or "Escalated",
+                "dashboard_url": f"{base_url}/?plate={plate}" if base_url else "",
+            }
+            for plate, info in escalated
+        ]
+        timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+        html, preheader = email_templates.build_technical_escalation_digest_email(vehicles, timestamp)
+        return (f"{client} - weekly check-in: {len(vehicles)} vehicle(s) in Technical Escalation",
+                html, preheader, len(vehicles))
 
-    to = _staff_recipients()
-    if not to:
-        result["reason"] = "no staff recipients on file"
-        return result
+    # Staff audience, but still per client: a technician assigned only to
+    # GTL has no more business receiving AGL's fault list by email than
+    # they do opening it in the dashboard. Admins are on every one of
+    # these, so nothing stops reaching someone.
+    return _send_per_client(classification, "technical_escalation", interval_days, build,
+                            recipients=_staff_recipients)
 
-    vehicles = [
-        {
-            "plate": plate, "detail": _offline_platform_detail(info),
-            "severity": info.get("severity") or "Escalated",
-            "dashboard_url": f"{base_url}/?plate={plate}" if base_url else "",
+
+def _split_tampering_by_client(tampering, classification):
+    """
+    Slices the tampering result into one per client.
+
+    tamper_engine works off the raw report files and knows nothing about
+    clients, so every case has to be attributed by resolving its plate
+    through the classification. Summary counts and severity bands are
+    recomputed per client rather than reused - the fleet-wide totals
+    would otherwise tell each client how many cases exist across
+    everyone else's vehicles.
+    """
+    owner = {plate: (info.get("client") or "").strip() or None
+             for plate, info in classification.items()}
+    per = {}
+
+    def bucket(client):
+        return per.setdefault(client, {"confirmed": [], "unconfirmed": [], "top_vehicles": [],
+                                       "checked_assets": [], "severity_bands": [], "summary": {}})
+
+    for key in ("confirmed", "unconfirmed", "top_vehicles", "checked_assets"):
+        for case in tampering.get(key, []) or []:
+            client = owner.get(str(case.get("plate", "")).strip())
+            if client:
+                bucket(client)[key].append(case)
+
+    for client, data in per.items():
+        confirmed, unconfirmed = data["confirmed"], data["unconfirmed"]
+        data["summary"] = {
+            **{k: v for k, v in (tampering.get("summary") or {}).items()
+               if k in ("period_label",)},
+            "confirmed": len(confirmed), "unconfirmed": len(unconfirmed),
         }
-        for plate, info in escalated
-    ]
-
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_technical_escalation_digest_email(vehicles, timestamp)
-    message_id, err = mailer.send(
-        to, f"Weekly check-in: {len(vehicles)} vehicle(s) in Technical Escalation", html, preheader)
-    if err:
-        result["reason"] = err
-        return result
-
-    try:
-        sheets_store.set_digest_last_sent("technical_escalation")
-    except Exception as e:
-        print(f"Escalation digest sent but could not record last-sent timestamp: {e}")
-    result["sent"], result["count"] = True, len(vehicles)
-    return result
+        bands = []
+        for band in tampering.get("severity_bands", []) or []:
+            name = band.get("severity")
+            bands.append({**band,
+                          "confirmed": sum(1 for c in confirmed if c.get("Severity") == name
+                                           or c.get("severity") == name),
+                          "unconfirmed": sum(1 for c in unconfirmed if c.get("Severity") == name
+                                             or c.get("severity") == name)})
+        data["severity_bands"] = bands
+    return per
 
 
-def send_tamper_risk_report_digest(tampering, base_url, interval_days):
+def send_tamper_risk_report_digest(tampering, base_url, interval_days, classification=None):
     """
     Weekly client-facing summary of the tampering/location-integrity
     analysis (see importer/tamper_engine.py and email_templates.build_
@@ -455,43 +623,31 @@ def send_tamper_risk_report_digest(tampering, base_url, interval_days):
     empty report every week.
     """
     from datetime import datetime
-    result = {"sent": False, "reason": None, "count": 0}
-    try:
-        last_sent = sheets_store.get_digest_last_sent("tamper_risk_report")
-        if last_sent and (datetime.now() - last_sent).days < interval_days:
-            result["reason"] = "interval not elapsed"
-            return result
-    except Exception as e:
-        result["reason"] = f"could not check last-sent, skipping to avoid spamming: {e}"
-        return result
+    if classification is None:
+        # Without the classification there is no way to tell whose
+        # vehicles these cases belong to, and the previous behaviour -
+        # mail the lot to every client contact - is exactly the leak
+        # this is fixing. Refuse rather than guess.
+        return {"sent": False, "count": 0,
+                "reason": "classification not supplied - cannot attribute tampering cases to a client"}
 
-    summary = tampering.get("summary", {})
-    if not summary.get("confirmed") and not summary.get("unconfirmed"):
-        result["reason"] = "nothing confirmed or unconfirmed this cycle"
-        return result
+    per_client = _split_tampering_by_client(tampering, classification)
 
-    to = _client_recipients()
-    if not to:
-        result["reason"] = "no client recipients on file"
-        return result
+    def build(client, subset, to):
+        data = per_client.get(client)
+        if not data:
+            return None
+        summary = data["summary"]
+        if not summary.get("confirmed") and not summary.get("unconfirmed"):
+            return None
+        timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+        html, preheader = email_templates.build_tamper_risk_report_email(
+            summary, data["severity_bands"], data["top_vehicles"], data["checked_assets"], timestamp)
+        return (f"{client} - tampering report: {summary.get('confirmed', 0)} confirmed, "
+                f"{summary.get('unconfirmed', 0)} unconfirmed",
+                html, preheader, len(data["top_vehicles"]))
 
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
-    html, preheader = email_templates.build_tamper_risk_report_email(
-        summary, tampering.get("severity_bands", []), tampering.get("top_vehicles", []),
-        tampering.get("checked_assets", []), timestamp)
-    message_id, err = mailer.send(
-        to, f"Tampering report: {summary.get('confirmed', 0)} confirmed, {summary.get('unconfirmed', 0)} unconfirmed",
-        html, preheader)
-    if err:
-        result["reason"] = err
-        return result
-
-    try:
-        sheets_store.set_digest_last_sent("tamper_risk_report")
-    except Exception as e:
-        print(f"Tamper risk report sent but could not record last-sent timestamp: {e}")
-    result["sent"], result["count"] = True, len(tampering.get("top_vehicles", []))
-    return result
+    return _send_per_client(classification, "tamper_risk_report", interval_days, build)
 
 
 def _send_reconnect_check(plate, days_offline, open_comment, base_url):
@@ -505,7 +661,14 @@ def _send_reconnect_check(plate, days_offline, open_comment, base_url):
               f"(set PUBLIC_BASE_URL, or run on Render where it's automatic).")
         return False
 
-    to = _client_recipients()
+    # Only this vehicle's own client. An unmapped plate has no
+    # defensible client audience, so nothing is sent rather than
+    # everything being sent to everyone.
+    owning_client = client_for_plate(plate)
+    if not owning_client:
+        print(f"Reconnect-check for {plate} skipped: no client mapping for this vehicle.")
+        return False
+    to = _client_recipients(owning_client)
     if not to:
         return False
 

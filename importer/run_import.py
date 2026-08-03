@@ -906,8 +906,13 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
         # Not part of the manual "check-in" button (that's specifically
         # pending/escalation/known-issues, see app.py's route) - stays on
         # its own weekly schedule regardless of force_digests.
+        # classification is what attributes each tampering case to a
+        # client - tamper_engine works off the raw report files and has
+        # no idea who owns a plate. Without it the digest refuses to
+        # send rather than mailing every client the whole fleet's cases.
         tamper_result = notifications.send_tamper_risk_report_digest(
-            tampering, base_url, digest_settings["TAMPER_REPORT_INTERVAL_DAYS"])
+            tampering, base_url, digest_settings["TAMPER_REPORT_INTERVAL_DAYS"],
+            classification=classification)
         digest_results["tamper_risk_report"] = tamper_result
         if tamper_result["sent"]:
             print(f"Tamper risk report sent for {tamper_result['count']} vehicle(s)")

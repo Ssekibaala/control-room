@@ -114,6 +114,107 @@ def run():
             print(f"  [PASS] {label}: meta.clients={sorted(advertised)}")
 
     print()
+    print("=== Every endpoint that takes a plate or serves bulk data ===")
+    # These are the paths that bypass /api/dashboard-data entirely. Each
+    # one was verified leaking before it was fixed, so each is checked
+    # here rather than assumed to follow from the row filtering above.
+    mine, theirs = first, second
+    my_plate = sorted(by_client[mine])[0]
+    their_plate = sorted(by_client[theirs])[0]
+    other_plates = set().union(*(by_client[n] for n in names if n != mine))
+
+    original = A._assigned_clients
+    A._assigned_clients = lambda _u: [mine]
+    A._user_clients_cache.clear()
+    try:
+        with A.app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["username"] = "isolation-test"
+                sess["role"] = "technician"
+
+            checks = [
+                ("feedback-history, another client's vehicle",
+                 lambda: client.get(f"/api/feedback-history/{their_plate}").status_code, 404),
+                ("feedback-history, own vehicle still readable",
+                 lambda: client.get(f"/api/feedback-history/{my_plate}").status_code, 200),
+                ("feedback POST onto another client's vehicle",
+                 lambda: client.post("/api/feedback", json={
+                     "plate": their_plate, "comment": "isolation probe",
+                     "reportedBy": "isolation-test", "requiresFollowup": False}).status_code, 404),
+                ("tamper-check on another client's vehicle",
+                 lambda: client.post("/api/tamper-check", json={
+                     "plate": their_plate, "comment": "isolation probe"}).status_code, 404),
+            ]
+            for label, run, expected in checks:
+                got = run()
+                ok = got == expected
+                print(f"  [{'PASS' if ok else 'FAIL'}] {label}: {got} (expected {expected})")
+                if not ok:
+                    failures.append(f"{label}: got {got}, expected {expected}")
+
+            # Bulk payloads: assert on the serialized bytes, since these
+            # embed plates in shapes the row filters never touch.
+            for path in ("/api/mix/snapshot", "/api/teletrac/snapshot", "/api/ftcloud/snapshot"):
+                body = client.get(path).data.decode("utf-8", "ignore")
+                hits = sum(1 for p in other_plates if f'"{p}"' in body)
+                print(f"  [{'PASS' if not hits else 'FAIL'}] {path}: other-client plates = {hits}")
+                if hits:
+                    failures.append(f"{path} leaked {hits} plates")
+
+            listed = [c["name"] for c in (client.get("/api/clients").get_json() or {}).get("clients", [])]
+            ok = listed == [mine]
+            print(f"  [{'PASS' if ok else 'FAIL'}] /api/clients: {listed} (expected only {mine})")
+            if not ok:
+                failures.append(f"/api/clients returned {listed}")
+
+            # The export must be BOTH scoped and still complete - a
+            # filter that empties the workbook would pass a leak test
+            # while breaking the feature.
+            resp = client.get("/api/export/integrity")
+            if resp.status_code != 200:
+                print(f"  [FAIL] export/integrity: status {resp.status_code}")
+                failures.append(f"export returned {resp.status_code}")
+            else:
+                import io
+                from openpyxl import load_workbook
+                wb = load_workbook(io.BytesIO(resp.data))
+                seen = set()
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows(values_only=True):
+                        for cell in row:
+                            if isinstance(cell, str):
+                                seen.add(cell.strip())
+                leaked = len(seen & other_plates)
+                kept = len(seen & by_client[mine])
+                ok = leaked == 0 and kept > 0
+                print(f"  [{'PASS' if ok else 'FAIL'}] export/integrity: {kept} own plates kept, "
+                      f"{leaked} other-client plates leaked")
+                if not ok:
+                    failures.append(f"export kept={kept} leaked={leaked}")
+    finally:
+        A._assigned_clients = original
+        A._user_clients_cache.clear()
+
+    print()
+    print("=== Notification routing is per client ===")
+    import notifications
+    for name in names:
+        recips = set(notifications._client_recipients(name))
+        others = set()
+        for other in names:
+            if other != name:
+                others |= set(notifications._client_recipients(other))
+        # A shared mailbox legitimately serving two clients is possible,
+        # so this only asserts the routing is not the old "everyone"
+        # behaviour: recipients must be a per-client lookup, not the
+        # union of every client's contacts.
+        everyone = set(notifications._client_recipients(None))
+        ok = recips <= everyone and (not everyone or recips != everyone or len(names) == 1)
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {sorted(recips) or 'no contacts on file'}")
+        if not ok:
+            failures.append(f"{name} recipients equal the all-client union")
+
+    print()
     print("=== Nobody can grant access they don't hold ===")
     grant_cases = [
         ("technician", [first], [second], False, f"technician with {first} granting {second}"),

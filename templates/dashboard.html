@@ -1805,8 +1805,33 @@ function applyClientView() {
   DATA = view;
 }
 
+/**
+ * An account with no client assigned sees an empty dashboard that is
+ * indistinguishable from "a quiet day" - same zeroes, same empty
+ * tables, no clue anything is wrong. Say it plainly instead, and say
+ * who can fix it.
+ */
+function renderClientAccessNotice(meta) {
+  const existing = document.getElementById('no-client-access');
+  if ((meta || {}).clientAccess !== 'none') {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  const banner = document.createElement('div');
+  banner.id = 'no-client-access';
+  banner.className = 'callout danger';
+  banner.style.margin = 'var(--sp-3)';
+  banner.innerHTML = '<strong>Your account has no client assigned.</strong> That is why every panel is ' +
+    'empty - it is an access setting, not a data problem. An admin can assign your clients under ' +
+    'Manage Users.';
+  const main = document.querySelector('.content') || document.body;
+  main.insertBefore(banner, main.firstChild);
+}
+
 function setDashboardData(payload) {
   RAW_DATA = fillMissingSectionsWithSafeDefaults(payload);
+  renderClientAccessNotice(RAW_DATA.meta);
   const available = (RAW_DATA.meta && RAW_DATA.meta.clients) || [];
   // A previously-selected client can disappear (access revoked, client
   // removed) - fall back to "All" rather than silently rendering an

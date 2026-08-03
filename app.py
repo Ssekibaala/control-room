@@ -318,15 +318,28 @@ def _valid_emails(raw):
 @app.route("/api/clients", methods=["GET"])
 @login_required
 def api_list_clients():
-    """Every client is visible to any logged-in role - unlike accounts,
-    there's nothing sensitive in an organisation's name and contact
-    emails, and technicians need to see this list just as much as admins
-    do when they're the ones adding vehicle updates."""
+    """
+    The clients this session may see - not all of them.
+
+    This previously returned every client to any logged-in role,
+    including their contact email addresses and (since the mapping
+    build) their platform account ids. Those are another company's
+    business contacts, so a client-role login for one organisation
+    could read the operational contacts of every other organisation on
+    the platform.
+
+    Admin still sees everything, which is what makes the mapping UI
+    work; everyone else sees only their own.
+    """
     try:
         import sheets_store
-        return jsonify({"clients": sheets_store.load_clients()})
+        clients = sheets_store.load_clients()
     except Exception as e:
         return jsonify({"error": f"Could not load clients: {e}"}), 503
+    allowed = _visible_clients_for_session()
+    if allowed is not None:
+        clients = [c for c in clients if c.get("name", "").strip() in allowed]
+    return jsonify({"clients": clients})
 
 
 @app.route("/api/platform-accounts", methods=["GET"])
@@ -660,6 +673,76 @@ def _plate_client_map():
     return mapping
 
 
+def _scoped_snapshot(path, group_key):
+    """
+    A poll snapshot with other clients' accounts removed.
+
+    These files are the raw platform payload - every plate, position and
+    device id for every organisation polled - so serving them whole
+    handed a scoped technician the complete fleet of every client, in a
+    form the dashboard's own filtering never touched. Each group's rows
+    carry the client that owns them (see the pollers), so the groups are
+    filtered by that rather than by trying to re-derive ownership here.
+    """
+    if not os.path.exists(path):
+        return jsonify({"status": "no_snapshot_yet"})
+    try:
+        with open(path) as f:
+            snapshot = json.load(f)
+    except (ValueError, OSError) as e:
+        return jsonify({"error": f"Snapshot unreadable: {e}"}), 503
+
+    allowed = _visible_clients_for_session()
+    if allowed is None:
+        return jsonify(snapshot)
+
+    groups = snapshot.get(group_key) or {}
+    kept = {
+        gid: rows for gid, rows in groups.items()
+        if any(str(r.get("client", "")).strip() in allowed for r in rows if isinstance(r, dict))
+    }
+    scoped = dict(snapshot)
+    scoped[group_key] = kept
+    scoped["counts"] = {gid: len(rows) for gid, rows in kept.items()}
+    # The id lists and the id->client map name every organisation
+    # polled, so they leak the client roster even with the rows gone.
+    for key in ("orgIds", "clientIds", "fleetIds"):
+        if key in scoped:
+            scoped[key] = [i for i in scoped[key] if str(i) in kept]
+    for key in ("clientByOrgId", "clientByClientId", "clientByFleetId"):
+        if key in scoped:
+            scoped[key] = {k: v for k, v in scoped[key].items() if v in allowed}
+    # Retired plates are fleet-wide and not attributable per client here.
+    scoped.pop("decommissionedPlates", None)
+    return jsonify(scoped)
+
+
+def _plate_allowed(plate):
+    """
+    Whether this session may see or act on one vehicle.
+
+    Every endpoint that takes a plate from the request needs this:
+    without it the plate is a free-form parameter that reaches straight
+    into another client's data, and the dashboard's filtering counts for
+    nothing because the underlying record is still one URL away.
+
+    An unknown plate is refused rather than allowed. It can't be
+    attributed to a client, so permitting it would leave a hole for
+    exactly the plates whose ownership is unclear.
+    """
+    allowed = _visible_clients_for_session()
+    if allowed is None:
+        return True
+    return _plate_client_map().get(str(plate).strip(), "") in allowed
+
+
+def _deny_plate(plate):
+    """Deliberately the same response for 'not yours' and 'no such
+    vehicle': distinguishing them would let anyone enumerate which
+    plates exist on the platform by watching the status code."""
+    return jsonify({"error": f"No vehicle '{plate}' available to your account"}), 404
+
+
 def _visible_clients_for_session():
     """None = unrestricted (admin). A set = exactly those clients."""
     role = session["role"]
@@ -723,8 +806,16 @@ def api_dashboard_data():
     filtered = filter_payload_for_role(raw, role)
     filtered = dict(filtered)
     visible = _client_filter_options(raw, _visible_clients_for_session())
+    # "none" is the difference between "this client genuinely has no
+    # vehicles today" and "your account was never assigned a client, so
+    # you are seeing nothing and always will until someone fixes it".
+    # Those look identical on screen otherwise, and the second one is a
+    # support call every time.
+    scoped = _visible_clients_for_session()
+    access = "all" if scoped is None else ("scoped" if scoped else "none")
     filtered["meta"] = {**filtered.get("meta", {}), "feedbackApplied": overlay_ok,
-                        "clients": visible, "seesAllClients": permissions.sees_all_clients(role)}
+                        "clients": visible, "seesAllClients": permissions.sees_all_clients(role),
+                        "clientAccess": access}
     # xlsxB64/tamperB64 never need to reach the browser at all, any role,
     # since /api/export/<name> reads them straight from disk on demand.
     filtered = {k: v for k, v in filtered.items() if k not in ("xlsxB64", "tamperB64")}
@@ -745,11 +836,76 @@ def api_export(name):
     b64 = raw.get(b64_key)
     if not b64:
         return jsonify({"error": "report not available"}), 404
+
+    data = base64.b64decode(b64)
+    # The workbook is generated fleet-wide, so downloading it bypassed
+    # every other client boundary in the app - a GTL-only technician was
+    # getting a spreadsheet containing 114 AGL vehicles. Filtered per
+    # request rather than pre-generated per client: clients change, and
+    # a stale per-client file would be worse than none.
+    allowed = _visible_clients_for_session()
+    if allowed is not None:
+        try:
+            data = _client_scoped_workbook(data, allowed)
+        except Exception as e:
+            # Never fall back to the unfiltered file - that is precisely
+            # the leak. Fail the download instead.
+            print(f"Could not scope the {name} export: {e}")
+            return jsonify({"error": "Could not prepare a report limited to your clients."}), 503
+
     return Response(
-        base64.b64decode(b64),
+        data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=GTL_{name}_report.xlsx"},
     )
+
+
+def _client_scoped_workbook(data, allowed):
+    """
+    Strips every row for a vehicle outside `allowed` from an already
+    generated workbook.
+
+    Filtering the finished file, rather than regenerating it from
+    filtered data, keeps the formatting and formulas the standalone
+    tool produces exactly as they are - the Executive Dashboard sheet
+    is built from live COUNTA/COUNTIF formulas over the Full Data
+    sheet, so removing rows there makes its totals correct on open
+    without recomputing anything here.
+
+    Any sheet whose header has no plate column is left alone; those are
+    the settings/legend sheets, which carry no per-vehicle data.
+    """
+    import io
+    from openpyxl import load_workbook
+
+    owner = _plate_client_map()
+    wb = load_workbook(io.BytesIO(data))
+    for ws in wb.worksheets:
+        plate_col = header_row = None
+        # The header isn't always row 1 (some sheets open with a title
+        # block), so scan the first few rows for the plate column.
+        for r in range(1, min(ws.max_row, 8) + 1):
+            for c in range(1, min(ws.max_column, 20) + 1):
+                value = ws.cell(row=r, column=c).value
+                if isinstance(value, str) and "plate" in value.strip().lower():
+                    plate_col, header_row = c, r
+                    break
+            if plate_col:
+                break
+        if not plate_col:
+            continue
+        # Bottom-up so deleting one row doesn't shift the rows still to
+        # be checked.
+        for r in range(ws.max_row, header_row, -1):
+            plate = ws.cell(row=r, column=plate_col).value
+            if plate is None or str(plate).strip() == "":
+                continue
+            if owner.get(str(plate).strip(), "") not in allowed:
+                ws.delete_rows(r)
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 
 @app.route("/api/feedback", methods=["POST"])
@@ -777,6 +933,11 @@ def api_feedback():
         return jsonify({"error": "'requiresFollowup' must be true or false, an explicit choice, not optional"}), 400
     if entry_type not in ("feedback", "action"):
         return jsonify({"error": "'entryType' must be 'feedback' or 'action'"}), 400
+    # The plate arrives from the request body, so without this a scoped
+    # session can write feedback onto any client's vehicle - and that
+    # write then triggers an email to that vehicle's real client.
+    if not _plate_allowed(plate):
+        return _deny_plate(plate)
     # Recommended Action is the technician's operational instruction to
     # the field - a client stating their own next step would be writing
     # your team's job card for them, so that field stays internal.
@@ -932,6 +1093,11 @@ def api_feedback_history(plate):
     the submitter: add_feedback() patches this worker's cache in place
     before this ever runs (see sheets_store._patch_cache_with).
     """
+    # The plate is a URL path segment, so this endpoint was a direct
+    # read of any client's comment trail regardless of what the
+    # dashboard showed.
+    if not _plate_allowed(plate):
+        return _deny_plate(plate)
     try:
         import sheets_store
         all_feedback = sheets_store.load_feedback_cached()
@@ -1156,6 +1322,11 @@ def api_tamper_check():
     comment = (body.get("comment") or "").strip()
     if not plate or not comment:
         return jsonify({"error": "'plate' and 'comment' are required"}), 400
+    # This write suppresses future tampering cases for the vehicle, so
+    # an unscoped version let one client's technician silently mute
+    # another client's tamper alerts.
+    if not _plate_allowed(plate):
+        return _deny_plate(plate)
 
     try:
         import sheets_store
@@ -1344,14 +1515,11 @@ if _mix_api_poller_enabled():
 @app.route("/api/mix/snapshot", methods=["GET"])
 @login_required
 def api_mix_snapshot():
-    """Read-only view of the last MiX API poll, for verifying the new
-    ingestion path before it's wired into the real dashboard data."""
+    """Read-only view of the last MiX API poll, for verifying the
+    ingestion path."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    if not os.path.exists(MIX_API_SNAPSHOT_PATH):
-        return jsonify({"status": "no_snapshot_yet"})
-    with open(MIX_API_SNAPSHOT_PATH) as f:
-        return jsonify(json.load(f))
+    return _scoped_snapshot(MIX_API_SNAPSHOT_PATH, "byOrg")
 
 
 @app.route("/api/mix/poll-now", methods=["POST"])
@@ -1457,10 +1625,7 @@ def api_teletrac_snapshot():
     new ingestion path before/after it's wired into the real dashboard data."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    if not os.path.exists(TELETRAC_API_SNAPSHOT_PATH):
-        return jsonify({"status": "no_snapshot_yet"})
-    with open(TELETRAC_API_SNAPSHOT_PATH) as f:
-        return jsonify(json.load(f))
+    return _scoped_snapshot(TELETRAC_API_SNAPSHOT_PATH, "byClient")
 
 
 @app.route("/api/teletrac/poll-now", methods=["POST"])
@@ -1603,10 +1768,7 @@ def api_ft_cloud_snapshot():
     new ingestion path before/after it's wired into the real dashboard data."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    if not os.path.exists(FT_CLOUD_API_SNAPSHOT_PATH):
-        return jsonify({"status": "no_snapshot_yet"})
-    with open(FT_CLOUD_API_SNAPSHOT_PATH) as f:
-        return jsonify(json.load(f))
+    return _scoped_snapshot(FT_CLOUD_API_SNAPSHOT_PATH, "byFleet")
 
 
 @app.route("/api/ftcloud/poll-now", methods=["POST"])

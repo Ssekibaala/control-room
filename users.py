@@ -141,12 +141,20 @@ def delete_user(username):
     return True
 
 
-def notification_recipients(roles=None):
+def notification_recipients(roles=None, client=None):
     """
     Addresses to notify, drawn from the accounts themselves - a user with
     no address is simply not reachable and is skipped rather than
     silently dropping the whole send. Deduplicated, because two accounts
     can legitimately share a shared mailbox.
+
+    client, when given, restricts the result to accounts assigned to
+    that client. An account with NO client assignment is excluded, not
+    included: for staff that's handled by the caller passing client=None
+    (they're not being emailed about one client's fleet), and for a
+    client-role account an empty assignment means "entitled to nothing"
+    everywhere else in this codebase - it must not quietly mean
+    "receives every client's vehicles by email".
     """
     seen, out = set(), []
     for username, info in load_users().items():
@@ -155,6 +163,10 @@ def notification_recipients(roles=None):
             continue
         if roles and info.get("role") not in roles:
             continue
+        if client is not None:
+            assigned = [str(c).strip() for c in (info.get("clients") or []) if str(c).strip()]
+            if client not in assigned:
+                continue
         seen.add(addr.lower())
         out.append({"username": username, "email": addr, "role": info.get("role", "")})
     return out
