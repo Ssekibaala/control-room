@@ -588,6 +588,43 @@ def _split_ids(raw):
     return [p.strip() for p in str(raw or "").split(",") if p.strip()]
 
 
+def _looks_corrupted_id(value):
+    """
+    True for a platform id Sheets has mangled into a float.
+
+    Platform ids are up to 19 digits (MiX org ids, FT fleet ids). Sheets
+    stores numbers as doubles, which hold ~15-17 significant digits, so
+    letting it treat one as a NUMBER silently rewrites it - AGL's
+    -4944176959690446336 came back as "-4.94418e+18", pointing at no
+    real organisation. Writes now go in as RAW text to prevent it (see
+    _write_ids), but a row written before that fix, or edited by hand in
+    the Sheets UI, can still hold a mangled value.
+
+    The precision is genuinely gone - the original cannot be recovered
+    from the float - so this only flags it. Guessing would map a client
+    to whatever organisation the rounded id happens to hit.
+    """
+    text = str(value or "").strip()
+    return bool(text) and ("e+" in text.lower() or "E+" in text)
+
+
+def _write_ids(ws, row, column, ids):
+    """
+    Writes one comma-separated id list as RAW text.
+
+    RAW is the whole point: the default USER_ENTERED makes Sheets parse
+    a lone 19-digit id as a number and quietly round it (see
+    _looks_corrupted_id). update_cell() offers no such option, so this
+    goes through update() instead.
+    """
+    # gspread is imported lazily elsewhere in this module (it's an
+    # optional dependency until Sheets is actually configured), so it's
+    # imported here too rather than at module level.
+    from gspread.utils import rowcol_to_a1
+    cell = rowcol_to_a1(row, CLIENT_HEADERS.index(column) + 1)
+    ws.update(cell, [[", ".join(ids)]], value_input_option="RAW")
+
+
 def _get_or_create_clients_tab(client, sheet_id):
     sh = _open_spreadsheet(client, sheet_id)
     try:
@@ -610,14 +647,28 @@ def load_clients():
         if not name:
             continue
         emails_raw = str(row.get("ContactEmails", "")).strip()
-        out.append({
+        entry = {
             "name": name,
             "emails": [e.strip() for e in emails_raw.split(",") if e.strip()],
             "mixOrgIds": _split_ids(row.get("MixOrgIds")),
             "teletracClientIds": _split_ids(row.get("TeletracClientIds")),
             "ftCloudFleetIds": _split_ids(row.get("FtCloudFleetIds")),
             "createdAt": str(row.get("CreatedAt", "")).strip(),
-        })
+        }
+        # A mangled id is dropped rather than passed downstream: it
+        # points at no real organisation, so keeping it would mean a
+        # failed API call every poll cycle for a client that looks
+        # correctly configured. Dropping it makes the platform show as
+        # unmapped in the admin UI, which is both true and fixable by
+        # re-picking it from the dropdown.
+        for key in ("mixOrgIds", "teletracClientIds", "ftCloudFleetIds"):
+            bad = [v for v in entry[key] if _looks_corrupted_id(v)]
+            if bad:
+                entry[key] = [v for v in entry[key] if not _looks_corrupted_id(v)]
+                entry.setdefault("corruptedIds", []).extend(bad)
+                print(f"WARNING: client {name!r} has a corrupted {key} value {bad} - Sheets stored a "
+                      f"long id as a number and lost digits. Re-select it in the client mapping UI.")
+        out.append(entry)
     return out
 
 
@@ -628,10 +679,12 @@ def add_client(name, emails=None, mix_org_ids=None, teletrac_client_ids=None, ft
         raise ValueError(f"A client named '{name}' already exists")
     # Order must match CLIENT_HEADERS exactly, including the three *Ids
     # columns sitting AFTER CreatedAt - see the note on CLIENT_HEADERS.
+    # RAW so Sheets stores the platform ids as text - see _write_ids.
     ws.append_row([name, ", ".join(emails or []),
                    now_eat().strftime("%d/%m/%Y %H:%M"),
                    ", ".join(mix_org_ids or []), ", ".join(teletrac_client_ids or []),
-                   ", ".join(ft_cloud_fleet_ids or [])])
+                   ", ".join(ft_cloud_fleet_ids or [])],
+                  value_input_option="RAW")
 
 
 def set_client_emails(name, emails):
@@ -665,7 +718,7 @@ def set_client_platforms(name, mix_org_ids=None, teletrac_client_ids=None, ft_cl
                         ("FtCloudFleetIds", ft_cloud_fleet_ids)):
         if ids is None:
             continue
-        ws.update_cell(cell.row, CLIENT_HEADERS.index(column) + 1, ", ".join(ids))
+        _write_ids(ws, cell.row, column, ids)
     return True
 
 

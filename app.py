@@ -668,6 +668,48 @@ def _visible_clients_for_session():
     return permissions.visible_clients(role, _assigned_clients(session["username"]))
 
 
+def _client_filter_options(payload, allowed):
+    """
+    What the header's client filter offers.
+
+    Sourced from the REGISTRY, not from the rows in this payload. Those
+    are different sets and the difference matters: a client that has
+    just been added, whose vehicles haven't been polled yet, or whose
+    platform fetch is failing, has no rows - and deriving the list from
+    rows made it silently absent from the filter with nothing on screen
+    explaining why. Listing it and showing an honest empty dashboard is
+    the better failure.
+
+    Union'd with the clients actually present, so a client with rows but
+    no registry entry (a legacy row, or an unmapped platform account
+    landing under "Unassigned") still shows up rather than becoming
+    unreachable data.
+
+    This exposes client NAMES only, and only ones the session is
+    entitled to - `allowed` is applied to both halves. It is not a way
+    into another client's data; the row filtering above is.
+    """
+    present = {
+        str(r.get("client", "")).strip()
+        for section in permissions.CLIENT_SCOPED_SECTIONS
+        for r in (payload.get(section) or [])
+        if isinstance(r, dict) and str(r.get("client", "")).strip()
+    }
+    registered = set()
+    try:
+        import client_registry
+        registered = {c["name"].strip() for c in client_registry.load_registry() if c.get("name")}
+    except Exception as e:
+        # Filter still works off whatever has rows; no reason to fail
+        # the whole dashboard because the registry is briefly unreadable.
+        print(f"Client filter falling back to rows-only ({e})")
+
+    options = present | registered
+    if allowed is not None:
+        options &= allowed
+    return sorted(options)
+
+
 @app.route("/api/dashboard-data")
 @login_required
 def api_dashboard_data():
@@ -680,19 +722,7 @@ def api_dashboard_data():
     raw = permissions.filter_payload_for_clients(raw, _visible_clients_for_session())
     filtered = filter_payload_for_role(raw, role)
     filtered = dict(filtered)
-    # The clients actually present in what this session is allowed to
-    # see - drives the header's client filter. Derived from the
-    # client-scoped payload BEFORE the role filter, and across every
-    # scoped section rather than just "full": the client role is never
-    # given "full" at all (see permissions.blocked_sections_for), so
-    # reading only that one would leave client-role users with an empty
-    # dropdown despite having data in critical/pending/healthy.
-    visible = sorted({
-        str(r.get("client", "")).strip()
-        for section in permissions.CLIENT_SCOPED_SECTIONS
-        for r in (raw.get(section) or [])
-        if isinstance(r, dict) and str(r.get("client", "")).strip()
-    })
+    visible = _client_filter_options(raw, _visible_clients_for_session())
     filtered["meta"] = {**filtered.get("meta", {}), "feedbackApplied": overlay_ok,
                         "clients": visible, "seesAllClients": permissions.sees_all_clients(role)}
     # xlsxB64/tamperB64 never need to reach the browser at all, any role,
