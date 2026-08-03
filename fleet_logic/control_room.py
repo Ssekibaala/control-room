@@ -64,14 +64,29 @@ def _relative_age(ts, now):
 def _format_last_position(platform_status, now=None):
     """
     Every asset already has a per-platform (status, datetime) pair computed
-    by classifier.py. This just picks the most recent timestamp across
-    platforms and formats it for display, absolute + relative. No new
-    calculation, purely surfacing data that already existed but wasn't shown.
+    by classifier.py. This picks the EARLIEST timestamp across platforms
+    and formats it for display, absolute + relative - deliberately the
+    oldest, not the freshest.
+
+    A vehicle is only genuinely reachable if every platform watching it
+    agrees it is. Surfacing the freshest of the three made a vehicle
+    look fine on the strength of whichever single platform happened to
+    still be reporting, even while the other two - and the vehicle's
+    actual overall status, which classify_fleet already derives from
+    days_silent off this same earliest timestamp (see classifier.py's
+    `stalest`) - say otherwise. This keeps the headline date consistent
+    with the severity/escalation figures computed from it, instead of
+    quietly showing the most flattering number available.
+
+    Also returns which platform that timestamp came from: with three
+    platforms feeding one asset, a bare date is ambiguous the moment
+    they disagree, and nothing in a single unlabelled date says which
+    one you're looking at.
     """
-    timestamps = [ts for (_, ts) in platform_status.values() if ts is not None]
-    if not timestamps:
-        return "No data", None, {}, {}
-    latest = max(timestamps)
+    dated = [(p, ts) for p, (_, ts) in platform_status.items() if ts is not None]
+    if not dated:
+        return "No data", None, {}, {}, None
+    source, earliest = min(dated, key=lambda pair: pair[1])
     per_platform = {
         PLATFORM_SHORT[p]: ts.strftime("%d %b %Y, %H:%M") if ts else "No data"
         for p, (_, ts) in platform_status.items()
@@ -80,13 +95,13 @@ def _format_last_position(platform_status, now=None):
         PLATFORM_SHORT[p]: _relative_age(ts, now) if ts else None
         for p, (_, ts) in platform_status.items()
     }
-    return latest.strftime("%d %b %Y, %H:%M"), latest, per_platform, per_platform_ago
+    return earliest.strftime("%d %b %Y, %H:%M"), earliest, per_platform, per_platform_ago, PLATFORM_SHORT[source]
 
 
 def _integrity_row(plate, info, now=None):
     border = info.get("border_detail")
     fb = info.get("feedback")
-    last_position, last_position_dt, per_platform_seen, per_platform_ago = _format_last_position(
+    last_position, last_position_dt, per_platform_seen, per_platform_ago, last_position_source = _format_last_position(
         info["platform_status"], now)
     return {
         "plate": plate, "status": info["status"], "severity": info["severity"], "days": info["days_silent"],
@@ -95,6 +110,10 @@ def _integrity_row(plate, info, now=None):
         "client": info.get("client") or "",
         **_platform_row(info),
         "lastPosition": last_position,
+        # Which of TLT/MIX/CAM lastPosition's timestamp actually came
+        # from - see _format_last_position(). None only when no platform
+        # has a timestamp at all (lastPosition is "No data" too, then).
+        "lastPositionSource": last_position_source,
         "tltSeen": per_platform_seen.get("TLT", "No data"),
         "mixSeen": per_platform_seen.get("MIX", "No data"),
         "camSeen": per_platform_seen.get("CAM", "No data"),

@@ -757,6 +757,8 @@
 
   .platform-cell { display:flex; flex-direction:column; align-items:center; gap:1px; line-height:1.2; }
   .platform-ago { font-size:9.5px; color:var(--text-tertiary); white-space:nowrap; text-align:center; }
+  .last-position-cell { display:flex; flex-direction:column; gap:1px; line-height:1.25; }
+  .last-position-source { font-size:9.5px; font-weight:600; color:var(--info); white-space:nowrap; }
 
   .callout { padding:var(--sp-2) var(--sp-3); border-radius:var(--radius-md); font-size:13px; line-height:1.6;
     margin-bottom:var(--sp-2); border:1px solid var(--border); background:var(--panel-bg); }
@@ -3802,9 +3804,55 @@ function platformCellHTML(c, r) {
     badge + '<span class="platform-ago">' + escapeHTML(ago) + '</span></div></td>';
 }
 
+// Full platform names for the source tag/tooltip - matching the labels
+// already used in the TLT/MIX/CAM column headers, so "TLT" never shows
+// up as raw shorthand next to a plain-English timestamp.
+const PLATFORM_FULL_NAME = {TLT: 'Teletrac', MIX: 'MiX Unity', CAM: 'FT Cloud'};
+
+/**
+ * lastPosition is the EARLIEST timestamp across three independent
+ * platforms, not the freshest - a vehicle isn't really reachable just
+ * because one of its three feeds still is, and days_silent/severity
+ * elsewhere on this row are already computed off this same earliest
+ * timestamp (see classifier.py), so the headline date has to match or
+ * the row visibly contradicts itself. lastPositionSource (see
+ * control_room.py's _format_last_position()) says which platform
+ * produced it; the tooltip lists what the other two last reported, so
+ * a mismatch between platforms is visible without opening the row's
+ * drill-down.
+ */
+// lastPositionSource comes from control_room.py, but a payload built
+// before that field existed (an older cached fleet_today.json, a
+// stale export) simply won't have it. Rather than silently drop the
+// badge whenever that happens, fall back to finding which platform's
+// own *Seen timestamp matches lastPosition exactly - both are the
+// same datetime formatted with the same strftime call, so the string
+// match is exact whenever a source truly exists, and this recovers
+// the badge without needing the row rebuilt.
+function _inferLastPositionSource(r) {
+  for (const k of ['TLT', 'MIX', 'CAM']) {
+    if (r[PLATFORM_SEEN_FIELDS[k].seen] === r.lastPosition) return k;
+  }
+  return null;
+}
+
+function lastPositionCellHTML(r) {
+  const val = r.lastPosition || 'No data';
+  const source = r.lastPositionSource || _inferLastPositionSource(r);
+  if (!source) return '<td>' + escapeHTML(val) + '</td>';
+  const breakdown = ['TLT', 'MIX', 'CAM']
+    .map(k => PLATFORM_FULL_NAME[k] + ': ' + (r[PLATFORM_SEEN_FIELDS[k].seen] || 'No data'))
+    .join('\n');
+  return '<td title="' + escapeHTML(breakdown) + '"><div class="last-position-cell">' +
+    '<span class="last-position-time">' + escapeHTML(val) + '</span>' +
+    '<span class="last-position-source">via ' + escapeHTML(PLATFORM_FULL_NAME[source]) + '</span>' +
+    '</div></td>';
+}
+
 function cellHTML(c, r) {
   if (c.key === 'feedback') return feedbackCellHTML(r);
   if (c.key === 'TLT' || c.key === 'MIX' || c.key === 'CAM') return platformCellHTML(c, r);
+  if (c.key === 'lastPosition') return lastPositionCellHTML(r);
   const val = r[c.key] !== undefined && r[c.key] !== null ? r[c.key] : '';
   const safeVal = escapeHTML(val);
   const pillClass = pillFor(c.key, val);
@@ -4104,7 +4152,7 @@ document.getElementById('global-search').addEventListener('input', (e) => {
 // ---- Column definitions (identical to before) ----
 const INTEGRITY_COLS = [
   {key:'plate', label:'Plate'}, {key:'status', label:'Status'}, {key:'severity', label:'Severity'},
-  {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Last Position Time'},
+  {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Earliest Last Seen'},
   {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'},
   {key:'CAM', label:'FT Cloud'}, {key:'border', label:'Border Risk'}, {key:'borderDetail', label:'Border Detail'},
   {key:'feedback', label:'Customer Feedback'}, {key:'action', label:'Recommended Action'},
@@ -4115,13 +4163,13 @@ const INTEGRITY_COLS = [
 // (investigation reasoning, border evidence) that isn't client-facing.
 const INTEGRITY_COLS_CLIENT = [
   {key:'plate', label:'Plate'}, {key:'status', label:'Status'}, {key:'severity', label:'Severity'},
-  {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Last Position Time'},
+  {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Earliest Last Seen'},
   {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'}, {key:'CAM', label:'FT Cloud'},
   {key:'feedback', label:'Customer Feedback'}, {key:'action', label:'Recommended Action'},
   {key:'location', label:'Last Known Location'},
 ];
 const HEALTHY_COLS = [
-  {key:'plate', label:'Plate'}, {key:'lastPosition', label:'Last Position Time'},
+  {key:'plate', label:'Plate'}, {key:'lastPosition', label:'Earliest Last Seen'},
   {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'},
   {key:'CAM', label:'FT Cloud'}, {key:'location', label:'Last Known Location'},
 ];
@@ -4143,7 +4191,7 @@ const QUALITY_COLS = [
   {key:'nextDate', label:'Next Departure Date'}, {key:'nextTime', label:'Next Departure Time'}, {key:'rawStart', label:'Raw Start Coordinate'},
 ];
 const KNOWN_ISSUE_COLS = [
-  {key:'plate', label:'Plate'}, {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Last Position Time'},
+  {key:'plate', label:'Plate'}, {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Earliest Last Seen'},
   {key:'feedback', label:'Reported Reason'}, {key:'reportedBy', label:'Reported By'}, {key:'feedbackDate', label:'Reported On'},
   {key:'location', label:'Last Known Location'},
 ];
@@ -4455,7 +4503,7 @@ const cardsHTML = DATA.criticalCards.map(r => {
       '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.CAM) + '"></div>CAM</div>' +
     '</div>' +
     (badges.length ? '<div class="badge-row">' + badges.join('') + '</div>' : '') +
-    '<div class="last-seen">Last position: <b>' + escapeHTML(r.lastPosition) + '</b></div>' +
+    '<div class="last-seen">Earliest last seen: <b>' + escapeHTML(r.lastPosition) + '</b></div>' +
     '<div class="card-action">' + escapeHTML(r.action) + '</div></div>';
 }).join('');
 document.getElementById('critical-cards').innerHTML = cardsHTML || '<p style="color:var(--text-tertiary)">No critical cases.</p>';
