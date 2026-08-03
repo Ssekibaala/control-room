@@ -345,7 +345,11 @@
   .users-list-row .u-lastlogin.never { color:var(--text-tertiary); font-style:italic; }
   .users-list-row .role-pill { justify-self:start; }
   .users-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
-  .users-list-row.client-row { grid-template-columns:1fr 2fr 36px; }
+  /* name | emails | platform chips | Map | delete. The chips column is
+     auto-width so it hugs its three fixed-size badges instead of
+     stealing space from the email column. */
+  .users-list-row.client-row { grid-template-columns:1fr 1.6fr auto 64px 36px; }
+  .users-list-row.client-row .client-map { padding:5px 10px; font-size:11px; justify-self:end; }
   .client-delete { width:30px; height:30px; color:var(--text-tertiary); }
   .client-delete:hover { color:var(--danger); }
   .client-delete svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; }
@@ -706,6 +710,30 @@
   .client-filter.filtering { border-color:var(--primary); background:var(--primary-surface); }
   .client-filter.filtering .client-filter-icon { stroke:var(--primary); }
   .client-filter.filtering select { color:var(--primary); }
+
+  /* Platform mapping controls in the Add/Edit Client dialog. */
+  .platform-map-head { margin:var(--sp-3) 0 var(--sp-2); padding-top:var(--sp-2);
+    border-top:1px solid var(--divider); display:flex; flex-direction:column; gap:3px; }
+  .platform-map-head > span:first-child { font-size:12px; font-weight:700; color:var(--text-primary);
+    text-transform:uppercase; letter-spacing:0.4px; }
+  .platform-select { width:100%; padding:9px 11px; background:var(--hover-surface);
+    border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-primary);
+    font-family:inherit; font-size:13px; }
+  .platform-select:focus { outline:none; border-color:var(--primary); }
+  .platform-select:disabled { opacity:0.55; cursor:not-allowed; }
+  .platform-select option { background:var(--card-bg); color:var(--text-primary); }
+  /* An account already taken by another client stays visible but
+     unpickable - hiding it would leave someone hunting for a name that
+     is right there in the platform, with no clue why it's absent. */
+  .platform-select option:disabled { color:var(--text-tertiary); }
+
+  /* Per-platform mapping shown on each client row. */
+  .client-platforms { display:flex; flex-wrap:wrap; gap:5px; }
+  .plat-chip { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:9px;
+    font-size:10px; font-weight:700; letter-spacing:0.3px; background:var(--hover-surface);
+    color:var(--text-secondary); border:1px solid var(--border); white-space:nowrap; }
+  .plat-chip.mapped { background:var(--success-surface); color:var(--success); border-color:transparent; }
+  .plat-chip.unmapped { opacity:0.6; }
 
   .platform-cell { display:flex; flex-direction:column; align-items:center; gap:1px; line-height:1.2; }
   .platform-ago { font-size:9.5px; color:var(--text-tertiary); white-space:nowrap; text-align:center; }
@@ -1199,7 +1227,7 @@
       <div class="drill-head">
         <div>
           <div class="drill-title">Add Client</div>
-          <div class="drill-subtitle">Contact emails here get vehicle updates without needing a login.</div>
+          <div class="drill-subtitle" id="cf-subtitle">Contact emails here get vehicle updates without needing a login.</div>
         </div>
         <button class="icon-btn" id="createclient-close" aria-label="Close" title="Close (Esc)">
           <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -1215,6 +1243,32 @@
             <label for="cf-emails">Contact email(s)</label>
             <input type="text" id="cf-emails" placeholder="glenn@example.com, ops@example.com" autocomplete="off">
             <div class="ff-hint">Separate multiple addresses with commas. Can be left blank and added later.</div>
+          </div>
+
+          <div class="platform-map-head">
+            <span>Platform accounts</span>
+            <span class="ff-hint">Pick this client's account on each platform. The same company is often
+              named differently on each one &mdash; these selections are what merge them into one client.</span>
+          </div>
+          <div class="ff-row">
+            <label for="cf-mix">MiX Unity organisation</label>
+            <select id="cf-mix" class="platform-select" data-platform="mix">
+              <option value="">Loading&hellip;</option>
+            </select>
+          </div>
+          <div class="ff-row">
+            <label for="cf-teletrac">Teletrac client</label>
+            <select id="cf-teletrac" class="platform-select" data-platform="teletrac">
+              <option value="">Loading&hellip;</option>
+            </select>
+          </div>
+          <div class="ff-row">
+            <label for="cf-ftcloud">FT Cloud fleet</label>
+            <select id="cf-ftcloud" class="platform-select" data-platform="ftCloud">
+              <option value="">Loading&hellip;</option>
+            </select>
+            <div class="ff-hint">Leave any of these as &ldquo;Not on this platform&rdquo; if the client isn't
+              tracked there. You can change them later from the client list.</div>
           </div>
           <div id="cf-msg" class="ff-msg"></div>
           <button type="submit" id="cf-submit" class="btn-primary user-form-submit">Add Client</button>
@@ -2753,7 +2807,88 @@ if (usersForm) {
   // ---- Client Contacts ----
   const clientsList = document.getElementById('clients-list');
   if (clientsList) {
+    // Platform accounts, fetched once and reused for every dropdown.
+    // PLATFORMS is the single place the three platforms are described,
+    // so adding a fourth later means editing one list rather than
+    // hunting for three parallel copies.
+    const PLATFORMS = [
+      {key: 'mix',      field: 'mixOrgIds',        label: 'MiX Unity', selectId: 'cf-mix'},
+      {key: 'teletrac', field: 'teletracClientIds', label: 'Teletrac',  selectId: 'cf-teletrac'},
+      {key: 'ftCloud',  field: 'ftCloudFleetIds',   label: 'FT Cloud',  selectId: 'cf-ftcloud'},
+    ];
+    let PLATFORM_ACCOUNTS = null;   // {mix:[{id,name}], teletrac:[...], ftCloud:[...], errors:{}}
+    let LAST_CLIENTS = [];
+
+    function accountName(platformKey, id) {
+      const list = (PLATFORM_ACCOUNTS && PLATFORM_ACCOUNTS[platformKey]) || [];
+      const hit = list.find(a => a.id === String(id));
+      return hit ? hit.name : String(id);
+    }
+
+    function fetchPlatformAccounts() {
+      // Three live API calls server-side, so this is deliberately
+      // fetched once per page rather than per dialog open.
+      return fetch('/api/platform-accounts')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(d => { PLATFORM_ACCOUNTS = d; return d; })
+        .catch(() => { PLATFORM_ACCOUNTS = {mix: [], teletrac: [], ftCloud: [], errors: {all: 'unreachable'}}; });
+    }
+
+    /**
+     * Fills one platform <select>. `takenBy` maps an account id to the
+     * client already using it: those stay listed but disabled, and say
+     * who has them - a silently missing option is indistinguishable
+     * from the platform not returning it at all.
+     */
+    function fillPlatformSelect(platform, selected, takenBy) {
+      const select = document.getElementById(platform.selectId);
+      if (!select) return;
+      const accounts = (PLATFORM_ACCOUNTS && PLATFORM_ACCOUNTS[platform.key]) || [];
+      const err = PLATFORM_ACCOUNTS && PLATFORM_ACCOUNTS.errors &&
+                  (PLATFORM_ACCOUNTS.errors[platform.key] || PLATFORM_ACCOUNTS.errors.all);
+      if (err) {
+        select.innerHTML = '<option value="">Could not reach ' + escapeHTML(platform.label) + '</option>';
+        select.disabled = true;
+        return;
+      }
+      select.disabled = false;
+      select.innerHTML = '<option value="">Not on this platform</option>' +
+        accounts.map(a => {
+          const owner = takenBy[a.id];
+          const taken = owner && owner !== selected.ownerName;
+          return '<option value="' + escapeHTML(a.id) + '"' +
+            (taken ? ' disabled' : '') +
+            (a.id === selected.id ? ' selected' : '') + '>' +
+            escapeHTML(a.name) + (taken ? '  — already mapped to ' + escapeHTML(owner) : '') +
+            '</option>';
+        }).join('');
+      select.value = selected.id || '';
+    }
+
+    /** {accountId: clientName} per platform, for the disabling above. */
+    function takenAccounts() {
+      const out = {};
+      PLATFORMS.forEach(p => {
+        out[p.key] = {};
+        LAST_CLIENTS.forEach(c => (c[p.field] || []).forEach(id => { out[p.key][String(id)] = c.name; }));
+      });
+      return out;
+    }
+
+    function platformChips(c) {
+      return '<span class="client-platforms">' + PLATFORMS.map(p => {
+        const ids = c[p.field] || [];
+        const mapped = ids.length > 0;
+        const title = mapped
+          ? p.label + ': ' + ids.map(id => accountName(p.key, id)).join(', ')
+          : p.label + ': not mapped - this client\'s vehicles on ' + p.label + ' will not be pulled';
+        return '<span class="plat-chip ' + (mapped ? 'mapped' : 'unmapped') + '" title="' + escapeHTML(title) + '">' +
+          escapeHTML(p.label) + (mapped ? ' ✓' : ' —') + '</span>';
+      }).join('') + '</span>';
+    }
+
     function renderClientsList(clients) {
+      LAST_CLIENTS = clients;
       if (!clients.length) {
         clientsList.innerHTML = '<div class="activity-empty">No clients yet. Vehicle updates have no one to notify until one is added.</div>';
         return;
@@ -2764,11 +2899,17 @@ if (usersForm) {
           '<span class="u-email client-emails' + (c.emails.length ? '' : ' missing') + '" data-client="' + escapeHTML(c.name) + '" ' +
             'title="' + (c.emails.length ? escapeHTML(c.emails.join(', ')) : 'No contacts on file - click to add') + '">' +
             (c.emails.length ? escapeHTML(c.emails.join(', ')) : 'Not set') + '</span>' +
+          platformChips(c) +
+          '<button class="btn-secondary client-map" data-client="' + escapeHTML(c.name) + '" title="Change which platform accounts belong to this client">Map</button>' +
           '<button class="icon-btn client-delete" data-client="' + escapeHTML(c.name) + '" title="Remove client" aria-label="Remove client">' +
             '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>' +
           '</button>' +
         '</div>'
       ).join('');
+
+      clientsList.querySelectorAll('.client-map').forEach(btn => {
+        btn.addEventListener('click', () => openMapClient(btn.dataset.client));
+      });
 
       clientsList.querySelectorAll('.client-emails').forEach(cell => {
         cell.addEventListener('click', () => {
@@ -2801,16 +2942,57 @@ if (usersForm) {
         .then(data => renderClientsList(data.clients || []))
         .catch(() => { clientsList.innerHTML = '<div class="activity-empty">Could not load clients.</div>'; });
     }
-    fetchClients();
+    // Accounts first, so the per-client chips can show real platform
+    // names in their tooltips instead of raw 19-digit ids. Chained
+    // rather than parallel because renderClientsList reads them.
+    fetchPlatformAccounts().then(fetchClients);
 
     const ccBackdrop = document.getElementById('createclient-backdrop');
     const clientForm = document.getElementById('client-create-form');
-    function openCreateClient() {
-      document.getElementById('cf-msg').textContent = '';
-      document.getElementById('cf-msg').className = 'ff-msg';
+    // null = creating a new client; a name = remapping an existing one.
+    // One dialog serves both because the fields are identical apart
+    // from the name being fixed when editing.
+    let MAPPING_CLIENT = null;
+
+    function paintPlatformSelects(client) {
+      const taken = takenAccounts();
+      PLATFORMS.forEach(p => {
+        const ids = (client && client[p.field]) || [];
+        fillPlatformSelect(p, {id: ids[0] || '', ownerName: client ? client.name : null}, taken[p.key]);
+      });
+    }
+
+    function openDialog(client) {
+      MAPPING_CLIENT = client ? client.name : null;
+      const msg = document.getElementById('cf-msg');
+      msg.textContent = ''; msg.className = 'ff-msg';
       clientForm.reset();
+
+      const nameInput = document.getElementById('cf-name');
+      const emailsRow = document.getElementById('cf-emails').closest('.ff-row');
+      document.querySelector('#createclient-backdrop .drill-title').textContent =
+        client ? 'Map ' + client.name : 'Add Client';
+      document.getElementById('cf-subtitle').textContent = client
+        ? 'Which account on each platform belongs to this client. Accounts already taken by another client are greyed out.'
+        : 'Contact emails here get vehicle updates without needing a login.';
+      nameInput.value = client ? client.name : '';
+      nameInput.disabled = !!client;      // renaming would orphan the mapping
+      emailsRow.style.display = client ? 'none' : '';
+      document.getElementById('cf-submit').textContent = client ? 'Save Mapping' : 'Add Client';
+
+      // Selects show "Loading…" until the accounts are in - filling
+      // them from an empty list would silently render "Not on this
+      // platform" as though nothing were available.
+      const ready = PLATFORM_ACCOUNTS ? Promise.resolve() : fetchPlatformAccounts();
+      ready.then(() => paintPlatformSelects(client));
+
       ccBackdrop.classList.add('open');
-      setTimeout(() => document.getElementById('cf-name').focus(), 50);
+      setTimeout(() => (client ? document.getElementById('cf-mix') : nameInput).focus(), 50);
+    }
+
+    function openCreateClient() { openDialog(null); }
+    function openMapClient(name) {
+      openDialog(LAST_CLIENTS.find(c => c.name === name) || {name: name});
     }
     function closeCreateClient() { ccBackdrop.classList.remove('open'); }
     wireOnce('createclient-modal', () => {
@@ -2826,19 +3008,36 @@ if (usersForm) {
       e.preventDefault();
       const msgEl = document.getElementById('cf-msg');
       const submitBtn = document.getElementById('cf-submit');
-      submitBtn.disabled = true; submitBtn.textContent = 'Adding…';
-      fetch('/api/clients', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          name: document.getElementById('cf-name').value.trim(),
-          emails: document.getElementById('cf-emails').value.trim(),
-        }),
-      })
+      const editing = MAPPING_CLIENT !== null;
+      const restoreLabel = editing ? 'Save Mapping' : 'Add Client';
+      submitBtn.disabled = true; submitBtn.textContent = editing ? 'Saving…' : 'Adding…';
+
+      // Each platform sends a LIST, always - an empty one means "not on
+      // this platform", which the API treats as a real instruction to
+      // clear the mapping rather than as "unchanged".
+      const mapping = {};
+      PLATFORMS.forEach(p => {
+        const v = (document.getElementById(p.selectId).value || '').trim();
+        mapping[p.field] = v ? [v] : [];
+      });
+
+      const request = editing
+        ? fetch('/api/clients/' + encodeURIComponent(MAPPING_CLIENT) + '/platforms', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(mapping)})
+        : fetch('/api/clients', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(Object.assign({
+              name: document.getElementById('cf-name').value.trim(),
+              emails: document.getElementById('cf-emails').value.trim(),
+            }, mapping))});
+
+      request
         .then(r => r.json().then(b => ({ok: r.ok, b})))
         .then(({ok, b}) => {
-          submitBtn.disabled = false; submitBtn.textContent = 'Add Client';
+          submitBtn.disabled = false; submitBtn.textContent = restoreLabel;
           if (!ok) {
-            msgEl.textContent = b.error || 'Could not add this client.';
+            msgEl.textContent = b.error || 'Could not save this client.';
             msgEl.className = 'ff-msg err';
             return;
           }
@@ -2847,7 +3046,7 @@ if (usersForm) {
           closeCreateClient();
         })
         .catch(() => {
-          submitBtn.disabled = false; submitBtn.textContent = 'Add Client';
+          submitBtn.disabled = false; submitBtn.textContent = restoreLabel;
           msgEl.textContent = 'Could not reach the server.';
           msgEl.className = 'ff-msg err';
         });

@@ -329,6 +329,79 @@ def api_list_clients():
         return jsonify({"error": f"Could not load clients: {e}"}), 503
 
 
+@app.route("/api/platform-accounts", methods=["GET"])
+@login_required
+def api_platform_accounts():
+    """
+    Every account visible on each platform, normalised to {id, name},
+    for the admin UI's mapping dropdowns. Picking a name is the whole
+    point: the raw identifiers are a 19-digit MiX group id, a
+    base64-looking Teletrac ClientId and a 19-digit FT fleetId, none of
+    which can be eyeballed for correctness, and mapping a client to the
+    wrong one silently shows them another company's vehicles.
+
+    Each platform is fetched independently and reports its own error, so
+    one unreachable API leaves the other two dropdowns usable instead of
+    failing the whole dialog.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    out = {"mix": [], "teletrac": [], "ftCloud": [], "errors": {}}
+
+    try:
+        from adapters.mix_api_client import MixApiClient
+        client = MixApiClient()
+        if not client.is_configured():
+            raise RuntimeError("MiX API credentials not set")
+        out["mix"] = sorted(
+            ({"id": str(g.get("GroupId")), "name": g.get("Name") or str(g.get("GroupId"))}
+             for g in client.get_organisation_groups()),
+            key=lambda g: g["name"].lower())
+    except Exception as e:
+        out["errors"]["mix"] = str(e)
+
+    try:
+        from adapters.teletrac_api_client import TeletracApiClient
+        client = TeletracApiClient()
+        if not client.is_configured():
+            raise RuntimeError("Teletrac API credentials not set")
+        out["teletrac"] = sorted(
+            ({"id": str(c.get("ClientId")), "name": c.get("vCompanyName") or str(c.get("ClientId"))}
+             for c in client.get_all_clients()),
+            key=lambda c: c["name"].lower())
+    except Exception as e:
+        out["errors"]["teletrac"] = str(e)
+
+    try:
+        from adapters.ft_cloud_api_client import FtCloudApiClient
+        client = FtCloudApiClient()
+        if not client.is_configured():
+            raise RuntimeError("FT Cloud API credentials not set")
+        out["ftCloud"] = sorted(
+            ({"id": str(f.get("fleetId")), "name": f.get("fleetName") or str(f.get("fleetId"))}
+             for f in client.get_fleets()),
+            key=lambda f: f["name"].lower())
+    except Exception as e:
+        out["errors"]["ftCloud"] = str(e)
+
+    return jsonify(out)
+
+
+def _platform_ids(body):
+    """Pulls the three platform-id lists out of a request body,
+    accepting either a list or a single string for each."""
+    def as_list(value):
+        if value is None:
+            return None          # not supplied - leave unchanged on update
+        if isinstance(value, str):
+            value = [value]
+        return [str(v).strip() for v in value if str(v).strip()]
+    return (as_list(body.get("mixOrgIds")),
+            as_list(body.get("teletracClientIds")),
+            as_list(body.get("ftCloudFleetIds")))
+
+
 @app.route("/api/clients", methods=["POST"])
 @login_required
 def api_create_client():
@@ -341,14 +414,89 @@ def api_create_client():
     emails, err = _valid_emails(body.get("emails") or "")
     if err:
         return jsonify({"error": err}), 400
+    mix, teletrac, ft = _platform_ids(body)
+
+    # A platform account belongs to exactly one client. Letting two
+    # clients claim the same MiX org would put the same vehicles under
+    # both names and make the per-client access boundary meaningless -
+    # and classify_fleet would log a conflict for every affected plate.
+    conflict = _platform_account_conflict(name, mix, teletrac, ft)
+    if conflict:
+        return jsonify({"error": conflict}), 409
+
     try:
         import sheets_store
-        sheets_store.add_client(name, emails)
+        sheets_store.add_client(name, emails, mix or [], teletrac or [], ft or [])
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
         return jsonify({"error": f"Could not save the client: {e}"}), 503
-    return jsonify({"name": name, "emails": emails}), 201
+    _invalidate_client_registry()
+    return jsonify({"name": name, "emails": emails, "mixOrgIds": mix or [],
+                    "teletracClientIds": teletrac or [], "ftCloudFleetIds": ft or []}), 201
+
+
+def _platform_account_conflict(name, mix, teletrac, ft):
+    """Returns a human-readable message if any of these platform
+    accounts is already mapped to a DIFFERENT client, else None."""
+    try:
+        import sheets_store
+        existing = sheets_store.load_clients()
+    except Exception:
+        return None  # can't check - don't block the write on it
+    for other in existing:
+        if other["name"].strip().lower() == name.strip().lower():
+            continue
+        for requested, key, label in ((mix, "mixOrgIds", "MiX organisation"),
+                                      (teletrac, "teletracClientIds", "Teletrac client"),
+                                      (ft, "ftCloudFleetIds", "FT Cloud fleet")):
+            clash = set(requested or []) & set(other.get(key) or [])
+            if clash:
+                return (f"That {label} is already mapped to '{other['name']}'. "
+                        f"A platform account can only belong to one client.")
+    return None
+
+
+def _invalidate_client_registry():
+    """The pollers memoise the registry for a few minutes; after an edit
+    they should pick it up on the next cycle, not minutes later."""
+    try:
+        import client_registry
+        client_registry.invalidate_cache()
+    except Exception as e:
+        print(f"Could not invalidate the client registry cache: {e}")
+
+
+@app.route("/api/clients/<name>/platforms", methods=["PUT"])
+@login_required
+def api_set_client_platforms(name):
+    """
+    Remaps which platform accounts belong to this client. Omitting a
+    platform leaves it unchanged; sending an empty list clears it,
+    which is a different and meaningful instruction ("this client is no
+    longer on that platform").
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    mix, teletrac, ft = _platform_ids(body)
+    if mix is None and teletrac is None and ft is None:
+        return jsonify({"error": "Nothing to update - supply at least one platform's ids"}), 400
+
+    conflict = _platform_account_conflict(name, mix, teletrac, ft)
+    if conflict:
+        return jsonify({"error": conflict}), 409
+
+    try:
+        import sheets_store
+        found = sheets_store.set_client_platforms(name, mix, teletrac, ft)
+    except Exception as e:
+        return jsonify({"error": f"Could not save: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No client called '{name}'"}), 404
+    _invalidate_client_registry()
+    return jsonify({"name": name, "mixOrgIds": mix, "teletracClientIds": teletrac,
+                    "ftCloudFleetIds": ft})
 
 
 @app.route("/api/clients/<name>/emails", methods=["PUT"])
@@ -382,6 +530,9 @@ def api_delete_client(name):
         return jsonify({"error": f"Could not delete: {e}"}), 503
     if not found:
         return jsonify({"error": f"No client called '{name}'"}), 404
+    # Its platform accounts are no longer claimed by anyone - stop the
+    # pollers fetching them on the next cycle rather than minutes later.
+    _invalidate_client_registry()
     return jsonify({"ok": True})
 
 

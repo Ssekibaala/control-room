@@ -71,6 +71,19 @@ class MixApiClient:
             headers["Content-Type"] = "application/json"
         return headers
 
+    def get_organisation_groups(self):
+        """
+        Every organisation these credentials can see, as
+        [{"GroupId": ..., "Name": ...}]. Backs the admin UI's MiX
+        dropdown so a client is mapped by picking a name rather than by
+        pasting a 19-digit id - the ids are indistinguishable by eye and
+        a single wrong digit silently maps a client to the wrong fleet.
+        """
+        url = f"{BASE_URL}/organisationgroups"
+        resp = requests.get(url, headers=self._headers(), timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+
     def get_assets(self, org_id):
         """All assets for one organisation. GET /assets/group/{orgId}."""
         url = f"{BASE_URL}/assets/group/{org_id}"
