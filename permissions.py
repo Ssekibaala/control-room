@@ -42,6 +42,7 @@ PANEL_LABELS = {
     "p-tunconfirmed": "Unconfirmed Cases",
     "p-tquality": "Data Quality Log",
     "p-tchecked": "Checked Assets",
+    "p-asset-install": "Asset Install Dates",
 }
 
 # Which data sections each panel needs to render. This is what makes
@@ -96,6 +97,10 @@ _DEFAULT_PANEL_ACCESS = {
     "p-tunconfirmed":  ("admin", "technician"),
     "p-tquality":      ("admin", "technician"),
     "p-tchecked":      ("admin", "technician"),
+    # Billing tool: pulls every asset across every org straight from the
+    # MiX API on demand. Admin-only, deliberately not technician - unlike
+    # every other panel above, which is operational.
+    "p-asset-install": ("admin",),
 }
 
 # Overrides saved from the Roles & Visibility editor live in their own

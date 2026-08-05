@@ -452,6 +452,18 @@
   .export-menu button:last-child { border-bottom:none; }
   .export-menu button:hover { background:var(--hover-surface); }
 
+  .picker-toggle .chev { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2.5; margin-left:6px; transition:transform 0.15s; }
+  .picker-toggle[aria-expanded="true"] .chev { transform:rotate(180deg); }
+  .picker-menu { min-width:220px; max-width:280px; padding:6px; }
+  .picker-menu-actions { display:flex; gap:6px; padding:4px 6px 8px; border-bottom:1px solid var(--divider); margin-bottom:4px; }
+  .picker-menu-actions button { background:none; border:none; color:var(--primary); font-size:11.5px; font-weight:600; cursor:pointer; padding:2px 0; }
+  .picker-menu-actions button:hover { text-decoration:underline; }
+  .picker-menu-list { max-height:240px; overflow-y:auto; }
+  .picker-menu-list label { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; font-size:12.5px;
+    font-weight:400; color:var(--text-primary); cursor:pointer; }
+  .picker-menu-list label:hover { background:var(--hover-surface); }
+  .picker-menu-empty { padding:10px 8px; font-size:12px; color:var(--text-tertiary); }
+
   .notif-menu { min-width:280px; padding:6px; }
   .notif-menu-title { font-size:10px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-tertiary);
     font-weight:700; padding:8px 10px 6px; }
@@ -1060,9 +1072,15 @@
 {% endif %}
       </nav>
 
-      {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels %}
+      {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels or 'p-asset-install' in allowed_panels %}
       <div class="nav-group-label">Settings</div>
       <nav class="nav-group">
+        {% if 'p-asset-install' in allowed_panels %}
+<button class="nav-item" data-panel="p-asset-install" data-label="Asset Install Dates">
+          <svg class="nav-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <span>Asset Install Dates</span>
+        </button>
+{% endif %}
         {% if 'p-settings' in allowed_panels %}
 <button class="nav-item" data-panel="p-settings" data-label="Settings">
           <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -1627,6 +1645,49 @@
             shared on the Sheet itself &mdash; this button only saves you passing the link around.</p>
         </div>
         {% endif %}
+      </section>
+{% endif %}
+
+      {% if 'p-asset-install' in allowed_panels %}
+<section id="p-asset-install" class="panel">
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Asset Install Dates</h3>
+            <span class="chart-subhead">Pulls assets straight from the MiX API with who installed them and when &mdash; use this to find assets added in a given month for billing.</span>
+          </div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
+            <div class="export-wrap">
+              <button type="button" class="btn-secondary picker-toggle" id="aid-clients-toggle" aria-expanded="false">
+                Organisations: <strong id="aid-clients-summary" style="margin-left:4px">All</strong>
+                <svg class="chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="export-menu picker-menu" id="aid-clients-menu">
+                <div class="picker-menu-actions">
+                  <button type="button" data-action="all">Select all</button>
+                  <button type="button" data-action="none">Clear</button>
+                </div>
+                <div id="aid-clients-list" class="picker-menu-list"></div>
+              </div>
+            </div>
+            <div class="export-wrap">
+              <button type="button" class="btn-secondary picker-toggle" id="aid-fields-toggle" aria-expanded="false">
+                Columns: <strong id="aid-fields-summary" style="margin-left:4px">Core only</strong>
+                <svg class="chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="export-menu picker-menu" id="aid-fields-menu">
+                <div id="aid-fields-list" class="picker-menu-list"></div>
+              </div>
+            </div>
+            <button class="btn-secondary" id="aid-refresh-btn">Fetch from MiX</button>
+            <span id="aid-status" class="settings-note" style="margin:0"></span>
+            <label style="margin-left:auto; display:flex; align-items:center; gap:6px">
+              Month
+              <input type="month" id="aid-month-filter">
+            </label>
+            <a class="btn-secondary" id="aid-export-btn" href="/api/admin/asset-install-dates/export">Export to Excel</a>
+          </div>
+          <div class="table-wrap"><table id="aid-table"></table></div>
+        </div>
       </section>
 {% endif %}
 
@@ -2413,6 +2474,7 @@ const PANEL_SUBS = {
   'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
   'p-activity': 'Every feedback comment across every vehicle, newest first',
   'p-users': 'Team accounts and role assignment',
+  'p-asset-install': 'Live from the MiX API - find assets added in a given month, for billing',
 };
 let ALLOWED_PANELS = null;
 
@@ -3242,6 +3304,219 @@ if (usersForm) {
       });
   }
   fetchUsers();
+  // Accounts are edited from other sessions too (another admin adding/
+  // deactivating someone) - re-read while this panel is actually open
+  // so a change elsewhere shows up without a manual page reload, same
+  // idea as the main dashboard's own 60s poll further down.
+  setInterval(() => {
+    const panel = document.getElementById('p-users');
+    if (panel && panel.classList.contains('active')) fetchUsers();
+  }, 60000);
+
+  // ---- Asset Install Dates (admin billing tool) ----
+  const aidPanel = document.getElementById('p-asset-install');
+  if (aidPanel) {
+    // Core columns always shown (no ids - see fleet_logic/asset_install_report.py
+    // CORE_FIELDS/OPTIONAL_FIELDS, kept in sync with this list by hand).
+    const AID_CORE_COLS = [
+      {key: 'client', label: 'Client'}, {key: 'fleetNumber', label: 'Fleet Number'},
+      {key: 'plate', label: 'Plate / Registration'}, {key: 'installedBy', label: 'Installed By'},
+      {key: 'installDate', label: 'Install Date'}, {key: 'installMonthDisplay', label: 'Install Month'},
+    ];
+    const AID_OPTIONAL_COLS = [
+      {key: 'userState', label: 'State'}, {key: 'make', label: 'Make'}, {key: 'model', label: 'Model'},
+      {key: 'year', label: 'Year'}, {key: 'vin', label: 'VIN Number'}, {key: 'odometer', label: 'Odometer'},
+      {key: 'fuelType', label: 'Fuel Type'}, {key: 'notes', label: 'Notes'},
+    ];
+    let AID_ROWS = [];
+    const statusEl = document.getElementById('aid-status');
+    const refreshBtn = document.getElementById('aid-refresh-btn');
+    const monthInput = document.getElementById('aid-month-filter');
+    const exportBtn = document.getElementById('aid-export-btn');
+    const clientsToggle = document.getElementById('aid-clients-toggle');
+    const clientsMenu = document.getElementById('aid-clients-menu');
+    const clientsList = document.getElementById('aid-clients-list');
+    const clientsSummary = document.getElementById('aid-clients-summary');
+    const fieldsToggle = document.getElementById('aid-fields-toggle');
+    const fieldsMenu = document.getElementById('aid-fields-menu');
+    const fieldsList = document.getElementById('aid-fields-list');
+    const fieldsSummary = document.getElementById('aid-fields-summary');
+    let aidLoaded = false;
+
+    // Small dropdown-popover pattern, same open/close/outside-click
+    // behaviour as the header's Export menu - a compact button that
+    // expands into a checkbox list, instead of every checkbox sitting
+    // permanently on the page.
+    function aidClosePickers() {
+      [clientsMenu, fieldsMenu].forEach(m => m.classList.remove('open'));
+      [clientsToggle, fieldsToggle].forEach(b => b.setAttribute('aria-expanded', 'false'));
+    }
+    function aidTogglePicker(toggleBtn, menuEl) {
+      const willOpen = !menuEl.classList.contains('open');
+      aidClosePickers();
+      if (willOpen) { menuEl.classList.add('open'); toggleBtn.setAttribute('aria-expanded', 'true'); }
+    }
+    clientsToggle.addEventListener('click', (e) => { e.stopPropagation(); aidTogglePicker(clientsToggle, clientsMenu); });
+    fieldsToggle.addEventListener('click', (e) => { e.stopPropagation(); aidTogglePicker(fieldsToggle, fieldsMenu); });
+    document.addEventListener('click', aidClosePickers);
+    clientsMenu.addEventListener('click', (e) => e.stopPropagation());
+    fieldsMenu.addEventListener('click', (e) => e.stopPropagation());
+
+    // Optional-field checkboxes don't need a fetch - they only control
+    // which columns of already-fetched data are shown/exported.
+    fieldsList.innerHTML = AID_OPTIONAL_COLS.map(c =>
+      '<label><input type="checkbox" data-field="' + c.key + '"> ' + escapeHTML(c.label) + '</label>').join('');
+
+    function aidSelectedFields() {
+      return Array.from(fieldsList.querySelectorAll('input[data-field]:checked')).map(cb => cb.dataset.field);
+    }
+    function aidSelectedClients() {
+      const boxes = Array.from(clientsList.querySelectorAll('input[data-client]'));
+      const checked = boxes.filter(cb => cb.checked).map(cb => cb.dataset.client);
+      return checked.length === boxes.length ? [] : checked;  // all selected == no filter
+    }
+    function aidCurrentCols() {
+      const optional = AID_OPTIONAL_COLS.filter(c => aidSelectedFields().includes(c.key));
+      return AID_CORE_COLS.concat(optional);
+    }
+    function aidUpdateSummaries() {
+      const boxes = Array.from(clientsList.querySelectorAll('input[data-client]'));
+      const checkedClients = boxes.filter(cb => cb.checked);
+      clientsSummary.textContent = !boxes.length ? 'None available'
+        : checkedClients.length === boxes.length ? 'All'
+        : checkedClients.length === 0 ? 'None'
+        : checkedClients.length === 1 ? checkedClients[0].dataset.client
+        : checkedClients.length + ' selected';
+      const fieldCount = aidSelectedFields().length;
+      fieldsSummary.textContent = fieldCount === 0 ? 'Core only' : fieldCount + ' extra';
+    }
+    function aidRedraw() {
+      const month = monthInput.value;
+      const filtered = month ? AID_ROWS.filter(r => r.installMonth === month) : AID_ROWS;
+      renderTable('aid-table', filtered, aidCurrentCols());
+    }
+    function aidUpdateExportLink() {
+      const params = new URLSearchParams();
+      if (monthInput.value) params.set('month', monthInput.value);
+      const fields = aidSelectedFields();
+      if (fields.length) params.set('fields', fields.join(','));
+      const qs = params.toString();
+      exportBtn.href = '/api/admin/asset-install-dates/export' + (qs ? ('?' + qs) : '');
+    }
+    function aidOnFieldsChange() { aidUpdateSummaries(); aidUpdateExportLink(); aidRedraw(); }
+    monthInput.addEventListener('change', () => { aidUpdateExportLink(); aidRedraw(); });
+    fieldsList.addEventListener('change', aidOnFieldsChange);
+    clientsList.addEventListener('change', aidUpdateSummaries);
+    // Default to the current month rather than an empty picker - "what
+    // do I bill this month" is the common case, and a set value also
+    // reads as "August 2026" instead of the empty state's placeholder
+    // dashes. Still fully clearable (the native month input's own "x")
+    // to go back to every month.
+    const now = new Date();
+    monthInput.value = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    aidUpdateExportLink();
+    aidUpdateSummaries();
+
+    clientsMenu.querySelector('[data-action="all"]').addEventListener('click', () => {
+      clientsList.querySelectorAll('input[data-client]').forEach(cb => cb.checked = true);
+      aidUpdateSummaries();
+    });
+    clientsMenu.querySelector('[data-action="none"]').addEventListener('click', () => {
+      clientsList.querySelectorAll('input[data-client]').forEach(cb => cb.checked = false);
+      aidUpdateSummaries();
+    });
+
+    function aidLoadClients() {
+      // Which names are currently checked, so a background refresh (a
+      // client was just added/removed elsewhere) doesn't wipe out
+      // whatever the admin already ticked here. A name never seen
+      // before defaults to checked - a newly added organisation should
+      // show up ready to report on, not silently excluded.
+      const previouslyChecked = new Set(
+        Array.from(clientsList.querySelectorAll('input[data-client]'))
+          .filter(cb => cb.checked).map(cb => cb.dataset.client));
+      const hadAnyBefore = clientsList.querySelectorAll('input[data-client]').length > 0;
+
+      return fetch('/api/admin/asset-install-dates/clients')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => {
+          const names = data.clients || [];
+          clientsList.innerHTML = names.map(n =>
+            '<label><input type="checkbox" data-client="' + escapeHTML(n) + '"' +
+            ((!hadAnyBefore || previouslyChecked.has(n)) ? ' checked' : '') + '> ' + escapeHTML(n) + '</label>').join('')
+            || '<div class="picker-menu-empty">No clients have a MiX organisation mapped yet.</div>';
+          aidUpdateSummaries();
+        })
+        .catch(() => {
+          if (!clientsList.children.length) {
+            clientsList.innerHTML = '<div class="picker-menu-empty">Could not load the client list.</div>';
+            clientsSummary.textContent = 'Unavailable';
+          }
+        });
+    }
+    // Auto-refresh while this panel is open, same idea as the main
+    // dashboard's own polling below - so a newly added organisation
+    // shows up here without needing a manual page reload.
+    setInterval(() => {
+      if (document.getElementById('p-asset-install').classList.contains('active')) aidLoadClients();
+    }, 60000);
+
+    function aidRender(data) {
+      AID_ROWS = data.rows || [];
+      aidRedraw();
+      if (data.fetchedAt) {
+        const scope = (data.clients && data.clients.length) ? data.clients.join(', ') : 'all clients';
+        statusEl.textContent = AID_ROWS.length + ' assets (' + scope + ') — fetched ' + new Date(data.fetchedAt).toLocaleString();
+      } else {
+        statusEl.textContent = 'No data yet — pick organisation(s) and click "Fetch from MiX".';
+      }
+      const errCount = data.errors ? Object.keys(data.errors).length : 0;
+      if (errCount) statusEl.textContent += ' (' + errCount + ' org' + (errCount === 1 ? '' : 's') + ' failed to fetch)';
+    }
+
+    function aidLoad() {
+      fetch('/api/admin/asset-install-dates')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => {
+          aidRender(data);
+          if (data.running) {
+            refreshBtn.disabled = true; refreshBtn.textContent = 'Fetching…';
+            setTimeout(aidLoad, 4000);
+          } else {
+            refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from MiX';
+          }
+        })
+        .catch(() => { statusEl.textContent = 'Could not load asset data.'; });
+    }
+
+    refreshBtn.addEventListener('click', () => {
+      refreshBtn.disabled = true; refreshBtn.textContent = 'Fetching…';
+      statusEl.textContent = 'Fetching from MiX — this can take a minute or two.';
+      fetch('/api/admin/asset-install-dates/refresh', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({clients: aidSelectedClients()}),
+      })
+        .then(r => r.json())
+        .then(() => setTimeout(aidLoad, 3000))
+        .catch(() => {
+          refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from MiX';
+          statusEl.textContent = 'Could not start the fetch.';
+        });
+    });
+
+    // The org list is cheap (reads the client registry, no live MiX
+    // call) so it re-fetches on every visit to this panel, not just the
+    // first - that's what actually picks up an organisation added
+    // moments ago. The cached asset snapshot (aidLoad) still only loads
+    // once per page load: re-fetching it is a live MiX API call across
+    // every org, deliberately manual via "Fetch from MiX", not on nav.
+    document.querySelectorAll('.nav-item[data-panel="p-asset-install"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        aidLoadClients();
+        if (!aidLoaded) { aidLoaded = true; aidLoad(); }
+      });
+    });
+  }
 
   // ---- Client Contacts ----
   const clientsList = document.getElementById('clients-list');
@@ -3379,6 +3654,16 @@ if (usersForm) {
     // names in their tooltips instead of raw 19-digit ids. Chained
     // rather than parallel because renderClientsList reads them.
     fetchPlatformAccounts().then(fetchClients);
+    // Re-read while this panel is open so a client added/removed from
+    // another session (or another browser tab) shows up here without a
+    // manual reload - same 60s cadence as the rest of the admin lists.
+    // Not re-fetching platform accounts here: those are three live API
+    // calls, deliberately fetched once per page load (see comment above
+    // fetchPlatformAccounts), not something to poll every minute.
+    setInterval(() => {
+      const panel = document.getElementById('p-users');
+      if (panel && panel.classList.contains('active')) fetchClients();
+    }, 60000);
 
     const ccBackdrop = document.getElementById('createclient-backdrop');
     const clientForm = document.getElementById('client-create-form');

@@ -6,6 +6,7 @@ data/_refresh_lock.json
 data/mix_api_snapshot.json
 data/teletrac_api_snapshot.json
 data/ft_cloud_api_snapshot.json
+data/mix_asset_install_snapshot.json
 # Runtime cache of the Sheets-backed client registry, rebuilt on every
 # successful read - machine-local state, not configuration.
 data/client_registry.json

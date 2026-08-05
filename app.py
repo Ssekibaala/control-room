@@ -1456,6 +1456,143 @@ def _write_json_atomic(path, data):
 
 MIX_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_api_snapshot.json")
 
+MIX_ASSET_INSTALL_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_asset_install_snapshot.json")
+_asset_install_poll_state = {"running": False}
+
+
+def _mix_asset_install_poll_once(client_names=None):
+    """
+    One fetch-every-asset cycle for the admin billing panel
+    (fleet_logic/asset_install_report.py), scoped to client_names if
+    given (a non-empty list of client_registry names) or every MiX
+    client if not. Deliberately its own on-demand fetch rather than
+    folded into _mix_api_poll_once(): that poller runs every few
+    minutes for live positions, this is an occasional lookup an admin
+    triggers when reconciling a month's billing, and doesn't need to
+    run unattended at all.
+    """
+    import client_registry
+    from adapters.mix_api_client import MixApiClient
+    import asset_install_report
+
+    settings = _load_settings()
+    clients = _poll_registry(settings)
+    if client_names:
+        wanted = {str(n).strip() for n in client_names if str(n).strip()}
+        clients = [c for c in clients if c.get("name") in wanted]
+    org_ids = client_registry.ids_for_platform(clients, "mix")
+    if not org_ids:
+        return {"status": "skipped", "reason": "no MiX organisations mapped to any selected client"}
+    owner = client_registry.platform_index(clients)["mix"]
+
+    client = MixApiClient(inter_org_delay_seconds=settings["MIX_API_INTER_ORG_DELAY_SECONDS"])
+    if not client.is_configured():
+        return {"status": "skipped", "reason": "MIX_CLIENT_ID/MIX_CLIENT_SECRET/MIX_USERNAME/MIX_PASSWORD not set"}
+
+    rows, errors = asset_install_report.fetch_all_assets(
+        client, org_ids, owner, settings["MIX_API_INTER_ORG_DELAY_SECONDS"])
+    snapshot = {
+        "fetchedAt": now_eat().isoformat(),
+        "clients": client_registry.client_names(clients),
+        "count": len(rows),
+        "errors": errors,
+        "rows": rows,
+    }
+    _write_json_atomic(MIX_ASSET_INSTALL_SNAPSHOT_PATH, snapshot)
+    return {"status": "ok", "count": len(rows)}
+
+
+@app.route("/api/admin/asset-install-dates/clients", methods=["GET"])
+@login_required
+def api_asset_install_dates_clients():
+    """Every client with at least one MiX org mapped, for the admin
+    panel's "which organisation(s)" picker."""
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    import client_registry
+    clients = _poll_registry(_load_settings())
+    names = client_registry.client_names([c for c in clients if c.get("mixOrgIds")])
+    return jsonify({"clients": names})
+
+
+@app.route("/api/admin/asset-install-dates", methods=["GET"])
+@login_required
+def api_asset_install_dates():
+    """Read-only view of the last fetch, for the admin panel table. Not
+    role-gated by MANAGE_USERS_ROLES like the rest of Settings - this is
+    admin-only, see permissions.PANEL_ACCESS["p-asset-install"]."""
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    snapshot = {"fetchedAt": None, "rows": [], "errors": {}, "clients": []}
+    if os.path.exists(MIX_ASSET_INSTALL_SNAPSHOT_PATH):
+        try:
+            with open(MIX_ASSET_INSTALL_SNAPSHOT_PATH) as f:
+                snapshot = json.load(f)
+        except (OSError, ValueError):
+            pass
+    snapshot["running"] = _asset_install_poll_state["running"]
+    return jsonify(snapshot)
+
+
+@app.route("/api/admin/asset-install-dates/refresh", methods=["POST"])
+@login_required
+def api_asset_install_dates_refresh():
+    """Manual trigger - runs in the background (one MiX call per org,
+    rate-limited, so this can take a while with many orgs); poll
+    /api/admin/asset-install-dates for the result. Body: optional
+    {"clients": [...]} to scope the fetch to specific clients instead
+    of every MiX client."""
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if _asset_install_poll_state["running"]:
+        return jsonify({"status": "already-running"})
+
+    body = request.get_json(force=True, silent=True) or {}
+    client_names = body.get("clients") or None
+
+    def _run():
+        _asset_install_poll_state["running"] = True
+        try:
+            result = _mix_asset_install_poll_once(client_names)
+            print(f"Asset install date fetch: {result}")
+        except Exception as e:
+            print(f"Asset install date fetch failed: {e}")
+        finally:
+            _asset_install_poll_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/admin/asset-install-dates/export")
+@login_required
+def api_asset_install_dates_export():
+    """Excel download of the last fetch, optionally scoped to one
+    month (?month=YYYY-MM) - the "what do I bill this month" view -
+    and to whichever optional columns were ticked (?fields=make,model,...)."""
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    if not os.path.exists(MIX_ASSET_INSTALL_SNAPSHOT_PATH):
+        return jsonify({"error": "No data yet - fetch from MiX first."}), 404
+    try:
+        with open(MIX_ASSET_INSTALL_SNAPSHOT_PATH) as f:
+            snapshot = json.load(f)
+    except (OSError, ValueError):
+        return jsonify({"error": "Snapshot file is unreadable - fetch from MiX again."}), 503
+
+    month = (request.args.get("month") or "").strip() or None
+    fields = [f.strip() for f in (request.args.get("fields") or "").split(",") if f.strip()]
+    import asset_install_report
+    data = asset_install_report.build_workbook(snapshot.get("rows") or [], month=month, fields=fields)
+    month_label = asset_install_report.month_display(month)
+    fname = (f"GTL_asset_install_dates_{month_label.replace(' ', '_')}.xlsx" if month_label
+              else "GTL_asset_install_dates_all.xlsx")
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
 
 def _load_settings():
     return _load_settings_from(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
