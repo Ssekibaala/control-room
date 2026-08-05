@@ -4,21 +4,21 @@
  * This is the ENTIRE Apps Script. It does not read Gmail, does not
  * touch any mailbox, mail.teletracfleets.com isn't a Gmail account
  * so GmailApp couldn't read it anyway. This script's only job is to
- * be a free, reliable clock that pings the Render app once a day.
+ * be a free, reliable clock that pings the deployed app once a day.
  * All the real work (reading email, downloading reports, analysis)
- * happens in Python on Render.
+ * happens in Python, currently deployed on Northflank (see DEPLOY.md).
  *
  * SETUP:
  *   1. script.google.com -> New project, paste this in.
- *   2. Replace RENDER_APP_URL and API_KEY below.
+ *   2. Replace APP_URL and API_KEY below.
  *   3. Run `setupDailyTrigger` once manually to install the trigger
  *      (Apps Script will ask you to authorize it, that's normal).
  *   4. Check Triggers (clock icon, left sidebar) to confirm it's set
  *      for 4:15 AM daily.
  */
 
-const RENDER_APP_URL = 'https://your-app-name.onrender.com/api/import';
-const API_KEY = 'replace-with-the-same-value-as-IMPORT_API_KEY-on-render';
+const APP_URL = 'https://your-app-name.your-northflank-domain/api/import';
+const API_KEY = 'replace-with-the-same-value-as-IMPORT_API_KEY-on-your-deploy';
 
 function runDailyImport() {
   const options = {
@@ -27,7 +27,7 @@ function runDailyImport() {
     muteHttpExceptions: true,   // so a failure doesn't just throw, we can log it below
   };
 
-  const response = UrlFetchApp.fetch(RENDER_APP_URL, options);
+  const response = UrlFetchApp.fetch(APP_URL, options);
   const status = response.getResponseCode();
   const body = response.getContentText();
 
