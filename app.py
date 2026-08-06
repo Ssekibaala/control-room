@@ -1141,6 +1141,16 @@ def respond_submit():
             return jsonify({"error": "This link has already been used to respond."}), 400
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        # Anything else here is a live Google Sheets hiccup (rate limit,
+        # transient API error, etc.), not "misconfigured" like the
+        # RuntimeError case above. Previously this only caught
+        # RuntimeError, so a Sheets APIError propagated all the way out
+        # of the view function - Flask returned its own generic HTML 500
+        # page instead of JSON, which made the confirm page's fetch()
+        # fail its r.json() parse and show "Could not reach the server"
+        # even though the server was reachable and the token was fine.
+        return jsonify({"error": f"Could not check this link right now: {e}. Please try again."}), 503
 
     # The token proves WHICH vehicle this link may answer for - that's the
     # actual security boundary. The pre-selected action is only a default;

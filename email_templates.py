@@ -35,22 +35,58 @@ _LOGO_PATH = os.path.join(os.path.dirname(__file__), "static", "Teletrac_Fleet_S
 MAX_HISTORY_ROWS = 25
 
 
+def _is_probably_local_leftover(url):
+    return any(marker in url.lower() for marker in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+
+def _public_base_url():
+    """
+    Same reasoning as app.py's public_base_url() and run_import.py's
+    _public_base_url() - deliberately reimplemented rather than
+    imported, since this module has no Flask app/request to fall back
+    to and is called from both request and background-thread contexts.
+    """
+    configured = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
+    if configured and _is_probably_local_leftover(configured):
+        return ""
+    return configured.rstrip("/")
+
+
 @functools.lru_cache(maxsize=1)
 def _embedded_logo_src():
     """
-    The logo as a data: URI, embedded directly in the email rather than
-    linked to /static/... on the live app. A linked image depends on the
-    app being reachable *at the moment the mail client renders it* - on
-    a phone, that's whenever the recipient happens to open the message,
-    possibly while the Render service is asleep/cold-starting, which is
-    exactly what was showing up as a broken-image icon. A data URI has
-    no such dependency: the bytes travel inside the email itself.
+    The logo as a data: URI. This used to be the ONLY way the logo was
+    sent, specifically to stop it depending on the live app being
+    reachable at the moment a mail client renders it - a linked image
+    was showing up as a broken-image icon while Render's free tier was
+    asleep/cold-starting.
+
+    It's now only a fallback for when no public URL is configured at
+    all (e.g. local dev): a data: URI has a much worse problem than an
+    occasional cold start - Gmail's iOS/Android apps refuse to render
+    data: image sources entirely, every time, for security reasons.
+    Gmail's own web/desktop client renders them fine, which is exactly
+    why this showed up as "logo missing on phone, fine on PC" once a
+    real recipient actually opened these on their phone.
     """
     try:
         with open(_LOGO_PATH, "rb") as f:
             return "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
     except OSError:
         return None
+
+
+def _logo_src():
+    """
+    A real https:// URL when we have one to link to (renders correctly
+    in every client, including Gmail's mobile apps) - the data: URI
+    fallback only covers local dev / a misconfigured deploy with no
+    PUBLIC_BASE_URL, where there's no reachable URL to link to at all.
+    """
+    base = _public_base_url()
+    if base:
+        return f"{base}/static/Teletrac_Fleet_Solutions_logo.png"
+    return _embedded_logo_src()
 
 
 DEFAULT_CLIENT_LABEL = "Fleet Intelligence"
@@ -73,7 +109,7 @@ def _shell(inner_html, client=None):
     # header, same reasoning as the dashboard sidebar: it's a third-party
     # brand with its own colours, not something to recolour to the app's
     # theme, and it needs real contrast to read at a glance in an inbox.
-    logo_src = _embedded_logo_src()
+    logo_src = _logo_src()
     logo_html = (
         f'<table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;'
         f'border-radius:10px;padding:8px 14px;display:inline-block;"><tr><td>'
