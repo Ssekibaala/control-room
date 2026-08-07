@@ -1208,6 +1208,60 @@
     </div>
   </div>
 
+{% if can_manage_users %}
+  <div class="drill-backdrop" id="sendreport-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Send a report">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">Send a report</div>
+          <div class="drill-subtitle">Email one of the standard reports to any address &mdash; this does not
+            change the weekly schedule or who normally receives it.</div>
+        </div>
+        <button class="icon-btn" id="sendreport-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body padded">
+        <form id="sendreport-form">
+          <div class="ff-row">
+            <label for="sr-to">Send to</label>
+            <input type="text" id="sr-to" placeholder="name@company.com" autocomplete="off" required>
+            <div class="ff-hint">One address, or several separated by commas (up to 5).</div>
+          </div>
+          <div class="ff-row">
+            <label>What to send</label>
+            <div class="client-checklist" id="sr-reports">
+              <label><input type="checkbox" value="weekly_checkin" checked> Weekly check-in &mdash; vehicles awaiting the customer's confirmation</label>
+              <label><input type="checkbox" value="critical_assets"> Critical assets &mdash; vehicles in Technical Escalation</label>
+              <label><input type="checkbox" value="known_issues"> Known issues &mdash; re-confirmation of explained faults</label>
+              <label><input type="checkbox" value="tamper_report"> Tampering &amp; location-integrity report</label>
+              <label><input type="checkbox" value="asset"> A single asset &mdash; full status and comment history</label>
+            </div>
+          </div>
+          <div class="ff-row" id="sr-client-row">
+            <label for="sr-client">Client fleet</label>
+            <select id="sr-client"><option value="">Loading&hellip;</option></select>
+            <div class="ff-hint">Which fleet the reports above should cover. Only that client's vehicles are
+              included.</div>
+          </div>
+          <div class="ff-row" id="sr-plate-row" style="display:none">
+            <label for="sr-plate">Plate</label>
+            <input type="text" id="sr-plate" placeholder="e.g. KAA 123A" autocomplete="off">
+            <div class="ff-hint">The single-asset report is sent for this vehicle.</div>
+          </div>
+          <div class="ff-row" id="sr-note-row" style="display:none">
+            <label for="sr-note">Note to include <span style="font-weight:400;opacity:.7">(optional)</span></label>
+            <textarea id="sr-note" rows="3" placeholder="Anything you want the recipient to read first"></textarea>
+            <div class="ff-hint">Shown at the top of the single-asset email, signed with your username.</div>
+          </div>
+          <div id="sr-msg" class="ff-msg"></div>
+          <button type="submit" id="sr-submit" class="btn-primary user-form-submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 {% if 'p-users' in allowed_panels %}
   <div class="drill-backdrop" id="createuser-backdrop">
     <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Create account">
@@ -1450,6 +1504,9 @@
         <span class="header-pill" id="checkin-last-pill" title="Who last sent a manual check-in, and when">Check-in: loading&hellip;</span>
         <button class="icon-btn" id="checkin-trigger-btn" title="Send a check-in now: pending confirmations, critical assets, and known-issue re-confirmations">
           <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3.5-7.1"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" id="sendreport-btn" title="Email a report to a specific address">
+          <svg viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7z"/><path d="M22 2 11 13"/></svg>
         </button>
         {% endif %}
         {% if can_export_integrity or can_export_tampering %}
@@ -2683,6 +2740,15 @@ function refreshCheckinPill() {
       ? 'Check-in: ' + d.lastCheckin.by + ' · ' + d.lastCheckin.at
       : 'Check-in: never sent manually';
   }).catch(() => { pill.textContent = 'Check-in: unknown'; });
+  // The automatic schedule lives in settings.ini, where nobody using
+  // the dashboard can see it - so the pill's tooltip says when the next
+  // one actually goes out rather than leaving "weekly" to be guessed at.
+  fetch('/api/digests/schedule').then(r => r.json()).then(s => {
+    if (s && s.time) {
+      pill.title = 'Automatic check-in: ' + (s.days || []).join(', ') + ' at ' + s.time
+        + ' (window ' + s.windowHours + 'h)' + (s.windowOpen ? ' — window open now' : '');
+    }
+  }).catch(() => {});
 }
 wireOnce('checkin-trigger', () => {
   refreshCheckinPill();
@@ -4930,6 +4996,86 @@ document.querySelectorAll('#tamper-cards .route-card').forEach((cardEl, i) => {
   });
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
 })();
+
+// ---- Send a report to a specific address ----
+// Deliberately separate from the check-in button next to it: that one
+// runs the real scheduled send to the real recipients, this one mails a
+// copy to somebody who isn't on the list. The server refuses anything
+// outside this session's client scope and never records the send
+// against the weekly schedule (see app.py's /api/notifications/send).
+wireOnce('sendreport', () => {
+  const backdrop = document.getElementById('sendreport-backdrop');
+  const openBtn = document.getElementById('sendreport-btn');
+  if (!backdrop || !openBtn) return;
+  const form = document.getElementById('sendreport-form');
+  const msg = document.getElementById('sr-msg');
+  const submit = document.getElementById('sr-submit');
+  const clientSel = document.getElementById('sr-client');
+  const boxes = () => Array.from(document.querySelectorAll('#sr-reports input[type=checkbox]'));
+  const chosen = () => boxes().filter(b => b.checked).map(b => b.value);
+
+  function syncRows() {
+    const picked = chosen();
+    const assetOnly = picked.length === 1 && picked[0] === 'asset';
+    document.getElementById('sr-plate-row').style.display = picked.includes('asset') ? '' : 'none';
+    document.getElementById('sr-note-row').style.display = picked.includes('asset') ? '' : 'none';
+    // The client selector is only needed by the fleet-wide reports; a
+    // single asset already knows which fleet it belongs to.
+    document.getElementById('sr-client-row').style.display = assetOnly ? 'none' : '';
+  }
+  function close() { backdrop.classList.remove('open'); }
+  function open() {
+    msg.textContent = ''; msg.className = 'ff-msg';
+    backdrop.classList.add('open');
+    syncRows();
+    fetch('/api/clients').then(r => r.json()).then(d => {
+      const names = (d.clients || []).map(c => c.name).filter(Boolean).sort();
+      clientSel.innerHTML = names.length
+        ? names.map(n => '<option value="' + escapeHTML(n) + '">' + escapeHTML(n) + '</option>').join('')
+        : '<option value="">No clients available</option>';
+    }).catch(() => { clientSel.innerHTML = '<option value="">Could not load clients</option>'; });
+  }
+
+  openBtn.addEventListener('click', open);
+  document.getElementById('sendreport-close').addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && backdrop.classList.contains('open')) close();
+  });
+  boxes().forEach(b => b.addEventListener('change', syncRows));
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const reports = chosen();
+    if (!reports.length) { msg.className = 'ff-msg error'; msg.textContent = 'Pick at least one report.'; return; }
+    submit.disabled = true;
+    msg.className = 'ff-msg'; msg.textContent = 'Sending…';
+    fetch('/api/notifications/send', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        to: document.getElementById('sr-to').value,
+        reports: reports,
+        client: clientSel.value,
+        plate: document.getElementById('sr-plate').value,
+        note: document.getElementById('sr-note').value,
+      }),
+    }).then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (!ok || d.error) { msg.className = 'ff-msg error'; msg.textContent = d.error || 'Could not send.'; return; }
+        // Report what did NOT go out as well as what did: "nothing to
+        // report" is a perfectly normal outcome for a report whose
+        // section is empty this week, and silently showing "Sent"
+        // would leave the sender believing an email arrived that
+        // never did.
+        const skipped = Object.entries(d.skipped || {});
+        msg.className = d.sent.length ? 'ff-msg success' : 'ff-msg error';
+        msg.textContent = (d.sent.length ? 'Sent ' + d.sent.join(', ') + ' to ' + d.to.join(', ') + '. ' : '')
+          + (skipped.length ? 'Not sent: ' + skipped.map(([k, v]) => k + ' (' + v + ')').join('; ') : '');
+      })
+      .catch(() => { msg.className = 'ff-msg error'; msg.textContent = 'Could not reach the server.'; })
+      .finally(() => { submit.disabled = false; });
+  });
+});
 
 boot();
 

@@ -1299,33 +1299,41 @@ STALE_THRESHOLD_HOURS = 2
 LOCK_COOLDOWN_MINUTES = 10
 
 
-def _claim_refresh_lock():
+def _claim_lock(path, cooldown_minutes):
     """
-    True if this call just claimed the right to trigger a refresh,
-    False if someone else already holds it. Uses O_CREAT|O_EXCL, which
-    is atomic at the OS level, so this is safe across gunicorn's
-    multiple worker *processes* on Render, not just threads in one -
-    a plain in-memory flag would only ever be seen by one worker.
+    True if this call just claimed the lock, False if someone else
+    already holds it. Uses O_CREAT|O_EXCL, which is atomic at the OS
+    level, so this is safe across gunicorn's multiple worker
+    *processes*, not just threads in one - a plain in-memory flag would
+    only ever be seen by one worker.
+
+    A held lock older than cooldown_minutes is treated as abandoned
+    (the holder crashed, the dyno cycled) and stolen, so a dead process
+    can't wedge this shut forever.
     """
     try:
-        fd = os.open(REFRESH_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
             json.dump({"triggered_at": time.time()}, f)
         return True
     except FileExistsError:
         try:
-            with open(REFRESH_LOCK_PATH) as f:
+            with open(path) as f:
                 held = json.load(f)
             age_minutes = (time.time() - held.get("triggered_at", 0)) / 60
         except (OSError, ValueError, json.JSONDecodeError):
-            age_minutes = LOCK_COOLDOWN_MINUTES  # unreadable lock, treat as stale, safe to steal
-        if age_minutes < LOCK_COOLDOWN_MINUTES:
+            age_minutes = cooldown_minutes  # unreadable lock, treat as stale, safe to steal
+        if age_minutes < cooldown_minutes:
             return False
         try:
-            os.remove(REFRESH_LOCK_PATH)
+            os.remove(path)
         except OSError:
             pass
-        return _claim_refresh_lock()  # one retry now that the stale lock is cleared
+        return _claim_lock(path, cooldown_minutes)  # one retry now that the stale lock is cleared
+
+
+def _claim_refresh_lock():
+    return _claim_lock(REFRESH_LOCK_PATH, LOCK_COOLDOWN_MINUTES)
 
 
 @app.route("/api/refresh-if-stale", methods=["POST"])
@@ -1420,6 +1428,180 @@ def api_checkin_last():
     if not last:
         return jsonify({"lastCheckin": None})
     return jsonify({"lastCheckin": {"by": last["by"], "at": last["at"].strftime("%d %b %Y, %H:%M")}})
+
+
+# ---- Weekly digest scheduler ----------------------------------------
+# The digests go out on a named day and time (settings.ini [digests]
+# weekly_send_day / weekly_send_time), which nothing else in this app was
+# awake to honour: the only clock is the Apps Script daily ping at ~04:15,
+# and before this the digests piggybacked on whatever import happened to
+# run, gated on elapsed days. That gate floored to whole days, so a cycle
+# running even a minute early pushed the send to the next day and the
+# weekly check-in walked forward through the week.
+#
+# This thread just ticks; it decides nothing. Every tick reclassifies from
+# files already on disk and asks notifications.weekly_slot_start whether
+# we're inside a configured window - so ticking often is cheap and sends
+# at most one set of digests per slot per client.
+DIGEST_TICK_MINUTES = 10
+DIGEST_LOCK_PATH = os.path.join(os.path.dirname(__file__), "data", "_digest_lock.json")
+# Slightly longer than the tick, so two gunicorn workers ticking at the
+# same moment can't both get through and mail the same digest twice. The
+# per-client last-sent stamp in Sheets is the real guarantee, but it's a
+# read-then-write with a network round trip in the middle - two workers
+# inside that gap would both read "not sent yet".
+DIGEST_LOCK_COOLDOWN_MINUTES = 15
+
+
+def _digest_scheduler_loop():
+    while True:
+        try:
+            if _claim_lock(DIGEST_LOCK_PATH, DIGEST_LOCK_COOLDOWN_MINUTES):
+                try:
+                    from run_import import run_scheduled_digests
+                    result = run_scheduled_digests()
+                    digests = (result or {}).get("digests") or {}
+                    if any(isinstance(d, dict) and d.get("sent") for d in digests.values()):
+                        print(f"Scheduled digests: {json.dumps(digests, default=str)}")
+                finally:
+                    # Released immediately rather than left to expire:
+                    # holding it for the full cooldown would block the
+                    # NEXT tick too, which matters when a window is only
+                    # a few hours wide and a transient Sheets error
+                    # should get another try inside it.
+                    try:
+                        os.remove(DIGEST_LOCK_PATH)
+                    except OSError:
+                        pass
+        except Exception as e:
+            print(f"Digest scheduler tick failed: {e}")
+        time.sleep(DIGEST_TICK_MINUTES * 60)
+
+
+def _start_digest_scheduler():
+    threading.Thread(target=_digest_scheduler_loop, daemon=True).start()
+
+
+@app.route("/api/digests/schedule", methods=["GET"])
+@login_required
+def api_digest_schedule():
+    """What the weekly schedule currently is, and whether a send window
+    is open right now - so the dashboard can show "next check-in:
+    Monday 08:00" instead of leaving it to be inferred from a file
+    nobody can see."""
+    import notifications
+    s = _load_settings()
+    from settings import WEEKDAYS
+    slot = notifications.weekly_slot_start(
+        send_days=s["WEEKLY_SEND_DAYS"], send_time=s["WEEKLY_SEND_TIME"],
+        window_hours=s["WEEKLY_SEND_WINDOW_HOURS"])
+    return jsonify({
+        "days": sorted(WEEKDAYS[d].capitalize() for d in s["WEEKLY_SEND_DAYS"]),
+        "daysRaw": s["WEEKLY_SEND_DAY_RAW"],
+        "time": s["WEEKLY_SEND_TIME_RAW"],
+        "windowHours": s["WEEKLY_SEND_WINDOW_HOURS"],
+        "windowOpen": slot is not None,
+        "enabled": {
+            "pendingConfirmation": s["SEND_PENDING_DIGEST"],
+            "technicalEscalation": s["SEND_ESCALATION_DIGEST"],
+            "knownIssues": s["SEND_KNOWN_ISSUES_CHECKIN"],
+            "tamperReport": s["SEND_TAMPER_REPORT"],
+        },
+        "recoveryRequiresComment": s["RECOVERY_REQUIRES_COMMENT"],
+        "settingsFile": s["_path"],
+    })
+
+
+# ---- Ad-hoc send to a named address ---------------------------------
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+MAX_MANUAL_RECIPIENTS = 5
+
+
+@app.route("/api/notifications/send", methods=["POST"])
+@login_required
+def api_manual_send():
+    """
+    Send one of the standard reports to an address typed in by hand -
+    somebody's supervisor, an insurer, a colleague who has no account
+    here and shouldn't need one.
+
+    Three things make this safe rather than a hole in the per-client
+    isolation everything else in this file enforces:
+      - the client (or, for a single asset, the plate) must be one this
+        session is already allowed to see, checked here the same way
+        every other route checks it. Without that, any technician could
+        mail themselves another client's whole fault list.
+      - it never writes the weekly last-sent stamp, so a copy sent on
+        Wednesday cannot suppress Monday's real send (see
+        notifications.send_manual_report).
+      - the single-asset report carries no respond buttons: those are a
+        signed write credential for that plate, and this address hasn't
+        been through the client registry.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    raw_to = body.get("to")
+    if isinstance(raw_to, str):
+        raw_to = re.split(r"[,;\s]+", raw_to)
+    to_addrs, bad = [], []
+    for addr in (raw_to or []):
+        addr = str(addr).strip()
+        if not addr:
+            continue
+        (to_addrs if _EMAIL_RE.match(addr) else bad).append(addr)
+    if bad:
+        return jsonify({"error": f"Not a valid email address: {', '.join(bad)}"}), 400
+    if not to_addrs:
+        return jsonify({"error": "Enter at least one email address to send to"}), 400
+    if len(to_addrs) > MAX_MANUAL_RECIPIENTS:
+        # A hand-typed send is for a person or two. A large list is
+        # either a mistake or a mailing list that belongs in the client
+        # registry, where it gets the real scheduled sends.
+        return jsonify({"error": f"At most {MAX_MANUAL_RECIPIENTS} addresses at a time"}), 400
+
+    import notifications
+    reports = [r for r in (body.get("reports") or []) if r in notifications.MANUAL_REPORTS]
+    if not reports:
+        return jsonify({"error": "Choose at least one report to send"}), 400
+
+    plate = (body.get("plate") or "").strip()
+    client = (body.get("client") or "").strip() or None
+    note = (body.get("note") or "").strip() or None
+
+    if "asset" in reports:
+        if not plate:
+            return jsonify({"error": "The single-asset report needs a plate"}), 400
+        if not _plate_allowed(plate):
+            return _deny_plate(plate)
+
+    digest_reports = [r for r in reports if r != "asset"]
+    if digest_reports:
+        if not client:
+            return jsonify({"error": "Choose which client's fleet these reports should cover"}), 400
+        visible = permissions.visible_clients(session["role"], _assigned_clients(session["username"]))
+        if visible is not None and client not in visible:
+            return jsonify({"error": f"You do not have access to {client}"}), 403
+
+    from run_import import current_snapshot
+    classification, tampering = current_snapshot()
+    if not classification:
+        return jsonify({"error": "No fleet snapshot available to build a report from yet"}), 503
+
+    settings = _load_settings()
+    results = notifications.send_manual_report(
+        reports, to_addrs, classification, public_base_url(),
+        overdue_days=settings["PENDING_CONFIRMATION_OVERDUE_DAYS"],
+        tampering=tampering, client=client, plate=plate or None, note=note,
+        sent_by=session["username"])
+
+    sent = [r for r, v in results.items() if isinstance(v, dict) and v.get("sent")]
+    skipped = {r: (v.get("reason") or "; ".join(f"{c}: {m}" for c, m in (v.get("perClient") or {}).items()))
+               for r, v in results.items() if isinstance(v, dict) and not v.get("sent")}
+    print(f"Manual send by {session['username']} to {', '.join(to_addrs)}: "
+          f"sent={sent} skipped={skipped}")
+    return jsonify({"ok": bool(sent), "to": to_addrs, "sent": sent, "skipped": skipped})
 
 
 @app.route("/api/tamper-check", methods=["POST"])
@@ -1767,6 +1949,14 @@ def _mix_api_poller_enabled():
 
 if _mix_api_poller_enabled():
     _start_mix_api_poller()
+
+# Same guard as the pollers above and for the same reason: importing
+# app.py (test_permissions.py does) must not start a thread that sends
+# real email to real clients on a timer. DISABLE_DIGEST_SCHEDULER is the
+# manual escape hatch - set it when running a second instance of this app
+# that shares the Sheet but shouldn't be the one doing the sending.
+if _mix_api_poller_enabled() and os.environ.get("DISABLE_DIGEST_SCHEDULER") != "true":
+    _start_digest_scheduler()
 
 
 @app.route("/api/mix/snapshot", methods=["GET"])

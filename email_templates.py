@@ -221,8 +221,72 @@ def _history_block(entries, title="Comment history"):
     )
 
 
+def _fallback_duration(days):
+    """days_silent, phrased for a reader, when the precise episode isn't
+    known. It's a float (classifier.py rounds to one decimal), so
+    "0.6 days" has to become "14 hours" rather than int()'ing to zero."""
+    try:
+        days = float(days or 0)
+    except (TypeError, ValueError):
+        return "an unknown period"
+    if days <= 0:
+        return "less than a day"
+    if days < 1:
+        hours = max(1, int(round(days * 24)))
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    whole = int(days)
+    return f"{whole} day{'s' if whole != 1 else ''}"
+
+
+def _offline_episode_block(offline_since=None, offline_platforms=None, offline_for=None,
+                           last_seen=None):
+    """
+    The three facts about an offline spell that just ended: when it
+    started, which platform(s) stopped reporting, and how long it
+    lasted.
+
+    These emails used to say only "back online", or "offline for N
+    days" with N rounded off a float and no platform named. With three
+    platforms watching each vehicle, "it was offline" doesn't say
+    whether one feed dropped or all of them did - which is the
+    difference between a device fault and a vehicle nobody can see. All
+    three values are already computed when the transition is detected
+    (see run_import._day_over_day); this just shows them.
+
+    Renders nothing at all when the episode isn't known - an empty box
+    with "Unknown" in it is worse than no box.
+    """
+    rows = []
+    if offline_for:
+        rows.append(("Offline for", offline_for))
+    if offline_since:
+        rows.append(("Went offline", offline_since))
+    if last_seen:
+        rows.append(("Last reported position", last_seen))
+    if offline_platforms:
+        label = "Platform silent" if len(offline_platforms) == 1 else "Platforms silent"
+        rows.append((label, ", ".join(offline_platforms)))
+    if not rows:
+        return ""
+    cells = "".join(
+        f'<tr>'
+        f'<td style="padding:3px 0;font-size:11.5px;color:{MUTED};white-space:nowrap;">{_esc(k)}&nbsp;&nbsp;</td>'
+        f'<td style="padding:3px 0;font-size:12.5px;color:{INK};font-weight:700;">{_esc(str(v))}</td>'
+        f'</tr>'
+        for k, v in rows
+    )
+    return (
+        f'<tr><td style="padding:0 28px 14px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:{INFO}14;border:1px solid {INFO}55;border-radius:10px;padding:12px 14px;">'
+        f'<tr><td><table role="presentation" cellpadding="0" cellspacing="0">{cells}</table></td></tr>'
+        f'</table></td></tr>'
+    )
+
+
 def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
-                                no_followup_url, needs_attention_url, recent_trail, client=None):
+                                no_followup_url, needs_attention_url, recent_trail, client=None,
+                                offline_since=None, offline_platforms=None, offline_for=None):
     """
     Sent when a vehicle that was offline reports back online while it
     still has an unanswered follow-up request on file. Deliberately a
@@ -232,6 +296,10 @@ def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
     exact same two-button respond flow a human update gets, rather than
     auto-closing anything on the system's own authority.
     """
+    # offline_for when we have the real episode, days_silent as the
+    # fallback. int(days_offline) on a float like 0.6 printed "0 days",
+    # which reads as a glitch rather than "fourteen hours".
+    duration = offline_for or _fallback_duration(days_offline)
     inner = f"""
       <tr><td style="padding:26px 28px 8px;">
         <span style="font-size:19px;font-weight:800;color:{INK};">{_esc(plate)}</span>
@@ -240,10 +308,11 @@ def build_reconnect_check_email(plate, days_offline, open_comment, timestamp,
       </td></tr>
       <tr><td style="padding:0 28px 14px;">
         <span style="font-size:13px;color:{INK};line-height:1.5;">
-          This vehicle was offline for {int(days_offline)} day{"s" if days_offline != 1 else ""} and has just
-          reported back in. It still has an open follow-up request on file:
+          This vehicle was offline for {_esc(duration)} and has just reported back in.
+          It still has an open follow-up request on file:
         </span>
       </td></tr>
+      {_offline_episode_block(offline_since, offline_platforms, offline_for)}
       <tr><td style="padding:0 28px 14px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
           style="background:{BG};border-radius:10px;padding:16px;">
@@ -294,7 +363,13 @@ def build_update_email(plate, comment, author, role, timestamp, no_followup_url,
       </td></tr>
       {_history_block(recent_trail)}
     """
-    preheader = f"{comment[:110]}"
+    # Escaped: mailer.py splices the preheader into the HTML body
+    # verbatim, so an unescaped comment containing "<" (a plate written
+    # as "<unknown>", a note about a "<2 day" outage) silently ate the
+    # rest of the preview text or broke the markup after it. Every other
+    # template here already escapes; this one interpolated the raw
+    # comment.
+    preheader = _esc(comment[:110])
     return _shell(inner, client), preheader
 
 
@@ -613,7 +688,7 @@ def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checke
       </td></tr>
       <tr><td style="padding:0 28px 14px;">
         <span style="font-size:13px;color:{INK};line-height:1.6;">
-          Out of {summary.get('gaps_checked', 0)} location gaps checked this week,
+          {summary.get('gaps_checked', 0)} location gap(s) were flagged on your vehicles this week.
           <b>{summary.get('confirmed', 0)} are confirmed</b> (a power disconnect was logged during the gap) and
           <b>{summary.get('unconfirmed', 0)} are unconfirmed</b> (the gap exists, no power event explains it).
         </span>
@@ -632,30 +707,54 @@ def build_tamper_risk_report_email(summary, severity_bands, top_vehicles, checke
 
 
 def _recovery_row(v):
-    comment_html = (
-        f'<span style="font-size:11.5px;color:{MUTED};display:block;margin-top:2px;">'
-        f'Last reported: &ldquo;{_esc(v["comment"])}&rdquo;</span>'
-        if v.get("comment") else ""
-    )
+    """
+    One recovered vehicle. The headline is the outage that just ended,
+    not the reconnection: "back online" on its own tells the reader
+    nothing they can act on, while "offline 4 days on MiX Unity, last
+    seen near Athi River" tells them whether to care.
+    """
+    def line(text, strong=False):
+        color, weight = (INK, "700") if strong else (MUTED, "400")
+        return (f'<span style="font-size:11.5px;color:{color};font-weight:{weight};'
+                f'display:block;margin-top:2px;">{text}</span>')
+
+    details = ""
+    if v.get("offline_for"):
+        platforms = v.get("offline_platforms") or []
+        where = f" on {_esc(', '.join(platforms))}" if platforms else ""
+        details += line(f'Was offline for {_esc(v["offline_for"])}{where}', strong=True)
+    if v.get("offline_since"):
+        details += line(f'Went offline {_esc(v["offline_since"])}')
+    if v.get("last_seen"):
+        details += line(f'Last position before the outage: {_esc(v["last_seen"])}')
+    details += line(f'Last known location: {_esc(v["location"])}')
+    if v.get("comment"):
+        details += line(f'Comment on file: &ldquo;{_esc(v["comment"])}&rdquo;')
+
     return f"""
-      <tr><td style="padding:10px 0;border-top:1px solid {BORDER};">
+      <tr><td style="padding:12px 0;border-top:1px solid {BORDER};">
         <span style="font-size:13.5px;font-weight:800;color:{INK};">{_esc(v['plate'])}</span>
-        &nbsp;{_badge('Back online', SUCCESS)}<br>
-        <span style="font-size:11.5px;color:{MUTED};">Last known location: {_esc(v['location'])}</span>
-        {comment_html}
+        &nbsp;{_badge('Back online', SUCCESS)}
+        {details}
       </td></tr>
     """
 
 
 def build_recovery_notice_email(vehicles, timestamp, client=None):
     """
-    Plain FYI, no response needed: every vehicle that came back online
-    this import cycle. Deliberately separate from check_reconnections'
-    two-button ask - that email only fires for the subset with an
-    unanswered "needs follow-up" comment on file, asking whether
-    reconnecting resolves it. This one is unconditional: without it, a
-    vehicle recovering with no outstanding question on file reconnected
-    completely silently, visible only as a quiet dashboard entry.
+    Plain FYI, no response needed: vehicles that came back online this
+    import cycle. Deliberately separate from check_reconnections'
+    two-button ask - that email fires for the subset with an unanswered
+    "needs follow-up" comment on file, asking whether reconnecting
+    resolves it, and a vehicle that gets it is excluded from this one so
+    a single reconnection never produces two emails
+    (notifications.send_recovery_notice's skip_plates).
+
+    Which vehicles reach here is settings.ini [recovery]'s decision, not
+    this template's - by default only ones somebody has commented on
+    (requires_comment), because a fleet reconnecting all day long turns
+    an unfiltered version of this email into something the client
+    learns to ignore.
     """
     rows = "".join(_recovery_row(v) for v in vehicles)
     inner = f"""
@@ -665,8 +764,8 @@ def build_recovery_notice_email(vehicles, timestamp, client=None):
       </td></tr>
       <tr><td style="padding:0 28px 4px;">
         <span style="font-size:13px;color:{INK};line-height:1.5;">
-          These vehicles were offline and have reconnected since the last check. No action needed - this is
-          purely informational.
+          These vehicles were offline and have reconnected since the last check. Each one shows how long it
+          was silent and which platform stopped reporting. No action needed - this is purely informational.
         </span>
       </td></tr>
       <tr><td style="padding:0 28px 22px;">
@@ -674,4 +773,153 @@ def build_recovery_notice_email(vehicles, timestamp, client=None):
       </td></tr>
     """
     preheader = f"{len(vehicles)} vehicle(s) reconnected"
+    return _shell(inner, client), preheader
+
+
+def build_internal_action_email(plate, comment, author, role, timestamp, recent_trail,
+                                client=None, dashboard_url=""):
+    """
+    A Recommended Action - the technician's operational instruction to
+    the field - going to STAFF ONLY.
+
+    This template exists because there wasn't one: notifications.
+    on_comment_added took an entry_type argument and never read it, so
+    an action note went out on the client-facing update template,
+    complete with "Does this vehicle need follow-up from our side?" and
+    two respond buttons. app.py refuses to let a client submit one of
+    these and permissions.py strips them from every client payload; the
+    email was the one place the distinction wasn't honoured.
+
+    No respond buttons, deliberately: an internal instruction isn't a
+    question anybody is being asked to answer, and staff act from the
+    dashboard, which this links to instead.
+    """
+    link = (f'<tr><td style="padding:0 28px 22px;">'
+            f'<a href="{dashboard_url}" target="_blank" style="font-size:13px;color:{PRIMARY};'
+            f'font-weight:700;text-decoration:none;">Open {_esc(plate)} in the dashboard &rarr;</a>'
+            f'</td></tr>') if dashboard_url else ""
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">{_esc(plate)}</span>
+        &nbsp;{_badge("Internal - recommended action", INFO)}<br>
+        <span style="font-size:12px;color:{MUTED};">
+          Set by {_esc(author)} ({_esc(role)}) &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 14px;">
+        <span style="font-size:12.5px;color:{MUTED};line-height:1.5;">
+          Internal note for the team - this has not been sent to the customer.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{BG};border-radius:10px;padding:16px;">
+          <tr><td style="font-size:14px;color:{INK};line-height:1.6;">{_esc(comment)}</td></tr>
+        </table>
+      </td></tr>
+      {link}
+      {_history_block(recent_trail or [])}
+    """
+    preheader = _esc(f"Internal action for {plate}: {comment[:90]}")
+    return _shell(inner, client), preheader
+
+
+def _platform_seen_row(p):
+    online = p["status"] == "Online"
+    return f"""
+      <tr>
+        <td style="padding:7px 0;border-top:1px solid {BORDER};font-size:12.5px;color:{INK};">
+          {_esc(p['platform'])}&nbsp;{_badge(p['status'], SUCCESS if online else DANGER)}
+        </td>
+        <td style="padding:7px 0;border-top:1px solid {BORDER};text-align:right;font-size:12px;color:{MUTED};">
+          {_esc(p['seen'])}
+        </td>
+      </tr>
+    """
+
+
+def build_asset_summary_email(plate, info, history, timestamp, client=None, note=None,
+                              sent_by="", dashboard_url="", offline_detail="",
+                              platform_seen=None):
+    """
+    One vehicle, everything currently known about it, for the ad-hoc
+    "send this asset's status to a named person" path
+    (notifications.send_manual_report).
+
+    Carries the per-platform last-seen table rather than a single
+    status word. With three platforms watching one vehicle, "Offline"
+    alone doesn't distinguish one dead feed from a vehicle nobody can
+    see at all, and that distinction is the entire reason this app
+    reads three platforms instead of one.
+
+    No respond buttons - see _send_asset_summary's docstring: the
+    recipient was typed into a box, not drawn from the client registry,
+    and those buttons are a write credential.
+    """
+    status = info.get("status") or "Unknown"
+    status_color = {
+        "Online": SUCCESS, "Known Issue": INFO,
+        "Pending Customer Confirmation": WARNING, "Technical Escalation": DANGER,
+    }.get(status, MUTED)
+
+    note_block = f"""
+      <tr><td style="padding:0 28px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{WARNING}1A;border:1px solid {WARNING}66;border-radius:10px;padding:14px;">
+          <tr><td style="font-size:13px;color:{INK};line-height:1.6;">{_esc(note)}</td></tr>
+          <tr><td style="padding-top:6px;font-size:11px;color:{MUTED};">
+            &mdash; {_esc(sent_by or "sent from the control room")}</td></tr>
+        </table>
+      </td></tr>
+    """ if note else ""
+
+    seen_rows = "".join(_platform_seen_row(p) for p in (platform_seen or []))
+    seen_block = f"""
+      <tr><td style="padding:0 28px 6px;">
+        <span style="font-size:10.5px;color:{MUTED};text-transform:uppercase;letter-spacing:0.5px;">
+          Last reported, per platform</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 20px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{seen_rows}</table>
+      </td></tr>
+    """ if seen_rows else ""
+
+    facts = [
+        ("Status", status),
+        ("Severity", info.get("severity") or "-"),
+        ("Days silent", str(info.get("days_silent") if info.get("days_silent") is not None else "-")),
+        ("Last known location", info.get("last_location") or "Unknown"),
+    ]
+    if offline_detail:
+        facts.append(("Connectivity", offline_detail))
+    fact_rows = "".join(
+        f'<tr>'
+        f'<td style="padding:4px 0;font-size:11.5px;color:{MUTED};white-space:nowrap;">{_esc(k)}&nbsp;&nbsp;</td>'
+        f'<td style="padding:4px 0;font-size:12.5px;color:{INK};font-weight:700;">{_esc(v)}</td>'
+        f'</tr>'
+        for k, v in facts
+    )
+
+    link = (f'<tr><td style="padding:0 28px 22px;">'
+            f'<a href="{dashboard_url}" target="_blank" style="font-size:13px;color:{PRIMARY};'
+            f'font-weight:700;text-decoration:none;">Open in the dashboard &rarr;</a></td></tr>'
+            ) if dashboard_url else ""
+
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">{_esc(plate)}</span>
+        &nbsp;{_badge(status, status_color)}<br>
+        <span style="font-size:12px;color:{MUTED};">Vehicle status summary &middot; {_esc(timestamp)}</span>
+      </td></tr>
+      {note_block}
+      <tr><td style="padding:0 28px 20px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+          style="background:{BG};border-radius:10px;padding:16px;">
+          <tr><td><table role="presentation" cellpadding="0" cellspacing="0">{fact_rows}</table></td></tr>
+        </table>
+      </td></tr>
+      {seen_block}
+      {link}
+      {_history_block(history or [], title="Full comment history")}
+    """
+    preheader = _esc(f"{plate} - {status}. {offline_detail}".strip())
     return _shell(inner, client), preheader

@@ -186,13 +186,45 @@ def _checked_assets_summary(tamper_checks):
     return rows
 
 
-def _day_over_day(results, previous_status):
+_EPISODE_FMT = "%d %b %Y, %H:%M"
+
+
+def _offline_platforms_of(info):
+    return sorted(p for p, (s, _) in (info.get("platform_status") or {}).items()
+                  if s in ("Offline", "No Data"))
+
+
+def _stalest_report_time(info):
+    """The oldest per-platform last-report time - the same figure
+    classifier.py derives days_silent from, so "last seen" in an email
+    and "days offline" on the dashboard can never disagree."""
+    times = [ts for _, (_, ts) in (info.get("platform_status") or {}).items() if ts is not None]
+    return min(times) if times else None
+
+
+def _day_over_day(results, previous_status, previous_detail=None, now=None):
     """
     The one place classify_fleet()'s fresh per-plate status gets diffed
     against what was recorded last cycle. Returns (recovered,
-    newly_offline, current_status) - current_status is what the caller
-    should persist (sheets_store.save_vehicle_status) so the NEXT
-    cycle has something to diff against.
+    newly_offline, current_status, current_detail, episodes).
+
+    current_status/current_detail are what the caller persists
+    (sheets_store.save_vehicle_status) so the NEXT cycle has something
+    to diff against.
+
+    `episodes` is {plate: {offlineSince, offlinePlatforms, lastSeenAt,
+    offlineHours}} for the plates in `recovered` - the offline spell
+    that just ended. It exists because a recovery is the one moment
+    when the interesting facts are already gone: every platform is
+    reporting again, so nothing in THIS cycle's data says when the
+    vehicle went quiet or which feed dropped. The answer has to be
+    carried forward from the cycle that saw it happen, which is what
+    current_detail persists and previous_detail reads back.
+
+    An episode's platform list is the UNION over the whole spell, not
+    just what was silent on the last cycle before recovery: a vehicle
+    that loses Teletrac on Monday and MiX on Wednesday was offline on
+    both, and reporting only MiX would understate it.
 
     previous_status=None means there's nothing to compare against yet
     (the very first import ever run, or last cycle's read failed) -
@@ -205,13 +237,34 @@ def _day_over_day(results, previous_status):
     transitioned FROM, "recovered"/"newly offline" wouldn't be a
     meaningful thing to say about it yet.
     """
+    now = now or now_eat()
+    previous_detail = previous_detail or {}
     current_status = {
         plate: ("Online" if info.get("status") == "Online" else "Offline")
         for plate, info in results.items()
     }
+
+    def _episode_for(plate, info):
+        """Carry an in-progress spell forward, or open a new one."""
+        prior = previous_detail.get(plate) or {}
+        platforms = set(_offline_platforms_of(info)) | set(prior.get("offlinePlatforms") or [])
+        stalest = _stalest_report_time(info)
+        return {
+            # Only stamped once, when the spell starts. Re-stamping it
+            # every cycle would make every outage look like it began
+            # today, however long it had really been running.
+            "offlineSince": prior.get("offlineSince") or now.strftime(_EPISODE_FMT),
+            "offlinePlatforms": sorted(platforms),
+            "lastSeenAt": prior.get("lastSeenAt") or (stalest.strftime(_EPISODE_FMT) if stalest else ""),
+        }
+
+    current_detail = {plate: _episode_for(plate, results[plate])
+                      for plate, status in current_status.items() if status == "Offline"}
+
     if previous_status is None:
-        return [], [], current_status
-    recovered, newly_offline = [], []
+        return [], [], current_status, current_detail, {}
+
+    recovered, newly_offline, episodes = [], [], {}
     for plate, status in current_status.items():
         if plate not in previous_status:
             continue
@@ -219,9 +272,31 @@ def _day_over_day(results, previous_status):
         is_online = status == "Online"
         if is_online and not was_online:
             recovered.append(plate)
+            episodes[plate] = _closed_episode(previous_detail.get(plate) or {}, now)
         elif was_online and not is_online:
             newly_offline.append(plate)
-    return recovered, newly_offline, current_status
+    return recovered, newly_offline, current_status, current_detail, episodes
+
+
+def _closed_episode(prior, now):
+    """The finished offline spell, with its duration worked out. An
+    episode with no recorded start (the plate was already offline before
+    these columns existed) still reports its platforms rather than
+    nothing - a partial answer beats a blank one, and the email template
+    omits whichever fields are missing."""
+    since_raw = prior.get("offlineSince") or ""
+    hours = None
+    if since_raw:
+        try:
+            hours = (now - datetime.strptime(since_raw, _EPISODE_FMT)).total_seconds() / 3600
+        except ValueError:
+            hours = None
+    return {
+        "offlineSince": since_raw,
+        "offlinePlatforms": prior.get("offlinePlatforms") or [],
+        "lastSeenAt": prior.get("lastSeenAt") or "",
+        "offlineHours": hours,
+    }
 
 
 MIX_API_SNAPSHOT_PATH = os.path.join(DATA_DIR, "mix_api_snapshot.json")
@@ -438,7 +513,8 @@ def _load_ft_cloud_api_reports(snapshot_path=None, max_age_minutes=90, now=None)
 
 
 def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks=None, previous_status=None,
-                     mix_api_reports=None, teletrac_api_reports=None, ft_cloud_api_reports=None):
+                     mix_api_reports=None, teletrac_api_reports=None, ft_cloud_api_reports=None,
+                     previous_detail=None):
     """
     Pure processing, no network. paths is the dict returned by
     fetch_reports() (or, for testing, pointed at the known-good local
@@ -455,6 +531,13 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     teletrac_api_reports and ft_cloud_api_reports mirror
     mix_api_reports for the Teletrac and FT Cloud API pollers - see
     _load_teletrac_api_reports() and _load_ft_cloud_api_reports().
+
+    previous_detail (sheets_store.load_vehicle_status_detail()) is the
+    offline-episode state for plates that were already offline last
+    cycle. Optional and defaulting to nothing, so every existing caller
+    - including the tests, which pass previous_status only - behaves
+    exactly as before; without it, a recovery is still detected, it
+    just can't say how long the vehicle had been gone.
     """
     check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
@@ -517,7 +600,8 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     checked_assets = _checked_assets_summary(tamper_checks)
     tampering["checked_assets"] = checked_assets
 
-    recovered, newly_offline, current_status = _day_over_day(results, previous_status)
+    recovered, newly_offline, current_status, current_detail, episodes = _day_over_day(
+        results, previous_status, previous_detail=previous_detail, now=now)
     history_available = previous_status is not None
 
     # Generate the actual downloadable .xlsx files - same formatting as
@@ -550,6 +634,13 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     # recomputed a second time just to decide who to email.
     data["_current_status"] = current_status
     data["_recovered"] = recovered
+    # The offline-episode columns for plates still offline (persisted
+    # alongside current_status) and the just-closed spells for plates
+    # that recovered (used by the back-online email). Same reasoning as
+    # everything else prefixed with an underscore here: internal to the
+    # import, popped before the dashboard JSON is written.
+    data["_current_detail"] = current_detail
+    data["_episodes"] = episodes
     return data
 
 
@@ -616,8 +707,15 @@ def _top_vehicles_from_tamper_result(confirmed_cases):
     stats = {}
     for g in confirmed_cases:
         k = g["AssetID"]
-        stats.setdefault(k, {"assetId": k, "vehicle": g["Vehicle"], "fleetNumber": g["FleetNumber"],
-                              "confirmedCases": 0, "worstGapKm": 0})
+        # "plate" is what attributes this vehicle to a client
+        # (notifications._split_tampering_by_client). Without it every
+        # top_vehicles entry resolved to no owner, so the "please make
+        # these available for a physical check" section - the only part
+        # of the tampering email that actually asks for anything - was
+        # empty in every client's copy.
+        stats.setdefault(k, {"assetId": k, "plate": g["Plate"], "vehicle": g["Vehicle"],
+                             "fleetNumber": g["FleetNumber"],
+                             "confirmedCases": 0, "worstGapKm": 0})
         stats[k]["confirmedCases"] += 1
         stats[k]["worstGapKm"] = max(stats[k]["worstGapKm"], g["DistanceKm"])
     return sorted(stats.values(), key=lambda v: -v["worstGapKm"])
@@ -746,6 +844,8 @@ def refresh_live_snapshot():
     data.pop("_tampering", None)
     data.pop("_current_status", None)
     data.pop("_recovered", None)
+    data.pop("_current_detail", None)
+    data.pop("_episodes", None)
 
     existing_path = os.path.join(DATA_DIR, "fleet_today.json")
     with _FLEET_TODAY_LOCK:
@@ -797,11 +897,12 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
         tamper_checks = {}
 
     try:
-        previous_status = sheets_store.load_vehicle_status()
+        previous_detail = sheets_store.load_vehicle_status_detail()
+        previous_status = {p: d["status"] for p, d in previous_detail.items()}
     except Exception as e:
         print(f"WARNING: previous vehicle status unavailable this run ({e}), "
               f"Recovered/New will show empty and no reconnect-check can fire this cycle.")
-        previous_status = None
+        previous_status, previous_detail = None, {}
 
     mix_api_reports = _load_mix_api_reports()
     if mix_api_reports:
@@ -818,11 +919,14 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks,
                            previous_status=previous_status, mix_api_reports=mix_api_reports,
                            teletrac_api_reports=teletrac_api_reports,
-                           ft_cloud_api_reports=ft_cloud_api_reports)
+                           ft_cloud_api_reports=ft_cloud_api_reports,
+                           previous_detail=previous_detail)
     classification = data.pop("_classification", {})
     tampering = data.pop("_tampering", {})
     current_status = data.pop("_current_status", {})
     recovered = data.pop("_recovered", [])
+    current_detail = data.pop("_current_detail", {})
+    episodes = data.pop("_episodes", {})
 
     # meta.generated reflects the latest timestamp found IN the report
     # data itself, which naturally lags real time (assets report
@@ -841,7 +945,7 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     # mean the day after this one starts back at "no history yet"
     # rather than one bad cycle just being skipped.
     try:
-        sheets_store.save_vehicle_status(current_status)
+        sheets_store.save_vehicle_status(current_status, current_detail)
     except Exception as e:
         print(f"Could not persist this cycle's vehicle status: {e}")
 
@@ -855,77 +959,165 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     # has to decide, per plate in it, whether there's anything worth
     # emailing about, not recompute the transition itself.
     base_url = _public_base_url()
+    digest_settings = load_settings(os.path.join(DATA_DIR, "settings.ini"))
+    prompted = []
     try:
         import notifications
-        prompted = notifications.check_reconnections(classification, recovered, base_url=base_url)
+        prompted = notifications.check_reconnections(classification, recovered, base_url=base_url,
+                                                     episodes=episodes)
         if prompted:
             print(f"Reconnect-check sent for: {', '.join(prompted)}")
     except Exception as e:
         print(f"Reconnect-check pass failed: {e}")
 
-    # Separate from the reconnect-check above: a plain FYI for EVERY
-    # recovery this cycle, not just the ones with an unanswered
-    # follow-up. No interval gate - see send_recovery_notice's own
-    # docstring for why a schedule doesn't fit this one.
+    # Separate from the reconnect-check above: a plain FYI about this
+    # cycle's recoveries. Which of them are worth an unsolicited email
+    # is settings.ini [recovery]'s call, not this call site's - by
+    # default only vehicles somebody has commented on, and never one
+    # that just got the two-button reconnect-check about the same
+    # event (that's what passing `prompted` in as skip_plates does).
+    # No schedule gate - see send_recovery_notice's own docstring.
     try:
-        recovery_result = notifications.send_recovery_notice(classification, recovered)
+        import notifications
+        recovery_result = notifications.send_recovery_notice(
+            classification, recovered, episodes=episodes,
+            requires_comment=digest_settings["RECOVERY_REQUIRES_COMMENT"],
+            skip_plates=prompted if digest_settings["RECOVERY_SUPPRESS_WHEN_RECONNECT_CHECK_SENT"] else ())
         if recovery_result["sent"]:
             print(f"Recovery notice sent for {recovery_result['count']} vehicle(s)")
+        if recovery_result.get("skipped"):
+            print(f"Recovery notice skipped {len(recovery_result['skipped'])} vehicle(s): "
+                  + "; ".join(f"{p} ({r})" for p, r in list(recovery_result["skipped"].items())[:5]))
     except Exception as e:
         print(f"Recovery notice failed: {e}")
 
-    # Weekly (configurable) rollups - snapshots of current state, not
-    # tied to this cycle's transitions, so they're independent of
-    # check_reconnections above and of each other.
-    digest_results = {}
-    try:
-        digest_settings = load_settings(os.path.join(DATA_DIR, "settings.ini"))
-        import notifications
-
-        def _interval(key):
-            return 0 if force_digests else digest_settings[key]
-
-        pending_result = notifications.send_pending_confirmation_digest(
-            classification, base_url,
-            _interval("PENDING_DIGEST_INTERVAL_DAYS"),
-            digest_settings["PENDING_CONFIRMATION_OVERDUE_DAYS"])
-        digest_results["pending_confirmation"] = pending_result
-        if pending_result["sent"]:
-            print(f"Pending-confirmation digest sent for {pending_result['count']} vehicle(s)")
-        escalation_result = notifications.send_technical_escalation_digest(
-            classification, base_url, _interval("ESCALATION_DIGEST_INTERVAL_DAYS"))
-        digest_results["technical_escalation"] = escalation_result
-        if escalation_result["sent"]:
-            print(f"Technical-escalation digest sent for {escalation_result['count']} vehicle(s)")
-        checkin_result = notifications.send_known_issues_checkin_digest(
-            classification, base_url, _interval("KNOWN_ISSUES_CHECKIN_INTERVAL_DAYS"))
-        digest_results["known_issues_checkin"] = checkin_result
-        if checkin_result["sent"]:
-            print(f"Known-issues check-in digest sent for {checkin_result['count']} vehicle(s)")
-
-        # Not part of the manual "check-in" button (that's specifically
-        # pending/escalation/known-issues, see app.py's route) - stays on
-        # its own weekly schedule regardless of force_digests.
-        # classification is what attributes each tampering case to a
-        # client - tamper_engine works off the raw report files and has
-        # no idea who owns a plate. Without it the digest refuses to
-        # send rather than mailing every client the whole fleet's cases.
-        tamper_result = notifications.send_tamper_risk_report_digest(
-            tampering, base_url, digest_settings["TAMPER_REPORT_INTERVAL_DAYS"],
-            classification=classification)
-        digest_results["tamper_risk_report"] = tamper_result
-        if tamper_result["sent"]:
-            print(f"Tamper risk report sent for {tamper_result['count']} vehicle(s)")
-
-        if force_digests:
-            try:
-                sheets_store.record_manual_checkin(prompted_by or "unknown")
-            except Exception as e:
-                print(f"Manual check-in triggered but could not record who prompted it: {e}")
-    except Exception as e:
-        print(f"Digest pass failed: {e}")
+    digest_results = send_digests(classification, tampering, base_url, digest_settings,
+                                  force=force_digests)
+    if force_digests:
+        try:
+            sheets_store.record_manual_checkin(prompted_by or "unknown")
+        except Exception as e:
+            print(f"Manual check-in triggered but could not record who prompted it: {e}")
 
     return {"status": "ok", "generated": data["meta"]["generated"], "digests": digest_results}
+
+
+def send_digests(classification, tampering, base_url, digest_settings, force=False):
+    """
+    The four weekly rollups, as one callable step.
+
+    Pulled out of run_import() because the schedule is now a named day
+    and time (settings.ini [digests] weekly_send_day/weekly_send_time)
+    rather than "whenever an import happens to notice enough days have
+    passed". The daily mail import runs at ~04:15 and would never be
+    awake at a configured 08:00 slot, so app.py's scheduler thread
+    calls this directly against the current snapshot - see
+    run_scheduled_digests(). run_import() still calls it too, which
+    costs nothing (the window gate simply says no) and keeps the
+    digests working if the scheduler thread isn't running at all, e.g.
+    when this module is used standalone.
+
+    force=True is the dashboard's "Send check-in now" and bypasses the
+    window, not the per-client scoping or anything else.
+    """
+    import notifications
+    results = {}
+    slot = notifications.weekly_slot_start(
+        send_days=digest_settings["WEEKLY_SEND_DAYS"],
+        send_time=digest_settings["WEEKLY_SEND_TIME"],
+        window_hours=digest_settings["WEEKLY_SEND_WINDOW_HOURS"])
+    if slot is None and not force:
+        return {"skipped": "outside the configured weekly send window"}
+
+    def _run(name, enabled, fn):
+        if not enabled:
+            results[name] = {"sent": False, "reason": "disabled in settings.ini"}
+            return
+        try:
+            results[name] = fn()
+        except Exception as e:
+            # One digest blowing up must not take the other three with
+            # it - they have nothing to do with each other beyond
+            # sharing this loop.
+            print(f"{name} digest failed: {e}")
+            results[name] = {"sent": False, "reason": str(e)}
+            return
+        if results[name].get("sent"):
+            print(f"{name} digest sent for {results[name]['count']} vehicle(s)")
+
+    _run("pending_confirmation", digest_settings["SEND_PENDING_DIGEST"],
+         lambda: notifications.send_pending_confirmation_digest(
+             classification, base_url, slot,
+             digest_settings["PENDING_CONFIRMATION_OVERDUE_DAYS"], force=force))
+    _run("technical_escalation", digest_settings["SEND_ESCALATION_DIGEST"],
+         lambda: notifications.send_technical_escalation_digest(
+             classification, base_url, slot, force=force))
+    _run("known_issues_checkin", digest_settings["SEND_KNOWN_ISSUES_CHECKIN"],
+         lambda: notifications.send_known_issues_checkin_digest(
+             classification, base_url, slot, force=force))
+
+    # Not part of the manual "check-in" button (that's specifically
+    # pending/escalation/known-issues, see app.py's route) - it stays on
+    # the schedule even when the other three are forced, because "check
+    # in on outstanding items now" isn't a request for a fresh tampering
+    # analysis. classification is what attributes each tampering case to
+    # a client; without it the digest refuses to send rather than
+    # mailing every client the whole fleet's cases.
+    _run("tamper_risk_report", digest_settings["SEND_TAMPER_REPORT"] and tampering is not None,
+         lambda: notifications.send_tamper_risk_report_digest(
+             tampering, base_url, slot, classification=classification))
+    return results
+
+
+def current_snapshot():
+    """
+    (classification, tampering) for the fleet as it stands right now,
+    reclassified from the cached mail reports plus the latest API poll
+    snapshots - no mailbox access, no file writes, no notifications.
+
+    Both the scheduled-digest thread and the ad-hoc "email this to one
+    person" route need the same thing run_import() gets for free
+    halfway through its own pipeline, without running that pipeline.
+    Returns (None, None) when there's nothing to classify yet.
+    """
+    paths = _cached_report_paths()
+    if paths is None:
+        return None, None
+    try:
+        import sheets_store
+        feedback_rows = sheets_store.load_feedback_cached()
+    except Exception:
+        feedback_rows = {}
+    try:
+        tamper_checks = sheets_store.load_tamper_checks()
+    except Exception:
+        tamper_checks = {}
+
+    try:
+        data = process_reports(paths, feedback_rows=feedback_rows, tamper_checks=tamper_checks,
+                               previous_status=None,
+                               mix_api_reports=_load_mix_api_reports(),
+                               teletrac_api_reports=_load_teletrac_api_reports(),
+                               ft_cloud_api_reports=_load_ft_cloud_api_reports())
+    except ImportError_ as e:
+        print(f"Could not build a current snapshot: {e}")
+        return None, None
+    return data.get("_classification") or {}, data.get("_tampering") or {}
+
+
+def run_scheduled_digests(force=False):
+    """
+    What app.py's scheduler thread calls. Cheap to call often: it
+    reclassifies from files already on disk and then hands the window
+    gate the decision, so calling it every few minutes sends at most one
+    set of digests per configured slot per client.
+    """
+    classification, tampering = current_snapshot()
+    if not classification:
+        return {"status": "skipped", "reason": "no cached reports to classify yet"}
+    settings = load_settings(os.path.join(DATA_DIR, "settings.ini"))
+    return {"status": "ok",
+            "digests": send_digests(classification, tampering, _public_base_url(), settings, force=force)}
 
 
 def _public_base_url():

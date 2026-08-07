@@ -791,7 +791,14 @@ def delete_client(name):
 # This tab is that memory: one row per plate, overwritten wholesale every
 # import (see notifications.check_reconnections), not appended - only the
 # latest status matters, there's no history value in keeping old rows.
-VEHICLE_STATUS_HEADERS = ["Plate", "Status", "UpdatedAt"]
+# OfflineSince/OfflinePlatforms/LastSeenAt describe the offline spell a
+# plate is currently in - added so the "back online" email can say when
+# the vehicle went quiet, on which platform(s), and for how long. None
+# of that is recoverable at the moment of recovery: by then every
+# platform is reporting again and this cycle's data shows a healthy
+# vehicle. It has to be written down while the vehicle is still offline,
+# which is what these three columns are for.
+VEHICLE_STATUS_HEADERS = ["Plate", "Status", "UpdatedAt", "OfflineSince", "OfflinePlatforms", "LastSeenAt"]
 
 
 def _get_or_create_vehicle_status_tab(client, sheet_id):
@@ -811,26 +818,62 @@ def load_vehicle_status():
     """{plate: "Online"/"Offline"} as of the last time this was saved -
     i.e. the previous import cycle, not the current one being computed
     right now. Missing entirely for a plate that's brand new."""
+    return {plate: detail["status"] for plate, detail in load_vehicle_status_detail().items()}
+
+
+def load_vehicle_status_detail():
+    """
+    {plate: {status, offlineSince, offlinePlatforms, lastSeenAt}} as of
+    the previous cycle.
+
+    Kept separate from load_vehicle_status() rather than changing that
+    function's return type: _day_over_day and its tests treat it as a
+    plain {plate: status} map and index straight into it, so widening
+    it in place would have been a silent behaviour change at every one
+    of those sites. Rows written before these columns existed simply
+    come back with empty episode fields, which every reader already has
+    to handle anyway (a plate can be offline with no recorded start if
+    it was already offline when this shipped).
+    """
     client, sheet_id = _get_client()
     ws = _get_or_create_vehicle_status_tab(client, sheet_id)
     out = {}
     for row in ws.get_all_records():
         plate = str(row.get("Plate", "")).strip()
-        if plate:
-            out[plate] = str(row.get("Status", "")).strip()
+        if not plate:
+            continue
+        platforms = [p.strip() for p in str(row.get("OfflinePlatforms", "")).split(",") if p.strip()]
+        out[plate] = {
+            "status": str(row.get("Status", "")).strip(),
+            "offlineSince": str(row.get("OfflineSince", "")).strip(),
+            "offlinePlatforms": platforms,
+            "lastSeenAt": str(row.get("LastSeenAt", "")).strip(),
+        }
     return out
 
 
-def save_vehicle_status(status_by_plate):
+def save_vehicle_status(status_by_plate, detail_by_plate=None):
     """Overwrites the whole tab with this cycle's status for every plate
     - deliberately a full replace, not a per-row patch, since every
     plate's status is recomputed every import anyway and a stale row for
     a plate that's since left the fleet is just clutter, never a value
-    worth preserving."""
+    worth preserving.
+
+    detail_by_plate carries the offline-episode columns for plates
+    currently offline (see VEHICLE_STATUS_HEADERS). Optional so the
+    older two-argument call still works unchanged; a plate with no
+    detail just gets empty episode cells."""
     client, sheet_id = _get_client()
     ws = _get_or_create_vehicle_status_tab(client, sheet_id)
+    detail_by_plate = detail_by_plate or {}
     now = now_eat().strftime("%d/%m/%Y %H:%M")
-    rows = [[plate, status, now] for plate, status in sorted(status_by_plate.items())]
+    rows = []
+    for plate, status in sorted(status_by_plate.items()):
+        d = detail_by_plate.get(plate) or {}
+        rows.append([plate, status, now,
+                     d.get("offlineSince") or "",
+                     ", ".join(d.get("offlinePlatforms") or []),
+                     d.get("lastSeenAt") or ""])
     ws.clear()
     ws.append_row(VEHICLE_STATUS_HEADERS)
     if rows:

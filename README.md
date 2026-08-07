@@ -56,6 +56,73 @@ path above applies.
 See `DEPLOY.md` for the full path from here to a live daily-updating
 dashboard.
 
+## Email: what goes out, to whom, and when
+
+Nine emails, in three groups. Every one of them is scoped to a single client:
+one message per client, listing only that client's vehicles, to only that
+client's contacts (`notifications._client_recipients`). A vehicle whose
+platform account isn't mapped to a client is in nobody's email — that's a
+configuration gap to fix, not a reason to broadcast.
+
+**Weekly rollups** — a snapshot of current state, not a per-vehicle alert.
+A vehicle stays in them until it actually resolves.
+
+| Email | Audience | Contents |
+|---|---|---|
+| Weekly check-in | Client | Vehicles in Pending Customer Confirmation, plus escalated vehicles nobody has commented on yet. Two respond buttons per vehicle. |
+| Known-issue re-confirmation | Client | Vehicles marked Known Issue, quoting what was said last time. |
+| Technical escalation | Staff (admins + that client's technicians) | Vehicles where every platform is silent. Links to the dashboard, no respond tokens. |
+| Tampering report | Client | Confirmed/unconfirmed location gaps, by severity, plus the vehicles being asked for a physical check. |
+
+**Schedule** — `data/settings.ini`, `[digests]`:
+
+```ini
+weekly_send_day = monday      ; a weekday name, "daily", or "monday,thursday"
+weekly_send_time = 08:00      ; 24h, East Africa Time
+weekly_send_window_hours = 6  ; how long the slot stays open
+send_pending_digest = true    ; each rollup can be turned off individually
+```
+
+A slot opens at `weekly_send_time` on each configured day. Inside it, each
+client's digest goes out exactly once; outside it, nothing goes out. This is
+a named slot rather than "at least 7 days since the last one" because the
+elapsed-days version floored to whole days, so a cycle running a minute early
+skipped and pushed the send to the next day — the weekly check-in walked
+forward through the week. `app.py`'s digest scheduler thread ticks every 10
+minutes and lets the slot decide; the daily 04:15 import calls the same code,
+which simply does nothing outside a window.
+
+**State-change emails** — triggered by what changed this cycle, not by a clock.
+
+| Email | Fires when |
+|---|---|
+| Reconnect check | A vehicle with an *unanswered follow-up* comes back online. Asks whether that resolves it — two buttons, not an automatic close. |
+| Back online (FYI) | A vehicle comes back online. States how long it was offline, which platforms were silent, and when it was last seen. |
+| Comment update | A technician/admin comments and wants the client's input. |
+| Outcome | Anyone records an answer. Goes to client and staff. |
+| Internal action note | A technician sets a Recommended Action. **Staff only** — this is a job-card note, never sent to the customer. |
+
+`[recovery]` controls the back-online FYI:
+
+```ini
+requires_comment = true                      ; only vehicles someone has commented on
+suppress_when_reconnect_check_sent = true    ; never two emails for one reconnection
+```
+
+`requires_comment` is the per-asset control: a comment on file is somebody
+having said this vehicle matters. Without it, a fleet reconnecting all day
+generates enough mail that the client learns to filter it, losing the ones
+that matter too. Each recovery is also recorded in
+`data/recovery_notified.json` keyed by which offline spell it ended, so a
+failed status write can't cause a repeat.
+
+**Ad-hoc** — the paper-plane button in the header (admin/technician).
+Sends any of the above reports, or a full single-asset summary, to a
+hand-typed address. It never writes the weekly last-sent stamp, so a copy
+sent on Wednesday can't suppress Monday's real send; it refuses any client
+or plate outside your own access; and the single-asset email carries no
+respond buttons, because those are a signed write credential for that plate.
+
 ## Running the test suites
 
 ```
