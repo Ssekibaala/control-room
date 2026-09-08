@@ -43,6 +43,8 @@ PANEL_LABELS = {
     "p-tquality": "Data Quality Log",
     "p-tchecked": "Checked Assets",
     "p-asset-install": "Asset Install Dates",
+    "p-activitylog": "Activity & Audit Log",
+    "p-ddr": "DDR Reports",
 }
 
 # Which data sections each panel needs to render. This is what makes
@@ -101,6 +103,16 @@ _DEFAULT_PANEL_ACCESS = {
     # MiX API on demand. Admin-only, deliberately not technician - unlike
     # every other panel above, which is operational.
     "p-asset-install": ("admin",),
+    # Shows every account's activity across every client, unscoped - a
+    # technician restricted to specific clients could otherwise use this
+    # to see who's doing what on clients they have no access to
+    # themselves. Admin-only, same reasoning as p-asset-install above.
+    "p-activitylog": ("admin",),
+    # Generates/emails a per-client device report - an operational
+    # export like Full Data's own export button, not something a client
+    # role needs a dashboard panel for (they receive the result by
+    # email, same as the Fleet Integrity/Tampering exports).
+    "p-ddr": ("admin", "technician"),
 }
 
 # Overrides saved from the Roles & Visibility editor live in their own

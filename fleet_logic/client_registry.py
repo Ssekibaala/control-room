@@ -4,22 +4,23 @@ Who the clients are, and which platform account belongs to which one.
 The same real-world client is named differently on every platform - AGL
 is "AGL" on MiX, "AFRICA GLOBAL LOGISTICS" on Teletrac and "Africa Global
 Logistics(AGL)" on FT Cloud - so nothing can merge them automatically.
-The mapping is therefore explicit and human-maintained (admin UI ->
-Google Sheets "Clients" tab, see sheets_store.CLIENT_HEADERS).
+The mapping is therefore explicit and human-maintained (admin UI -> the
+MySQL "clients" table and its platform-id child tables, see
+db_store.CLIENT_HEADERS / db.SCHEMA_STATEMENTS).
 
 Every read goes through load_registry(), which tries three sources in
 order and always returns something usable:
 
-  1. Google Sheets - the live, authoritative copy.
+  1. MySQL - the live, authoritative copy.
   2. data/client_registry.json - a local cache rewritten on every
-     successful Sheets read. Sheets being briefly unreachable must not
+     successful DB read. The database being briefly unreachable must not
      stop a poll cycle or blank the dashboard's client filter, and
      without this it would: the pollers run every few minutes and each
      one needs this mapping to know which orgs to fetch at all.
   3. settings.ini's legacy flat [mix_api]/[teletrac_api]/[ft_cloud_api]
      id lists, surfaced as one synthetic "Unassigned" client. This is
      the pre-multi-client behaviour, kept as a floor so a brand-new
-     deployment with no Sheets access still polls and still shows data
+     deployment with no DB access still polls and still shows data
      rather than silently doing nothing.
 """
 
@@ -45,7 +46,7 @@ def _write_cache(clients, cache_path=None):
     """All three platform pollers refresh this same cache from their own
     threads - see fleet_logic/atomic_json.py. Failing to cache is never
     fatal: the caller already has the live data it just fetched, and the
-    cache only matters for a LATER run that can't reach Sheets."""
+    cache only matters for a LATER run that can't reach the database."""
     path = cache_path or CACHE_PATH
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -83,11 +84,14 @@ def _from_settings(settings):
 
 
 # The registry is read by all three platform pollers on every cycle and
-# changes only when an admin edits it, so going to Sheets each time is
-# pure waste - and measurably harmful: it helped push this project over
-# the Sheets "read requests per minute" quota during testing, which
-# fails unrelated requests app-wide. Cached in memory, invalidated
-# explicitly on write (see invalidate_cache).
+# changes only when an admin edits it, so hitting the database each time
+# is pure waste. (Historically this also mattered a lot more: when this
+# was backed by Google Sheets, going to it every cycle helped push this
+# project over Sheets' "read requests per minute" quota, which failed
+# unrelated requests app-wide - a MySQL query has no such quota, but the
+# cache is still worth keeping for the same "why hit the DB every 5
+# minutes for data that changes rarely" reason.) Cached in memory,
+# invalidated explicitly on write (see invalidate_cache).
 _MEMO_TTL_SECONDS = 300
 _memo = {"clients": None, "fetched_at": 0.0}
 
@@ -99,30 +103,31 @@ def invalidate_cache():
     _memo["fetched_at"] = 0.0
 
 
-def load_registry(settings=None, cache_path=None, allow_sheets=True, force=False):
+def load_registry(settings=None, cache_path=None, allow_db=True, force=False):
     """
     The client list, newest-known-good. Never raises: a caller in the
     middle of a poll cycle needs an answer, not an exception.
     """
-    if allow_sheets and not force:
+    if allow_db and not force:
         memoized = _memo["clients"]
         if memoized is not None and (time.time() - _memo["fetched_at"]) < _MEMO_TTL_SECONDS:
             return memoized
 
-    if allow_sheets:
+    if allow_db:
         try:
-            import sheets_store
-            clients = sheets_store.load_clients()
-            # An empty Sheets tab is a legitimate "no clients configured
-            # yet" answer on a fresh install, but it's indistinguishable
-            # from a misconfigured sheet - and caching it would overwrite
-            # a good cache with nothing. Fall through instead.
+            import db_store
+            clients = db_store.load_clients()
+            # An empty clients table is a legitimate "no clients
+            # configured yet" answer on a fresh install, but it's
+            # indistinguishable from a misconfigured database - and
+            # caching it would overwrite a good cache with nothing. Fall
+            # through instead.
             if clients:
                 _memo.update({"clients": clients, "fetched_at": time.time()})
                 _write_cache(clients, cache_path)
                 return clients
         except Exception as e:
-            logger.warning(f"Client registry unavailable from Sheets ({e}), falling back to the local cache")
+            logger.warning(f"Client registry unavailable from the database ({e}), falling back to the local cache")
 
     cached = _read_cache(cache_path)
     if cached:

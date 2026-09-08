@@ -3,5 +3,27 @@ __pycache__/
 .env
 .git/
 .claude/
-data/_incoming/
-data/_refresh_lock.json
+
+# Runtime/generated data - never bake this into the image. The app already
+# handles a missing data/ directory gracefully (load_dashboard_data()
+# returns {} if fleet_today.json isn't there yet), and the real content
+# here is live client fleet data (positions, plates, tampering reports for
+# GTL/AGL/ADT) that must never end up as a permanent layer in a Docker Hub
+# image, public or private. The container gets this data at runtime via
+# the mounted/mapped data/ volume and the daily import, not at build time.
+data/
+
+# Committed as a LOCAL DEV FALLBACK ONLY (see users.py's docstring) - real
+# password hashes, must never ship inside a distributed image either.
+database/users.json
+# Runtime-written override file (see permissions.py) - same reasoning,
+# and it's regenerated on demand anyway.
+database/role_panels.json
+
+# Test/dev-only files with no reason to ship in a production image.
+# NOT scripts/ - scripts/init_db.py and scripts/export_sheets_to_mysql.py
+# are meant to be run via `docker exec` on the deployed container itself
+# (see DEPLOY.md), so they need to actually be in the image.
+test_*.py
+docs/
+*.md

@@ -1,19 +1,17 @@
 """
-User accounts, stored in the Google Sheet.
+User accounts, stored in MySQL (see db.py/db_store.py).
 
-WHY NOT A LOCAL FILE: database/users.json is committed to git, and
-Render's filesystem is ephemeral - every deploy re-clones the repo. A
-file-backed account list therefore silently reverts to whatever was
-committed on each deploy, taking every account created through Manage
-Users and every last-login stamp with it. The Sheet already exists as
-the durable store for feedback ("these comments must never be
-deleted"), so accounts live there too and survive deploys, restarts
-and redeploys.
+WHY NOT ONLY A LOCAL FILE: database/users.json is committed to git, and
+shared/PaaS hosting filesystems are typically ephemeral across deploys - a
+file-backed account list would silently revert to whatever was committed on
+each deploy, taking every account created through Manage Users and every
+last-login stamp with it. MySQL is the durable store for both accounts and
+feedback, and survives deploys, restarts and redeploys.
 
-The local JSON file is kept as a read-only FALLBACK, used only when
-Sheets credentials aren't configured (fresh clone, offline dev, running
-the test suite without secrets). Anything written while in fallback
-mode is expected to be temporary.
+The local JSON file is kept as a read-only, dev-only FALLBACK, used only
+when MYSQL_HOST/MYSQL_DATABASE/MYSQL_USER aren't all configured (fresh
+clone, offline dev, running the test suite without secrets). Anything
+written while in fallback mode is expected to be temporary.
 
 Passwords are never stored in plain text, in either store. Create or
 reset a user from the command line:
@@ -30,8 +28,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 USERS_PATH = os.path.join(os.path.dirname(__file__), "database", "users.json")
 
 
-def _sheets_available():
-    return bool(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") and os.environ.get("FEEDBACK_SHEET_ID"))
+def _db_available():
+    import db
+    return db.is_configured()
 
 
 def _load_local():
@@ -52,43 +51,43 @@ def _save_local(users):
 
 def load_users():
     """
-    Every account. Reads the Sheet when configured, falling back to the
-    local file otherwise. A Sheets read that errors (network blip, rate
-    limit) also falls back rather than locking everyone out of login -
-    a stale account list beats a dead sign-in page.
+    Every account. Reads MySQL when configured, falling back to the local
+    file otherwise. A DB read that errors (network blip, transient
+    connection failure) also falls back rather than locking everyone out
+    of login - a stale account list beats a dead sign-in page.
     """
-    if _sheets_available():
+    if _db_available():
         try:
-            import sheets_store
-            users = sheets_store.load_users_sheet()
+            import db_store
+            users = db_store.load_users_sheet()
             if users:
                 return users
-            # Empty Users tab on a Sheet that's otherwise set up means
-            # this is the first run since accounts moved here. Seed it
-            # from the local file so nobody is locked out mid-migration.
+            # Empty users table on an otherwise-configured DB means this
+            # is the first run since accounts moved here. Seed it from
+            # the local file so nobody is locked out mid-migration.
             local = _load_local()
             if local:
-                _migrate_local_to_sheet(local)
-                return sheets_store.load_users_sheet()
+                _migrate_local_to_db(local)
+                return db_store.load_users_sheet()
             return {}
         except Exception:
             return _load_local()
     return _load_local()
 
 
-def _migrate_local_to_sheet(local_users):
-    import sheets_store
+def _migrate_local_to_db(local_users):
+    import db_store
     for username, info in local_users.items():
-        sheets_store.add_user_sheet(
+        db_store.add_user_sheet(
             username, info.get("password_hash", ""), info.get("role", ""),
             info.get("clients", []),
         )
 
 
 def save_users(users):
-    """Kept for the local fallback path only - the Sheet is written
-    per-row by add_user()/record_login() rather than wholesale, so one
-    account's update can never clobber another's."""
+    """Kept for the local fallback path only - MySQL is written per-row
+    by add_user()/record_login() rather than wholesale, so one account's
+    update can never clobber another's."""
     _save_local(users)
 
 
@@ -99,9 +98,9 @@ def add_user(username, role, password, clients=None, email=""):
 
     email = (email or "").strip()
     password_hash = generate_password_hash(password)
-    if _sheets_available():
-        import sheets_store
-        sheets_store.add_user_sheet(username, password_hash, role, clients or [], email)
+    if _db_available():
+        import db_store
+        db_store.add_user_sheet(username, password_hash, role, clients or [], email)
     else:
         users = _load_local()
         users[username] = {
@@ -117,9 +116,9 @@ def set_email(username, email):
     """Backfills the address for an account created before emails were
     collected. Returns True if the account was found."""
     email = (email or "").strip()
-    if _sheets_available():
-        import sheets_store
-        return sheets_store.set_user_email(username, email)
+    if _db_available():
+        import db_store
+        return db_store.set_user_email(username, email)
     users = _load_local()
     if username not in users:
         return False
@@ -131,9 +130,9 @@ def set_email(username, email):
 def set_clients(username, clients):
     """Updates the client assignments for a user. Returns True if successful."""
     clients = [str(c).strip() for c in (clients or []) if str(c).strip()]
-    if _sheets_available():
-        import sheets_store
-        return sheets_store.set_user_clients(username, clients)
+    if _db_available():
+        import db_store
+        return db_store.set_user_clients(username, clients)
     users = _load_local()
     if username not in users:
         return False
@@ -147,9 +146,9 @@ def set_role(username, role):
     from permissions import ROLES
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
-    if _sheets_available():
-        import sheets_store
-        return sheets_store.set_user_role(username, role)
+    if _db_available():
+        import db_store
+        return db_store.set_user_role(username, role)
     users = _load_local()
     if username not in users:
         return False
@@ -162,9 +161,9 @@ def set_active(username, active):
     """Suspends or restores an account without deleting it. A
     deactivated account keeps its row (clients, role, history) but
     verify_login() refuses it. Returns True if the account was found."""
-    if _sheets_available():
-        import sheets_store
-        return sheets_store.set_user_active(username, bool(active))
+    if _db_available():
+        import db_store
+        return db_store.set_user_active(username, bool(active))
     users = _load_local()
     if username not in users:
         return False
@@ -175,9 +174,9 @@ def set_active(username, active):
 
 def delete_user(username):
     """Removes an account entirely. Returns True if it existed."""
-    if _sheets_available():
-        import sheets_store
-        return sheets_store.delete_user_sheet(username)
+    if _db_available():
+        import db_store
+        return db_store.delete_user_sheet(username)
     users = _load_local()
     if username not in users:
         return False
@@ -226,9 +225,9 @@ def record_login(username):
     block someone from logging in, so every error is swallowed.
     """
     try:
-        if _sheets_available():
-            import sheets_store
-            sheets_store.record_login_sheet(username)
+        if _db_available():
+            import db_store
+            db_store.record_login_sheet(username)
             return
         users = _load_local()
         if username not in users:
@@ -271,7 +270,7 @@ if __name__ == "__main__":
         email = sys.argv[5] if len(sys.argv) >= 6 else ""
         clients = [c.strip() for c in sys.argv[6].split(",")] if len(sys.argv) == 7 else []
         add_user(username, role, password, clients, email)
-        where = "the Google Sheet" if _sheets_available() else f"{USERS_PATH} (local fallback)"
+        where = "MySQL" if _db_available() else f"{USERS_PATH} (local fallback)"
         print(f"User '{username}' saved with role '{role}' to {where}.")
     elif len(sys.argv) == 4 and sys.argv[1] == "set-email":
         ok = set_email(sys.argv[2], sys.argv[3])

@@ -41,7 +41,7 @@ def _plates_by_client():
 
 
 def _payload_for(role, assigned_clients):
-    """One real request through the real route, with the Sheets-backed
+    """One real request through the real route, with the database-backed
     client lookup stubbed so the test needs no live accounts."""
     original = A._assigned_clients
     A._assigned_clients = lambda _username: assigned_clients

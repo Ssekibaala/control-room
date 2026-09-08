@@ -159,7 +159,11 @@ def write_report(results: dict, settings: dict, recovered: list, newly_offline: 
     ws = wb.create_sheet("Executive Dashboard", 0)
     ws.sheet_view.showGridLines = False
     ws.merge_cells("A1:F1")
-    ws["A1"] = "GTL FLEET INTEGRITY REPORT"
+    # Generic on purpose: this workbook covers every client's vehicles at
+    # generation time (per-client scoping happens later, in app.py's
+    # _client_scoped_workbook) - it used to say "GTL" unconditionally, which
+    # was simply wrong the moment a second client's rows were in the file.
+    ws["A1"] = "FLEET INTEGRITY REPORT"
     ws["A1"].font = Font(name=FONT_NAME, size=20, bold=True, color=NAVY)
     ws.merge_cells("A2:F2")
     ws["A2"] = f"Automated Cross-Platform Analysis  |  Generated {report_date.strftime('%d %B %Y, %H:%M')}"
@@ -370,7 +374,7 @@ def build_email_body(results: dict, settings: dict, recovered, newly_offline, re
     lines.append("Dear Justin/Brian,")
     lines.append("")
     lines.append(
-        "Please find below the daily GTL fleet integrity status update, automated cross-platform "
+        "Please find below the daily fleet integrity status update, automated cross-platform "
         f"analysis across MiX Unity, Teletrac, and FT Cloud, generated {report_date.strftime('%d %B %Y %H:%M')}."
     )
     lines.append("")

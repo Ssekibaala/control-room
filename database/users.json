@@ -10,5 +10,14 @@
   "gtl-client": {
     "password_hash": "scrypt:32768:8:1$48V0dSXAML6JtcBd$5d69164c13064a1cbe03c340095949c0bbfc600334af65a17c8b53b01c08109c08889757288fc7fec3baa5a46bc7d30d6a40eecf50728e772ae38f4065e4df13",
     "role": "client"
+  },
+  "demo-admin": {
+    "password_hash": "scrypt:32768:8:1$pbUK2mnLE8WIUDI6$5a00c17d98c9d0ee1f508745c3ff17e29024277e737c1ac0ba3fe63e0db256200c0e4ba25b2a1910022f64f12114a1efa1194eaebe3b6715dce920f11bb18b0f",
+    "role": "admin",
+    "clients": [],
+    "email": "",
+    "active": true,
+    "created_at": "17/08/2026 06:02",
+    "last_login": "17/08/2026 06:02"
   }
 }

@@ -22,10 +22,12 @@ import json
 import time
 import hmac
 import base64
+import logging
 import threading
 import functools
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template
+from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template, g
 
 from dotenv import load_dotenv
 load_dotenv()  # loads .env for local dev; no-op on Render, which injects real env vars directly
@@ -47,6 +49,81 @@ import atomic_json
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
+
+
+# ---- Server-side logging ------------------------------------------------
+# Structured, persistent server logs - separate from the print() calls
+# scattered through this codebase (those still just go to stdout, which
+# Docker/gunicorn/cPanel each capture their own way already). This is
+# specifically for "what did the SERVER see, request by request", which
+# nothing here provided before: a rotating file survives a restart and
+# doesn't grow unbounded, and every log line carries a timestamp, level,
+# and which module it came from - not just whatever text a print()
+# happened to contain.
+LOG_DIR = os.path.join(os.path.dirname(__file__), "data", "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+
+def _setup_logging():
+    root = logging.getLogger()
+    if root.handlers:
+        return  # already configured (e.g. the reloader re-imported this module)
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+
+    file_handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, "app.log"), maxBytes=5 * 1024 * 1024, backupCount=5)
+    file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root.addHandler(console_handler)
+
+
+_setup_logging()
+logger = logging.getLogger("control_room")
+
+
+@app.before_request
+def _log_request_start():
+    g._start_time = time.time()
+
+
+@app.after_request
+def _log_request_end(response):
+    """
+    Runs after EVERY request, success or handled error alike (Flask still
+    calls after_request hooks for non-2xx responses). Two things happen
+    here, both centralized so no individual route has to remember to do
+    either:
+      - every request is written to the rotating server log file, for
+        general ops visibility/debugging.
+      - every state-changing request (POST/PUT/DELETE) is also written to
+        the activity_log table in MySQL, which is what "who did what,
+        when" actually means for an audit trail - login, feedback,
+        exports, admin changes, cron/webhook triggers, all covered the
+        same way without touching each route's own code.
+    A failure in either must never break the actual response - this is
+    observability, not application logic.
+    """
+    try:
+        duration_ms = int((time.time() - g.get("_start_time", time.time())) * 1000)
+        username = session.get("username", "") if "username" in session else ""
+        role = session.get("role", "") if "role" in session else ""
+        logger.info(
+            f'{request.method} {request.path} -> {response.status_code} '
+            f'({duration_ms}ms) user={username or "-"} ip={request.remote_addr}'
+        )
+        if request.method in ("POST", "PUT", "DELETE"):
+            import db_store
+            db_store.log_activity(
+                username, role, request.method, request.path, response.status_code,
+                ip_address=request.remote_addr or "", duration_ms=duration_ms,
+            )
+    except Exception as e:
+        logger.warning(f"Request logging failed (response still sent): {e}")
+    return response
 
 
 def public_base_url():
@@ -90,29 +167,46 @@ def _is_probably_local_leftover(url):
     return any(marker in lowered for marker in ("localhost", "127.0.0.1", "0.0.0.0"))
 
 
-def _notify_async(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
+def _send_comment_notification(plate, comment, added_by, role, entry_type, requires_followup, respond_urls):
     """
-    Fires notifications.on_comment_added() on a background thread. The
-    Sheets write it follows is already durable by the time this runs -
-    email is a courtesy the requester was never waiting on, so a slow or
-    blocked SMTP host (see mailer.py's port 587->465 fallback, which by
-    itself can take several seconds) must not hold the HTTP response
-    open. Errors are only logged here; there is no request left to
-    report them to.
+    Calls notifications.on_comment_added() synchronously, in the request.
+
+    This used to fire on a background thread instead: the database write
+    it follows is already durable by the time this runs, and email is a
+    courtesy the requester was never waiting on, so a slow or blocked SMTP
+    host (see mailer.py's port 587->465 fallback, which by itself can
+    take several seconds) didn't need to hold the HTTP response open.
+    That reasoning held on a long-lived gunicorn worker, but a background
+    thread only actually finishes if the process happens to stay alive
+    after the response is sent - not guaranteed under a request-driven
+    host (Passenger/mod_wsgi on cPanel), where a worker can be recycled
+    the instant the response goes out. A thread killed mid-send fails
+    with nothing in any log to say so, which is worse than the extra
+    second or two synchronous sending adds here.
+
+    Errors are only logged, never raised - a failed notification must
+    never turn an already-saved comment into an error response.
     """
-    def _run():
-        try:
-            import notifications
-            result = notifications.on_comment_added(
-                plate, comment, added_by, role, entry_type, requires_followup, respond_urls)
-            if not result["sent"]:
-                print(f"Notification email not sent for {plate}: {result['reason']}")
-        except Exception as e:
-            print(f"Notification email failed for {plate}: {e}")
-    threading.Thread(target=_run, daemon=True).start()
+    try:
+        import notifications
+        result = notifications.on_comment_added(
+            plate, comment, added_by, role, entry_type, requires_followup, respond_urls)
+        if not result["sent"]:
+            print(f"Notification email not sent for {plate}: {result['reason']}")
+    except Exception as e:
+        print(f"Notification email failed for {plate}: {e}")
 
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "fleet_today.json")
+# Guaranteed to exist from this point on, once, at import time - every
+# lock file (_claim_lock uses raw os.open, not atomic_json, so it has no
+# mkdir safety net of its own) and every poller snapshot writer below
+# assumes data/ is already there. The repo used to ship it pre-populated
+# (see .gitignore's own comment on why data/fleet_today.json is
+# committed), so nothing needed this before; a Docker image built
+# without that committed sample data (see .dockerignore) is the first
+# environment where data/ can legitimately not exist yet at all.
+os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
 
 def load_dashboard_data():
@@ -200,7 +294,7 @@ def api_list_users():
         # Tells the UI whether accounts are in the durable store or the
         # ephemeral local fallback, so it can warn rather than quietly
         # letting someone create accounts that a deploy will erase.
-        "durable": users_store._sheets_available(),
+        "durable": users_store._db_available(),
     })
 
 
@@ -442,8 +536,8 @@ def api_list_clients():
     work; everyone else sees only their own.
     """
     try:
-        import sheets_store
-        clients = sheets_store.load_clients()
+        import db_store
+        clients = db_store.load_clients()
     except Exception as e:
         return jsonify({"error": f"Could not load clients: {e}"}), 503
     allowed = _visible_clients_for_session()
@@ -548,8 +642,8 @@ def api_create_client():
         return jsonify({"error": conflict}), 409
 
     try:
-        import sheets_store
-        sheets_store.add_client(name, emails, mix or [], teletrac or [], ft or [])
+        import db_store
+        db_store.add_client(name, emails, mix or [], teletrac or [], ft or [])
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
@@ -563,8 +657,8 @@ def _platform_account_conflict(name, mix, teletrac, ft):
     """Returns a human-readable message if any of these platform
     accounts is already mapped to a DIFFERENT client, else None."""
     try:
-        import sheets_store
-        existing = sheets_store.load_clients()
+        import db_store
+        existing = db_store.load_clients()
     except Exception:
         return None  # can't check - don't block the write on it
     for other in existing:
@@ -611,8 +705,8 @@ def api_set_client_platforms(name):
         return jsonify({"error": conflict}), 409
 
     try:
-        import sheets_store
-        found = sheets_store.set_client_platforms(name, mix, teletrac, ft)
+        import db_store
+        found = db_store.set_client_platforms(name, mix, teletrac, ft)
     except Exception as e:
         return jsonify({"error": f"Could not save: {e}"}), 503
     if not found:
@@ -632,8 +726,8 @@ def api_set_client_emails(name):
     if err:
         return jsonify({"error": err}), 400
     try:
-        import sheets_store
-        found = sheets_store.set_client_emails(name, emails)
+        import db_store
+        found = db_store.set_client_emails(name, emails)
     except Exception as e:
         return jsonify({"error": f"Could not save: {e}"}), 503
     if not found:
@@ -647,8 +741,8 @@ def api_delete_client(name):
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
     try:
-        import sheets_store
-        found = sheets_store.delete_client(name)
+        import db_store
+        found = db_store.delete_client(name)
     except Exception as e:
         return jsonify({"error": f"Could not delete: {e}"}), 503
     if not found:
@@ -710,10 +804,10 @@ def _overlay_feedback(raw):
     load it.
     """
     try:
-        import sheets_store
+        import db_store
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
         from feedback_overlay import apply_feedback
-        return apply_feedback(raw, sheets_store.load_feedback_cached()), True
+        return apply_feedback(raw, db_store.load_feedback_cached()), True
     except Exception as e:
         print(f"Feedback overlay unavailable this request: {e}")
         return raw, False
@@ -727,14 +821,14 @@ def _assigned_clients(username):
     """
     This account's client assignments, cached briefly.
 
-    users.load_users() is an uncached full Sheets read, and the
+    users.load_users() reads every account, not just this one, and the
     dashboard now re-fetches itself every 60s in every open tab, so
-    reading it per request would put a Sheets round trip on the hot
-    path. 30 seconds keeps that cheap while still making an access
-    change (or revocation) take effect almost immediately.
+    reading it fresh per request would repeat that full table read far
+    more than necessary. 30 seconds keeps that cheap while still making
+    an access change (or revocation) take effect almost immediately.
 
     On a lookup failure the last known good value is reused if there is
-    one, and otherwise access is denied rather than granted - a Sheets
+    one, and otherwise access is denied rather than granted - a database
     outage must not turn into a moment where a restricted account can
     see every client's data.
     """
@@ -949,10 +1043,11 @@ def api_export(name):
 
     data = base64.b64decode(b64)
     # The workbook is generated fleet-wide, so downloading it bypassed
-    # every other client boundary in the app - a GTL-only technician was
-    # getting a spreadsheet containing 114 AGL vehicles. Filtered per
-    # request rather than pre-generated per client: clients change, and
-    # a stale per-client file would be worse than none.
+    # every other client boundary in the app - a technician scoped to one
+    # client was getting a spreadsheet containing another client's
+    # vehicles too. Filtered per request rather than pre-generated per
+    # client: clients change, and a stale per-client file would be worse
+    # than none.
     allowed = _visible_clients_for_session()
     if allowed is not None:
         try:
@@ -963,10 +1058,90 @@ def api_export(name):
             print(f"Could not scope the {name} export: {e}")
             return jsonify({"error": "Could not prepare a report limited to your clients."}), 503
 
+    # The filename used to always say "GTL_..." regardless of who was
+    # downloading it or which client's data was actually inside - a real
+    # problem the moment a second client existed, and worse than the
+    # in-app leaks above precisely because a downloaded file outlives the
+    # session and gets forwarded/attached with no further context. Named
+    # after what this specific download actually contains instead.
+    if allowed is not None and len(allowed) == 1:
+        prefix = next(iter(allowed))
+    elif allowed is not None:
+        prefix = "MultiClient"
+    else:
+        prefix = "AllClients"
+    fname = f"{prefix}_{name}_report.xlsx".replace(" ", "_")
+
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=GTL_{name}_report.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@app.route("/api/export/tampering/custom")
+@login_required
+def api_export_tampering_custom():
+    """
+    Flexible counterpart to /api/export/tampering above: that one always
+    downloads everything the session can see, generated once per import/
+    poll cycle. This builds one on demand from the SAME already-
+    classified cases, narrowed by whichever of these query params were
+    given - every one of them optional, so leaving all of them off is
+    just "everything I can see," same as the plain export:
+      from=YYYY-MM-DD, to=YYYY-MM-DD  - inclusive arrival-date range
+      client=<name>                   - one client (still checked
+                                         against this session's own
+                                         visibility, same as every
+                                         other client-scoped route)
+      plates=A,B,C                    - only these registrations
+      confirmed_only=true             - Unconfirmed Cases sheet omitted
+    """
+    role = session["role"]
+    if role not in EXPORT_ACCESS.get("tampering_xlsx", ()):
+        return jsonify({"error": "not permitted for your role"}), 403
+
+    allowed = _visible_clients_for_session()
+    client_name = (request.args.get("client") or "").strip() or None
+    if client_name and allowed is not None and client_name not in allowed:
+        return jsonify({"error": f"You do not have access to {client_name}"}), 403
+
+    import tampering_export
+
+    date_from = date_to = None
+    for param, label in (("from", "from"), ("to", "to")):
+        raw_val = (request.args.get(param) or "").strip()
+        if not raw_val:
+            continue
+        try:
+            parsed = datetime.strptime(raw_val, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": f"'{label}' must be YYYY-MM-DD"}), 400
+        if param == "from":
+            date_from = parsed
+        else:
+            date_to = parsed
+
+    plates = [p for p in (request.args.get("plates") or "").split(",") if p.strip()]
+    confirmed_only = (request.args.get("confirmed_only") or "").lower() in ("true", "1", "yes")
+
+    raw = load_dashboard_data()
+    plate_owner = _plate_client_map()
+    confirmed = tampering_export.filter_cases(
+        raw.get("tamperConfirmed") or [], plate_owner, allowed_clients=allowed,
+        client_name=client_name, date_from=date_from, date_to=date_to, plates=plates)
+    unconfirmed = [] if confirmed_only else tampering_export.filter_cases(
+        raw.get("tamperUnconfirmed") or [], plate_owner, allowed_clients=allowed,
+        client_name=client_name, date_from=date_from, date_to=date_to, plates=plates)
+
+    data = tampering_export.build_workbook(confirmed, unconfirmed, confirmed_only=confirmed_only,
+                                            client_name=client_name)
+    prefix = client_name or ("AllClients" if allowed is None else "MultiClient")
+    fname = f"TamperingReport_{prefix}_{now_eat().strftime('%Y%m%d')}.xlsx".replace(" ", "_")
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
 
 
@@ -1018,6 +1193,108 @@ def _client_scoped_workbook(data, allowed):
     return out.getvalue()
 
 
+def _ddr_full_rows_for_client(client_name):
+    """
+    The same per-vehicle rows the dashboard's Full Data table already
+    renders (feedback/action already merged in - see _overlay_feedback),
+    checked against this session's OWN client visibility before handing
+    anything to fleet_logic/ddr_report.py. Returns (rows, error_response)
+    - error_response is None on success, an (jsonify(...), status) tuple
+    otherwise, so both DDR routes below share one scoping check instead
+    of two copies that could drift apart.
+    """
+    client_name = (client_name or "").strip()
+    if not client_name:
+        return None, (jsonify({"error": "'client' is required"}), 400)
+    visible = permissions.visible_clients(session["role"], _assigned_clients(session["username"]))
+    if visible is not None and client_name not in visible:
+        return None, (jsonify({"error": f"You do not have access to {client_name}"}), 403)
+
+    raw = load_dashboard_data()
+    raw, _ = _overlay_feedback(raw)
+    return (raw.get("full") or []), None
+
+
+@app.route("/api/ddr/export", methods=["GET"])
+@login_required
+def api_ddr_export():
+    """
+    Downloads a DDR (Device Diagnostic Report) workbook for one client -
+    see fleet_logic/ddr_report.py. Same category split for every client
+    (OBC from MiX Unity, AD Plus AI Camera from FT Cloud) - nothing here
+    is specific to any one client, which is the whole point: pick a
+    different ?client= and the same two sheets come back for them.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    client_name = (request.args.get("client") or "").strip()
+    full_rows, err = _ddr_full_rows_for_client(client_name)
+    if err:
+        return err
+
+    import ddr_report
+    settings = _load_settings()
+    data = ddr_report.build_workbook(full_rows, client_name=client_name,
+                                      long_term_fault_days=settings["LONG_TERM_FAULT_DAYS"],
+                                      high_priority_days=settings["HIGH_PRIORITY_DAYS"])
+    fname = f"DDR_{client_name.replace(' ', '_')}_{now_eat().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@app.route("/api/ddr/send", methods=["POST"])
+@login_required
+def api_ddr_send():
+    """
+    Builds the same workbook as api_ddr_export() and emails it as an
+    attachment to hand-typed addresses - the "share it with the customer
+    to get feedback" half of the feature. Same recipient validation as
+    the existing ad-hoc report send (/api/notifications/send): a small,
+    explicit list, not a mailing list, and never more than
+    MAX_MANUAL_RECIPIENTS at a time.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    client_name = (body.get("client") or "").strip()
+    full_rows, err = _ddr_full_rows_for_client(client_name)
+    if err:
+        return err
+
+    raw_to = body.get("to")
+    if isinstance(raw_to, str):
+        raw_to = re.split(r"[,;\s]+", raw_to)
+    to_addrs, bad = [], []
+    for addr in (raw_to or []):
+        addr = str(addr).strip()
+        if not addr:
+            continue
+        (to_addrs if _EMAIL_RE.match(addr) else bad).append(addr)
+    if bad:
+        return jsonify({"error": f"Not a valid email address: {', '.join(bad)}"}), 400
+    if not to_addrs:
+        return jsonify({"error": "Enter at least one email address to send to"}), 400
+    if len(to_addrs) > MAX_MANUAL_RECIPIENTS:
+        return jsonify({"error": f"At most {MAX_MANUAL_RECIPIENTS} addresses at a time"}), 400
+
+    note = (body.get("note") or "").strip() or None
+    import ddr_report
+    settings = _load_settings()
+    xlsx_bytes = ddr_report.build_workbook(full_rows, client_name=client_name,
+                                            long_term_fault_days=settings["LONG_TERM_FAULT_DAYS"],
+                                            high_priority_days=settings["HIGH_PRIORITY_DAYS"])
+
+    import notifications
+    result = notifications.send_ddr_report(client_name, to_addrs, xlsx_bytes,
+                                           sent_by=session["username"], note=note)
+    print(f"DDR sent by {session['username']} for {client_name} to {', '.join(to_addrs)}: {result}")
+    return jsonify({"ok": result.get("sent", False), "to": to_addrs, "reason": result.get("reason")})
+
+
 @app.route("/api/feedback", methods=["POST"])
 @login_required
 def api_feedback():
@@ -1055,31 +1332,31 @@ def api_feedback():
         return jsonify({"error": "Only technicians and admins can set the Recommended Action"}), 403
 
     try:
-        import sheets_store
-        sheets_store.add_feedback(
+        import db_store
+        db_store.add_feedback(
             plate, comment, added_by=reported_by,
             requires_followup=requires_followup_raw, role=role,
             entry_type=entry_type,
         )
-        status = sheets_store.infer_status(comment, requires_followup_raw)
+        status = db_store.infer_status(comment, requires_followup_raw)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:
-        # Anything from gspread/Google's side (rate limit, timeout,
-        # transient API error) landed here before as an unhandled
-        # exception - Flask's HTML error page isn't valid JSON, so the
-        # frontend's fetch().then(r => r.json()) throws and shows a
-        # misleading "could not reach the server" for what was actually
-        # a real, specific failure that reached this code just fine.
-        return jsonify({"error": f"Could not save to Google Sheets right now: {e}"}), 503
+        # Anything from the database side (connection drop, timeout,
+        # transient error) landed here before as an unhandled exception -
+        # Flask's HTML error page isn't valid JSON, so the frontend's
+        # fetch().then(r => r.json()) throws and shows a misleading
+        # "could not reach the server" for what was actually a real,
+        # specific failure that reached this code just fine.
+        return jsonify({"error": f"Could not save to the database right now: {e}"}), 503
 
     # The comment is already safely saved above - everything from here is
-    # best-effort AND off the request thread. SMTP itself can take several
-    # seconds (a blocked port timing out before mailer.py's fallback picks
-    # up, or just a slow mail host), and there is nothing in that send the
-    # browser needs before it can show "Saved" - the sheet write already
-    # succeeded. Blocking the response on it turned every submit into a
-    # multi-second wait for something the user was never looking at.
+    # best-effort. SMTP itself can take several seconds (a blocked port
+    # timing out before mailer.py's fallback picks up, or just a slow mail
+    # host), so the submitter does wait on it, but its failure can never
+    # turn this into an error response - see _send_comment_notification's
+    # docstring for why this now runs synchronously instead of on a
+    # background thread.
     base_url = public_base_url()
     respond_urls = None
     if role in ("admin", "technician"):
@@ -1089,9 +1366,73 @@ def api_feedback():
             "needs_attention": base_url + url_for("respond_page",
                 token=make_respond_token(plate, "needs_attention")),
         }
-    _notify_async(plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls)
+    _send_comment_notification(plate, comment, reported_by, role, entry_type, requires_followup_raw, respond_urls)
 
     return jsonify({"ok": True, "plate": plate, "status": status})
+
+
+@app.route("/api/feedback/<int:feedback_id>", methods=["PUT"])
+@login_required
+def api_edit_feedback(feedback_id):
+    """
+    Corrects an existing feedback entry (a typo, a wrongly-worded
+    comment) - admin/technician only. Feedback is otherwise append-only
+    by design (see db_store.add_feedback()), which used to mean the only
+    way to fix a mistake was editing the Google Sheet by hand; this is
+    that workflow's replacement, now that there is no sheet to edit.
+    Soft: db_store.update_feedback() records who changed what and when
+    (edited_at/edited_by) and mirrors the change into audit_log rather
+    than silently overwriting history.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    comment = body.get("comment")
+    requires_followup = body.get("requiresFollowup")
+    if comment is None and requires_followup is None:
+        return jsonify({"error": "Nothing to update - supply 'comment' and/or 'requiresFollowup'"}), 400
+    if requires_followup is not None and not isinstance(requires_followup, bool):
+        return jsonify({"error": "'requiresFollowup' must be true or false"}), 400
+    try:
+        import db_store
+        plate = db_store.get_feedback_plate(feedback_id)
+        if plate is None:
+            return jsonify({"error": f"No feedback entry with id {feedback_id} (or it was already deleted)"}), 404
+        # Same isolation every other plate-scoped route in this file
+        # enforces: a technician scoped to one client must not be able to
+        # edit another client's feedback just by guessing/incrementing an id.
+        if not _plate_allowed(plate):
+            return _deny_plate(plate)
+        found = db_store.update_feedback(feedback_id, comment=comment, requires_followup=requires_followup,
+                                         edited_by=session["username"])
+    except Exception as e:
+        return jsonify({"error": f"Could not save the correction: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No feedback entry with id {feedback_id} (or it was already deleted)"}), 404
+    return jsonify({"ok": True, "id": feedback_id})
+
+
+@app.route("/api/feedback/<int:feedback_id>", methods=["DELETE"])
+@login_required
+def api_delete_feedback(feedback_id):
+    """Soft-deletes a feedback entry - admin/technician only. See
+    api_edit_feedback's docstring for why this is soft rather than a
+    real delete."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    try:
+        import db_store
+        plate = db_store.get_feedback_plate(feedback_id)
+        if plate is None:
+            return jsonify({"error": f"No feedback entry with id {feedback_id} (or it was already deleted)"}), 404
+        if not _plate_allowed(plate):
+            return _deny_plate(plate)
+        found = db_store.delete_feedback(feedback_id, deleted_by=session["username"])
+    except Exception as e:
+        return jsonify({"error": f"Could not delete the entry: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No feedback entry with id {feedback_id} (or it was already deleted)"}), 404
+    return jsonify({"ok": True, "id": feedback_id})
 
 
 @app.route("/feedback/respond")
@@ -1110,8 +1451,8 @@ def respond_page():
     if error:
         return render_template("respond.html", error=error), 400
     try:
-        import sheets_store
-        if sheets_store.is_token_used(token):
+        import db_store
+        if db_store.is_token_used(token):
             return render_template(
                 "respond.html", error="This link has already been used to respond. "
                 "If you need to add anything else, use the in-app comment form or contact us directly."), 400
@@ -1136,20 +1477,20 @@ def respond_submit():
         return jsonify({"error": error}), 400
 
     try:
-        import sheets_store
-        if sheets_store.is_token_used(token):
+        import db_store
+        if db_store.is_token_used(token):
             return jsonify({"error": "This link has already been used to respond."}), 400
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:
-        # Anything else here is a live Google Sheets hiccup (rate limit,
-        # transient API error, etc.), not "misconfigured" like the
-        # RuntimeError case above. Previously this only caught
-        # RuntimeError, so a Sheets APIError propagated all the way out
-        # of the view function - Flask returned its own generic HTML 500
-        # page instead of JSON, which made the confirm page's fetch()
-        # fail its r.json() parse and show "Could not reach the server"
-        # even though the server was reachable and the token was fine.
+        # Anything else here is a live database hiccup (connection drop,
+        # transient error, etc.), not "misconfigured" like the RuntimeError
+        # case above. Previously this only caught RuntimeError, so any
+        # other storage error propagated all the way out of the view
+        # function - Flask returned its own generic HTML 500 page instead
+        # of JSON, which made the confirm page's fetch() fail its
+        # r.json() parse and show "Could not reach the server" even
+        # though the server was reachable and the token was fine.
         return jsonify({"error": f"Could not check this link right now: {e}. Please try again."}), 503
 
     # The token proves WHICH vehicle this link may answer for - that's the
@@ -1173,8 +1514,8 @@ def respond_submit():
 
     requires_followup = requires_followup_raw
     try:
-        import sheets_store
-        sheets_store.add_feedback(
+        import db_store
+        db_store.add_feedback(
             plate, comment, added_by=name, requires_followup=requires_followup,
             role="client", entry_type="feedback",
         )
@@ -1187,11 +1528,11 @@ def respond_submit():
     # failed save above must leave the link usable for a retry, not
     # burn it on an attempt that never took effect.
     try:
-        sheets_store.mark_token_used(token)
+        db_store.mark_token_used(token)
     except Exception as e:
         print(f"Could not record token as used for {plate}: {e}")
 
-    _notify_async(plate, comment, name, "client", "feedback", requires_followup, None)
+    _send_comment_notification(plate, comment, name, "client", "feedback", requires_followup, None)
 
     return jsonify({"ok": True, "plate": plate})
 
@@ -1205,13 +1546,11 @@ def api_feedback_history(plate):
     logged-in role can read this: it's the same feedback the client
     themselves can already submit, not privileged data.
 
-    Uses the cached read (same as /api/dashboard-data's overlay) rather
-    than a fresh Sheets API call - the drill-down modal was paying a
-    full ~1-4s Google Sheets round trip on every open, when the same
-    30s-TTL cache everything else already relies on is fresh enough
-    here too. A submit on this exact plate still lands instantly for
-    the submitter: add_feedback() patches this worker's cache in place
-    before this ever runs (see sheets_store._patch_cache_with).
+    Uses db_store.load_feedback_cached() (same as /api/dashboard-data's
+    overlay) purely so every read of feedback in this file goes through one
+    named function - it's a direct MySQL read with no actual caching layer
+    behind it (see that function's docstring for why the Sheets-era cache
+    this used to lean on is no longer needed).
     """
     # The plate is a URL path segment, so this endpoint was a direct
     # read of any client's comment trail regardless of what the
@@ -1219,12 +1558,12 @@ def api_feedback_history(plate):
     if not _plate_allowed(plate):
         return _deny_plate(plate)
     try:
-        import sheets_store
-        all_feedback = sheets_store.load_feedback_cached()
+        import db_store
+        all_feedback = db_store.load_feedback_cached()
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:
-        return jsonify({"error": f"Could not read from Google Sheets right now: {e}"}), 503
+        return jsonify({"error": f"Could not read from the database right now: {e}"}), 503
 
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
@@ -1255,12 +1594,12 @@ def api_feedback_activity():
     read this.
     """
     try:
-        import sheets_store
-        entries = sheets_store.load_all_feedback_entries()
+        import db_store
+        entries = db_store.load_all_feedback_entries()
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:
-        return jsonify({"error": f"Could not read from Google Sheets right now: {e}"}), 503
+        return jsonify({"error": f"Could not read from the database right now: {e}"}), 503
 
     # dateISO (YYYY-MM-DD) is what the frontend actually filters/counts
     # on - unambiguous and locale-independent, unlike matching "26 Jul
@@ -1336,6 +1675,33 @@ def _claim_refresh_lock():
     return _claim_lock(REFRESH_LOCK_PATH, LOCK_COOLDOWN_MINUTES)
 
 
+def _lock_active(path, cooldown_minutes):
+    """
+    Read-only check: True if a lock at `path` is currently held and not
+    yet stale. Never claims or removes anything - for status display
+    only (e.g. "is a fetch currently running?"), where _claim_lock's
+    claim-or-steal behaviour would be the wrong tool.
+    """
+    try:
+        with open(path) as f:
+            held = json.load(f)
+        age_minutes = (time.time() - held.get("triggered_at", 0)) / 60
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return age_minutes < cooldown_minutes
+
+
+def _release_lock(path):
+    """Releases a lock claimed by _claim_lock immediately once the work
+    it was guarding is done, rather than leaving it to expire on its own
+    cooldown - holding it any longer would just block the next
+    legitimate trigger (manual or cron) for no reason."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 @app.route("/api/refresh-if-stale", methods=["POST"])
 @login_required
 def api_refresh_if_stale():
@@ -1370,14 +1736,19 @@ def api_refresh_if_stale():
     if not _claim_refresh_lock():
         return jsonify({"status": "refresh_recently_triggered", "ageHours": round(age_hours, 1)})
 
-    def _background_import():
-        try:
-            from run_import import run_import as do_import
-            do_import(force=True)
-        except Exception as e:
-            print(f"Background auto-refresh failed: {e}")
-
-    threading.Thread(target=_background_import, daemon=True).start()
+    # Runs synchronously rather than on a background thread: the caller
+    # (templates/dashboard.html's boot()) already fires this with
+    # `fetch(...).catch(() => {})`, never awaited and only after the
+    # dashboard has already rendered from the data it had - so blocking
+    # THIS request until the import finishes costs the browser nothing it
+    # was waiting on, while a background thread here would only be
+    # guaranteed to finish on a host that keeps worker processes alive
+    # between requests, which cPanel/Passenger-style hosting does not.
+    try:
+        from run_import import run_import as do_import
+        do_import(force=True)
+    except Exception as e:
+        print(f"Auto-refresh failed: {e}")
     return jsonify({"status": "refresh_triggered", "ageHours": round(age_hours, 1)})
 
 
@@ -1395,23 +1766,26 @@ def api_checkin_trigger():
     param. The tampering report is NOT part of this button; it stays on
     its own schedule (see notifications.send_tamper_risk_report_digest).
 
-    Runs in the background (a real IMAP fetch + Sheets reads/writes can
-    take a while) - the caller finds out who last triggered it via
-    GET /api/checkin/last below, not from this response.
+    Runs synchronously (a real IMAP fetch + database reads/writes can take
+    a while, so this response can be slow) rather than on a background
+    thread - a thread here is only guaranteed to finish on a host that
+    keeps worker processes alive between requests, which cPanel/
+    Passenger-style hosting does not. The dashboard button already shows
+    a "sending..." state and disables itself for the duration (see
+    templates/dashboard.html's checkin-trigger handler), so a slower,
+    guaranteed-complete response is a straightforward improvement over a
+    fast response that might silently never finish the work.
     """
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
 
     username = session["username"]
-
-    def _background_checkin():
-        try:
-            from run_import import run_import as do_import
-            do_import(force=True, force_digests=True, prompted_by=username)
-        except Exception as e:
-            print(f"Manual check-in failed: {e}")
-
-    threading.Thread(target=_background_checkin, daemon=True).start()
+    try:
+        from run_import import run_import as do_import
+        do_import(force=True, force_digests=True, prompted_by=username)
+    except Exception as e:
+        print(f"Manual check-in failed: {e}")
+        return jsonify({"error": f"Check-in failed: {e}"}), 503
     return jsonify({"status": "started"})
 
 
@@ -1421,8 +1795,8 @@ def api_checkin_last():
     """Who last pressed the button, and when - so everyone looking at
     the dashboard sees the same answer, not just whoever clicked it."""
     try:
-        import sheets_store
-        last = sheets_store.get_last_manual_checkin()
+        import db_store
+        last = db_store.get_last_manual_checkin()
     except Exception:
         last = None
     if not last:
@@ -1609,7 +1983,7 @@ def api_manual_send():
 def api_tamper_check():
     """
     Records that staff physically inspected a vehicle flagged by the
-    tampering detector. See sheets_store.add_tamper_check()'s docstring:
+    tampering detector. See db_store.add_tamper_check()'s docstring:
     from this point on, any gap on this plate dated on or before now is
     excluded from confirmed/unconfirmed on the NEXT import (this
     doesn't retroactively edit the currently-loaded dashboard data).
@@ -1631,11 +2005,60 @@ def api_tamper_check():
         return _deny_plate(plate)
 
     try:
-        import sheets_store
-        sheets_store.add_tamper_check(plate, session["username"], comment)
+        import db_store
+        db_store.add_tamper_check(plate, session["username"], comment)
     except Exception as e:
         return jsonify({"error": f"Could not save the check: {e}"}), 503
     return jsonify({"ok": True, "plate": plate})
+
+
+@app.route("/api/tamper-check/<int:check_id>", methods=["PUT"])
+@login_required
+def api_edit_tamper_check(check_id):
+    """Corrects an existing physical-check record - same reasoning and
+    same soft-edit/audit-logged design as api_edit_feedback above,
+    applied to db_store.update_tamper_check()."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    comment = body.get("comment")
+    if comment is None:
+        return jsonify({"error": "'comment' is required"}), 400
+    try:
+        import db_store
+        plate = db_store.get_tamper_check_plate(check_id)
+        if plate is None:
+            return jsonify({"error": f"No tamper check with id {check_id} (or it was already deleted)"}), 404
+        if not _plate_allowed(plate):
+            return _deny_plate(plate)
+        found = db_store.update_tamper_check(check_id, comment=comment, edited_by=session["username"])
+    except Exception as e:
+        return jsonify({"error": f"Could not save the correction: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No tamper check with id {check_id} (or it was already deleted)"}), 404
+    return jsonify({"ok": True, "id": check_id})
+
+
+@app.route("/api/tamper-check/<int:check_id>", methods=["DELETE"])
+@login_required
+def api_delete_tamper_check(check_id):
+    """Soft-deletes a physical-check record - same reasoning as
+    api_delete_feedback above."""
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    try:
+        import db_store
+        plate = db_store.get_tamper_check_plate(check_id)
+        if plate is None:
+            return jsonify({"error": f"No tamper check with id {check_id} (or it was already deleted)"}), 404
+        if not _plate_allowed(plate):
+            return _deny_plate(plate)
+        found = db_store.delete_tamper_check(check_id, deleted_by=session["username"])
+    except Exception as e:
+        return jsonify({"error": f"Could not delete the entry: {e}"}), 503
+    if not found:
+        return jsonify({"error": f"No tamper check with id {check_id} (or it was already deleted)"}), 404
+    return jsonify({"ok": True, "id": check_id})
 
 
 def _write_json_atomic(path, data):
@@ -1649,7 +2072,16 @@ def _write_json_atomic(path, data):
 MIX_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_api_snapshot.json")
 
 MIX_ASSET_INSTALL_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "mix_asset_install_snapshot.json")
-_asset_install_poll_state = {"running": False}
+ASSET_INSTALL_REFRESH_LOCK_PATH = os.path.join(os.path.dirname(__file__), "data", "_asset_install_refresh_lock.json")
+# One MiX call per org, so this can legitimately run for a minute or two
+# with many orgs mapped - long enough that two admins (or one impatient
+# double-click) triggering it around the same time is a real
+# possibility, not just a theoretical race. A plain in-memory flag would
+# only ever be seen by one worker process, which is exactly the gap
+# _claim_lock's file-based approach closes (see its own docstring) - the
+# same mechanism already used for the digest scheduler and the daily
+# import's stale-refresh guard.
+ASSET_INSTALL_REFRESH_COOLDOWN_MINUTES = 10
 
 
 def _mix_asset_install_poll_once(client_names=None):
@@ -1722,37 +2154,37 @@ def api_asset_install_dates():
                 snapshot = json.load(f)
         except (OSError, ValueError):
             pass
-    snapshot["running"] = _asset_install_poll_state["running"]
+    snapshot["running"] = _lock_active(ASSET_INSTALL_REFRESH_LOCK_PATH, ASSET_INSTALL_REFRESH_COOLDOWN_MINUTES)
     return jsonify(snapshot)
 
 
 @app.route("/api/admin/asset-install-dates/refresh", methods=["POST"])
 @login_required
 def api_asset_install_dates_refresh():
-    """Manual trigger - runs in the background (one MiX call per org,
-    rate-limited, so this can take a while with many orgs); poll
-    /api/admin/asset-install-dates for the result. Body: optional
-    {"clients": [...]} to scope the fetch to specific clients instead
-    of every MiX client."""
+    """
+    Manual trigger. Runs synchronously (one MiX call per org, rate-
+    limited, so this can legitimately take a minute or two with many
+    orgs mapped) rather than on a background thread - see
+    ASSET_INSTALL_REFRESH_LOCK_PATH's comment for why a file lock, not
+    an in-memory flag, guards against a double-trigger. Body: optional
+    {"clients": [...]} to scope the fetch to specific clients instead of
+    every MiX client.
+    """
     if session["role"] != "admin":
         return jsonify({"error": "Not permitted for your role"}), 403
-    if _asset_install_poll_state["running"]:
+    if not _claim_lock(ASSET_INSTALL_REFRESH_LOCK_PATH, ASSET_INSTALL_REFRESH_COOLDOWN_MINUTES):
         return jsonify({"status": "already-running"})
 
     body = request.get_json(force=True, silent=True) or {}
     client_names = body.get("clients") or None
-
-    def _run():
-        _asset_install_poll_state["running"] = True
-        try:
-            result = _mix_asset_install_poll_once(client_names)
-            print(f"Asset install date fetch: {result}")
-        except Exception as e:
-            print(f"Asset install date fetch failed: {e}")
-        finally:
-            _asset_install_poll_state["running"] = False
-
-    threading.Thread(target=_run, daemon=True).start()
+    try:
+        result = _mix_asset_install_poll_once(client_names)
+        print(f"Asset install date fetch: {result}")
+    except Exception as e:
+        print(f"Asset install date fetch failed: {e}")
+        return jsonify({"error": f"Fetch failed: {e}"}), 502
+    finally:
+        _release_lock(ASSET_INSTALL_REFRESH_LOCK_PATH)
     return jsonify({"status": "started"})
 
 
@@ -1777,13 +2209,76 @@ def api_asset_install_dates_export():
     import asset_install_report
     data = asset_install_report.build_workbook(snapshot.get("rows") or [], month=month, fields=fields)
     month_label = asset_install_report.month_display(month)
-    fname = (f"GTL_asset_install_dates_{month_label.replace(' ', '_')}.xlsx" if month_label
-              else "GTL_asset_install_dates_all.xlsx")
+    # This report is fleet-wide (admin-only, not client-scoped - see the
+    # docstring above), so there's no one client name to put here; it used
+    # to hardcode "GTL_" regardless of who the fleet actually belonged to.
+    fname = (f"AssetInstallDates_{month_label.replace(' ', '_')}.xlsx" if month_label
+              else "AssetInstallDates_all.xlsx")
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
+
+
+@app.route("/api/admin/activity-log", methods=["GET"])
+@login_required
+def api_activity_log():
+    """
+    Read-only view of activity_log (see app.py's after_request hook,
+    which writes it) - who did what, from where, and what the server
+    answered, for every state-changing request. Admin-only: this spans
+    every account and every client unscoped, see
+    permissions.PANEL_ACCESS["p-activitylog"].
+    """
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    limit = min(int(request.args.get("limit", 200) or 200), 1000)
+    username = (request.args.get("username") or "").strip() or None
+    try:
+        import db_store
+        rows = db_store.load_activity_log(limit=limit, username=username)
+    except Exception as e:
+        return jsonify({"error": f"Could not read the activity log: {e}"}), 503
+    return jsonify({"entries": [
+        {
+            "occurredAt": r["occurred_at"].strftime("%d %b %Y, %H:%M:%S") if r.get("occurred_at") else "",
+            "username": r.get("username") or "", "role": r.get("role") or "",
+            "method": r.get("method") or "", "path": r.get("path") or "",
+            "statusCode": r.get("status_code"), "ipAddress": r.get("ip_address") or "",
+            "durationMs": r.get("duration_ms"),
+        }
+        for r in rows
+    ]})
+
+
+@app.route("/api/admin/audit-log", methods=["GET"])
+@login_required
+def api_audit_log():
+    """
+    Read-only view of audit_log (see db_store.log_change()) - field-level
+    corrections to users/clients/feedback/tamper_checks: what changed,
+    from what to what, and who made the change. Admin-only, same
+    reasoning as api_activity_log() above.
+    """
+    if session["role"] != "admin":
+        return jsonify({"error": "Not permitted for your role"}), 403
+    limit = min(int(request.args.get("limit", 200) or 200), 1000)
+    table_name = (request.args.get("table") or "").strip() or None
+    try:
+        import db_store
+        rows = db_store.load_audit_log(limit=limit, table_name=table_name)
+    except Exception as e:
+        return jsonify({"error": f"Could not read the audit log: {e}"}), 503
+    return jsonify({"entries": [
+        {
+            "changedAt": r["changed_at"].strftime("%d %b %Y, %H:%M:%S") if r.get("changed_at") else "",
+            "tableName": r.get("table_name") or "", "rowKey": r.get("row_key") or "",
+            "field": r.get("field") or "", "oldValue": r.get("old_value") or "",
+            "newValue": r.get("new_value") or "", "changedBy": r.get("changed_by") or "",
+        }
+        for r in rows
+    ]})
 
 
 def _load_settings():
@@ -1797,7 +2292,7 @@ def _load_settings_from(path):
 
 def _poll_registry(settings):
     """The client list every poller works from. See
-    client_registry.load_registry() for the Sheets -> cache ->
+    client_registry.load_registry() for the MySQL -> cache ->
     settings.ini fallback chain and why it never raises."""
     import client_registry
     return client_registry.load_registry(settings)
@@ -1973,11 +2468,15 @@ def api_mix_snapshot():
 @login_required
 def api_mix_poll_now():
     """Manual trigger so testing doesn't require waiting for the
-    interval - runs in the background, check /api/mix/snapshot after."""
+    interval. Runs synchronously and returns the real result - a
+    background thread here is only guaranteed to finish on a host that
+    keeps worker processes alive between requests."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    threading.Thread(target=_mix_api_poll_once, daemon=True).start()
-    return jsonify({"status": "started"})
+    result = _mix_api_poll_once()
+    if result["status"] == "ok":
+        _refresh_live_snapshot_after_poll("MiX")
+    return jsonify(result)
 
 
 TELETRAC_API_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "data", "teletrac_api_snapshot.json")
@@ -2079,11 +2578,14 @@ def api_teletrac_snapshot():
 @login_required
 def api_teletrac_poll_now():
     """Manual trigger so testing doesn't require waiting for the
-    interval - runs in the background, check /api/teletrac/snapshot after."""
+    interval. Runs synchronously and returns the real result - see
+    api_mix_poll_now() for why this no longer uses a background thread."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    threading.Thread(target=_teletrac_api_poll_once, daemon=True).start()
-    return jsonify({"status": "started"})
+    result = _teletrac_api_poll_once()
+    if result["status"] == "ok":
+        _refresh_live_snapshot_after_poll("Teletrac")
+    return jsonify(result)
 
 
 @app.route("/api/teletrac/clients", methods=["GET"])
@@ -2230,11 +2732,14 @@ def api_ft_cloud_snapshot():
 @login_required
 def api_ft_cloud_poll_now():
     """Manual trigger so testing doesn't require waiting for the
-    interval - runs in the background, check /api/ftcloud/snapshot after."""
+    interval. Runs synchronously and returns the real result - see
+    api_mix_poll_now() for why this no longer uses a background thread."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
-    threading.Thread(target=_ft_cloud_api_poll_once, daemon=True).start()
-    return jsonify({"status": "started"})
+    result = _ft_cloud_api_poll_once()
+    if result["status"] == "ok":
+        _refresh_live_snapshot_after_poll("FT Cloud")
+    return jsonify(result)
 
 
 @app.route("/api/ftcloud/fleets", methods=["GET"])
@@ -2437,16 +2942,30 @@ def api_ft_cloud_webhook_unsubscribe():
     return jsonify({"results": results})
 
 
+def _check_api_key(expected_env_var):
+    """
+    Shared X-API-Key check for every unauthenticated-but-secret-gated
+    machine endpoint (/api/import, /api/cron/*). Uses hmac.compare_digest
+    rather than `!=` - a plain string comparison leaks how many leading
+    characters matched through response timing, the same reasoning
+    /webhook/ftcloud/<secret> already applied to its own secret check;
+    this brings the import/cron key checks in line with it instead of
+    being the one comparison in the file that wasn't constant-time.
+    """
+    expected_key = os.environ.get(expected_env_var)
+    provided_key = request.headers.get("X-API-Key") or ""
+    return bool(expected_key) and hmac.compare_digest(provided_key, expected_key)
+
+
 @app.route("/api/import", methods=["GET", "POST"])
 def api_import():
     """
-    Called ONLY by the Apps Script scheduler, never by a browser.
-    Protected by a shared secret in the X-API-Key header, not a user
-    session, since there's no logged-in user at 4:15 AM.
+    Called ONLY by the scheduled importer (cPanel cron, or the legacy
+    Google Apps Script trigger), never by a browser. Protected by a shared
+    secret in the X-API-Key header, not a user session, since there's no
+    logged-in user at 4:15 AM.
     """
-    expected_key = os.environ.get("IMPORT_API_KEY")
-    provided_key = request.headers.get("X-API-Key")
-    if not expected_key or provided_key != expected_key:
+    if not _check_api_key("IMPORT_API_KEY"):
         return jsonify({"error": "unauthorized"}), 403
 
     force = request.args.get("force") == "true"
@@ -2456,6 +2975,209 @@ def api_import():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ---- Cron-triggered endpoints (cPanel/Namecheap deployment) -------------
+# Namecheap Stellar Plus (and shared cPanel hosting generally) enforces a
+# 5-minute floor and a 5-simultaneous-job cap on cron - see
+# docs/SECURITY_AUDIT.md's sibling migration plan. That's not enough room
+# for three separate per-platform poll jobs plus a digest tick plus the
+# daily import (6 jobs), so the three platform pollers are combined into
+# ONE cron entry (/api/cron/poll-all) here rather than three - same
+# per-platform functions as the manual poll-now routes above, just called
+# in sequence within one request instead of one each. Total recurring
+# cron jobs this app now needs: poll-all, digest-tick, and the existing
+# /api/import - three, with two jobs of headroom under the cap.
+#
+# Each of these hits the SAME overlap-guard pattern the digest scheduler
+# thread already used (_claim_lock/_release_lock) - cron losing the old
+# in-process loop's implicit serialization means two overlapping cron
+# ticks (a slow run plus the next scheduled one) are newly possible, and
+# without a guard they could both poll the same platform API at once.
+CRON_POLL_LOCK_PATH = os.path.join(os.path.dirname(__file__), "data", "_cron_poll_lock.json")
+CRON_DIGEST_LOCK_PATH = os.path.join(os.path.dirname(__file__), "data", "_cron_digest_lock.json")
+CRON_LOCK_COOLDOWN_MINUTES = 4  # shorter than the 5-min cron floor, so a
+# stuck lock never survives past the NEXT scheduled tick
+
+
+@app.route("/api/cron/poll-all", methods=["POST"])
+def api_cron_poll_all():
+    """
+    Polls MiX, Teletrac and FT Cloud in sequence, one cron job standing in
+    for the three separate in-process poll threads this app used to run
+    (see _mix_api_poll_loop et al) - those can't survive on a request-
+    driven host (Passenger/mod_wsgi on cPanel) the way they could on a
+    long-lived gunicorn worker. Authenticated the same way /api/import is:
+    a shared secret in the X-API-Key header, no session, since cron has
+    no logged-in user to act as.
+    """
+    if not _check_api_key("CRON_API_KEY"):
+        return jsonify({"error": "unauthorized"}), 403
+    if not _claim_lock(CRON_POLL_LOCK_PATH, CRON_LOCK_COOLDOWN_MINUTES):
+        return jsonify({"status": "skipped", "reason": "another poll-all is already in progress"})
+
+    results = {}
+    try:
+        for label, key, fn in (("mix", "MiX", _mix_api_poll_once),
+                               ("teletrac", "Teletrac", _teletrac_api_poll_once),
+                               ("ftCloud", "FT Cloud", _ft_cloud_api_poll_once)):
+            try:
+                result = fn()
+                results[label] = result
+                if result.get("status") == "ok":
+                    _refresh_live_snapshot_after_poll(key)
+            except Exception as e:
+                results[label] = {"status": "error", "reason": str(e)}
+    finally:
+        _release_lock(CRON_POLL_LOCK_PATH)
+    return jsonify({"results": results})
+
+
+@app.route("/api/cron/digest-tick", methods=["POST"])
+def api_cron_digest_tick():
+    """
+    Cron-triggered equivalent of the old _digest_scheduler_loop thread
+    (see its docstring): reclassifies from files already on disk and
+    hands the result to run_scheduled_digests(), which itself gates on
+    the configured weekly send window - so calling this every cron tick
+    sends at most one set of digests per slot per client, same as before.
+    Same X-API-Key auth as /api/cron/poll-all.
+    """
+    if not _check_api_key("CRON_API_KEY"):
+        return jsonify({"error": "unauthorized"}), 403
+    if not _claim_lock(CRON_DIGEST_LOCK_PATH, CRON_LOCK_COOLDOWN_MINUTES):
+        return jsonify({"status": "skipped", "reason": "another digest-tick is already in progress"})
+
+    try:
+        from run_import import run_scheduled_digests
+        result = run_scheduled_digests()
+    except Exception as e:
+        result = {"status": "error", "reason": str(e)}
+    finally:
+        _release_lock(CRON_DIGEST_LOCK_PATH)
+    return jsonify(result)
+
+
+# ---- Health checks (cPanel migration verification) -----------------------
+# Neither route needs a session - both exist specifically to be checked
+# once, by hand or via curl, right after a fresh deployment, before any
+# real user or cron traffic depends on the answer being correct. See the
+# cPanel/MySQL migration plan's Section 7 risks 4 and 5.
+@app.route("/api/health/disk", methods=["GET", "POST"])
+def api_health_disk():
+    """
+    Confirms a file written by THIS request can be read back - GET
+    reports what a prior POST (possibly from cron, possibly from a
+    different process) last wrote, POST writes a fresh marker. Run a GET
+    right after triggering a cron job once cron is configured, to confirm
+    cron's execution context and the web app's actually share the same
+    writable data/ directory, per the migration plan's disk-write risk.
+    """
+    marker_path = os.path.join(os.path.dirname(__file__), "data", "_health_disk_marker.json")
+    if request.method == "POST":
+        try:
+            _write_json_atomic(marker_path, {"writtenAt": now_eat().isoformat(), "pid": os.getpid()})
+            return jsonify({"status": "ok", "wrote": marker_path})
+        except OSError as e:
+            return jsonify({"status": "error", "reason": str(e)}), 500
+
+    if not os.path.exists(marker_path):
+        return jsonify({"status": "no_marker_yet", "reason": "POST to this endpoint first"}), 404
+    try:
+        with open(marker_path) as f:
+            return jsonify({"status": "ok", "marker": json.load(f)})
+    except (OSError, ValueError) as e:
+        return jsonify({"status": "error", "reason": str(e)}), 500
+
+
+@app.route("/api/health/connectivity", methods=["GET"])
+@login_required
+def api_health_connectivity():
+    """
+    Fast, best-effort check of every outbound channel this app depends
+    on - SMTP, IMAP, MySQL, and each configured platform API - so a
+    blocked port or dead credential shows up as a red indicator in the
+    admin UI the same day it breaks, instead of silently going unnoticed
+    until a client asks why they haven't heard anything in a week (see
+    the migration plan's Section 7 risk 4). Admin/technician only: this
+    can reveal which integrations are configured at all, which isn't
+    something a client-role session needs to see.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    out = {}
+
+    try:
+        import smtplib
+        import mailer
+        address = os.environ.get("EMAIL_ADDRESS")
+        if not address or not os.environ.get("EMAIL_PASSWORD"):
+            out["smtp"] = {"ok": False, "reason": "EMAIL_ADDRESS/EMAIL_PASSWORD not set"}
+        else:
+            with smtplib.SMTP(mailer.SMTP_HOST, mailer.SMTP_PORT, timeout=10) as smtp:
+                smtp.starttls()
+                smtp.noop()
+            out["smtp"] = {"ok": True}
+    except Exception as e:
+        out["smtp"] = {"ok": False, "reason": str(e)}
+
+    try:
+        if not os.environ.get("EMAIL_ADDRESS") or not os.environ.get("EMAIL_PASSWORD"):
+            out["imap"] = {"ok": False, "reason": "EMAIL_ADDRESS/EMAIL_PASSWORD not set"}
+        else:
+            import mail_reader
+            conn = mail_reader.connect(os.environ["EMAIL_ADDRESS"], os.environ["EMAIL_PASSWORD"])
+            conn.logout()
+            out["imap"] = {"ok": True}
+    except Exception as e:
+        out["imap"] = {"ok": False, "reason": str(e)}
+
+    try:
+        import db
+        if not db.is_configured():
+            out["mysql"] = {"ok": False, "reason": "MYSQL_HOST/MYSQL_DATABASE/MYSQL_USER not set"}
+        else:
+            with db.cursor() as cur:
+                cur.execute("SELECT 1")
+            out["mysql"] = {"ok": True}
+    except Exception as e:
+        out["mysql"] = {"ok": False, "reason": str(e)}
+
+    try:
+        from adapters.mix_api_client import MixApiClient
+        client = MixApiClient()
+        if not client.is_configured():
+            out["mix"] = {"ok": False, "reason": "credentials not set"}
+        else:
+            client.get_organisation_groups()
+            out["mix"] = {"ok": True}
+    except Exception as e:
+        out["mix"] = {"ok": False, "reason": str(e)}
+
+    try:
+        from adapters.teletrac_api_client import TeletracApiClient
+        client = TeletracApiClient()
+        if not client.is_configured():
+            out["teletrac"] = {"ok": False, "reason": "credentials not set"}
+        else:
+            client.get_all_clients()
+            out["teletrac"] = {"ok": True}
+    except Exception as e:
+        out["teletrac"] = {"ok": False, "reason": str(e)}
+
+    try:
+        from adapters.ft_cloud_api_client import FtCloudApiClient
+        client = FtCloudApiClient()
+        if not client.is_configured():
+            out["ftCloud"] = {"ok": False, "reason": "credentials not set"}
+        else:
+            client.get_fleets()
+            out["ftCloud"] = {"ok": True}
+    except Exception as e:
+        out["ftCloud"] = {"ok": False, "reason": str(e)}
+
+    return jsonify(out)
 
 
 @app.route("/")
@@ -2468,13 +3190,6 @@ def index():
         can_export_integrity=role in EXPORT_ACCESS["integrity_xlsx"],
         can_export_tampering=role in EXPORT_ACCESS["tampering_xlsx"],
         can_manage_users=role in MANAGE_USERS_ROLES,
-        # Built from the sheet ID rather than stored as a second env var,
-        # so there's only ever one place the spreadsheet is identified.
-        # Empty when Sheets isn't configured, and the button hides itself.
-        sheet_url=(
-            f"https://docs.google.com/spreadsheets/d/{os.environ['FEEDBACK_SHEET_ID']}/edit"
-            if os.environ.get("FEEDBACK_SHEET_ID") else ""
-        ),
     )
 
 

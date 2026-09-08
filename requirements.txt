@@ -1,13 +1,28 @@
 Flask==3.1.3
 openpyxl>=3.1
 requests>=2.31
-gunicorn>=22.0
 python-dotenv>=1.0
 # Already a transitive Flask dependency; pinned explicitly because
 # app.py now imports it directly to sign email response links.
 itsdangerous>=2.1
 
-# Google Sheets support (feedback/history storage)
+# gunicorn is only used by the Docker/Northflank deployment (see
+# Dockerfile's CMD) - cPanel's "Setup Python App" (Passenger/mod_wsgi,
+# see passenger_wsgi.py) manages its own process/port and never invokes
+# this. Harmless to install on cPanel too, just unused there.
+gunicorn>=22.0
+
+# MySQL support (accounts/feedback/clients/etc. - see db.py/db_store.py).
+# PyMySQL specifically because it's pure Python: no C compiler needed to
+# install it, which matters on shared/cPanel hosting where one may not be
+# available at all.
+PyMySQL>=1.1
+
+# Google Sheets client - NO LONGER used by the running app (see
+# db_store.py, which replaced sheets_store.py as the live data store).
+# Kept only because scripts/export_sheets_to_mysql.py, the one-time data
+# migration script, still needs to read the old Sheet exactly once.
+# Safe to remove after that migration has run and been verified.
 gspread>=6.1
 google-auth>=2.30
 

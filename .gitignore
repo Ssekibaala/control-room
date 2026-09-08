@@ -11,6 +11,7 @@ data/mix_asset_install_snapshot.json
 # successful read - machine-local state, not configuration.
 data/client_registry.json
 *.tmp
+data/logs/
 data/ft_cloud_webhook_state.json
 .claude/
 

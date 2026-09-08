@@ -154,8 +154,8 @@ def run():
         "plate": TEST_PLATE, "comment": "Automated test - safe to ignore/delete",
         "reportedBy": "test_permissions.py", "requiresFollowup": False,
     })
-    sheets_configured = r.status_code != 503
-    if sheets_configured:
+    db_configured = r.status_code != 503
+    if db_configured:
         print(f"  [{'PASS' if r.status_code == 200 else 'FAIL'}] client CAN submit feedback now (status {r.status_code}) - was admin/technician-only before")
         if r.status_code != 200:
             failures.append("client cannot submit feedback")
@@ -180,27 +180,25 @@ def run():
             failures.append("feedback-activity todayCount did not include the just-submitted entry")
 
         # Clean up: this test data has no business staying in the real
-        # Sheet permanently, same principle as never leaving fabricated
-        # entries against a real vehicle plate.
+        # database permanently, same principle as never leaving
+        # fabricated entries against a real vehicle plate.
         try:
-            import sheets_store
-            sh_client, sheet_id = sheets_store._get_client()
-            ws = sh_client.open_by_key(sheet_id).worksheet("Feedback")
-            cell_matches = ws.findall(TEST_PLATE)
-            for cell in sorted(cell_matches, key=lambda c: -c.row):
-                ws.delete_rows(cell.row)
-            # Submitting feedback now also opens/updates an EmailThreads
-            # row for the plate (see notifications.on_comment_added) -
-            # clean that up too, or it leaks a "ZZZTEST1" case forever.
-            ws_threads = sheets_store._get_or_create_threads_tab(sh_client, sheet_id)
-            thread_matches = ws_threads.findall(TEST_PLATE)
-            for cell in sorted(thread_matches, key=lambda c: -c.row):
-                ws_threads.delete_rows(cell.row)
-            print(f"  (cleaned up {len(cell_matches)} feedback row(s) and {len(thread_matches)} thread ledger row(s))")
+            import db
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM feedback WHERE plate=%s", (TEST_PLATE,))
+                feedback_deleted = cur.rowcount
+                # Submitting feedback now also opens/updates an
+                # email_threads row for the plate (see
+                # notifications.on_comment_added) - clean that up too
+                # (cascades to email_thread_references), or it leaks a
+                # "ZZZTEST1" case forever.
+                cur.execute("DELETE FROM email_threads WHERE plate=%s", (TEST_PLATE,))
+                threads_deleted = cur.rowcount
+            print(f"  (cleaned up {feedback_deleted} feedback row(s) and {threads_deleted} thread ledger row(s))")
         except Exception as e:
             print(f"  (could not clean up test row automatically: {e})")
     else:
-        print("  [SKIP] Sheets not configured in this environment (503) - validation-only checks above still count")
+        print("  [SKIP] Database not configured in this environment (503) - validation-only checks above still count")
 
     client.post("/api/logout")
     r = client.post("/api/feedback", json={"plate": TEST_PLATE, "comment": "x", "reportedBy": "x", "requiresFollowup": True})
@@ -420,22 +418,19 @@ def run():
         failures.append("respond_submit didn't accept a fully valid submission")
 
     try:
-        import sheets_store as _ss
-        fb = _ss.load_feedback().get("ZZTOKTEST", {})
+        import db
+        import db_store
+        fb = db_store.load_feedback().get("ZZTOKTEST", {})
         recorded = any(h["addedBy"] == "AUTOTEST_CLEANUP tester" for h in fb.get("history", []))
         print(f"  [{'PASS' if recorded else 'FAIL'}] the email-link response lands in the SAME trail as in-app feedback")
         if not recorded:
             failures.append("email-link response didn't land in the unified feedback trail")
-        client_sheet, sheet_id = _ss._get_client()
-        ws = _ss._get_or_create_feedback_tab(client_sheet, sheet_id)
-        cell_matches = ws.findall("ZZTOKTEST")
-        for cell in sorted(cell_matches, key=lambda c: -c.row):
-            ws.delete_rows(cell.row)
-        ws2 = _ss._get_or_create_threads_tab(client_sheet, sheet_id)
-        thread_matches = ws2.findall("ZZTOKTEST")
-        for cell in sorted(thread_matches, key=lambda c: -c.row):
-            ws2.delete_rows(cell.row)
-        print(f"  (cleaned up {len(cell_matches)} feedback row(s) and {len(thread_matches)} thread ledger row(s))")
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM feedback WHERE plate=%s", ("ZZTOKTEST",))
+            feedback_deleted = cur.rowcount
+            cur.execute("DELETE FROM email_threads WHERE plate=%s", ("ZZTOKTEST",))
+            threads_deleted = cur.rowcount
+        print(f"  (cleaned up {feedback_deleted} feedback row(s) and {threads_deleted} thread ledger row(s))")
     except Exception as e:
         print(f"  (could not clean up ZZTOKTEST automatically: {e})")
 
