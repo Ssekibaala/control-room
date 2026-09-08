@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GTL Fleet Intelligence Command Centre</title>
+<title>Fleet Intelligence Command Centre</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -296,6 +296,13 @@
   .ff-row input:not([type="checkbox"]), .ff-row textarea, .ff-row select { width:100%; background:var(--hover-surface); border:1px solid var(--border); color:var(--text-primary);
     padding:9px 12px; border-radius:9px; font-size:13px; font-family:inherit; resize:vertical; }
   .ff-row select { cursor:pointer; }
+  /* The closed <select> box inherits the dark theme fine (color+background
+     above), but a browser's native open dropdown list doesn't automatically
+     pick up an author-set background on <option> - it fell back to the
+     platform default (white), while the text color WAS inherited, leaving
+     near-invisible light-on-white rows. Same fix already applied to
+     .client-filter/.platform-select; this one was missing it. */
+  .ff-row select option { background:var(--card-bg); color:var(--text-primary); }
   .ff-row input:focus, .ff-row textarea:focus, .ff-row select:focus { outline:none; border-color:var(--primary); }
 
   /* ---- Manage Users panel ---- */
@@ -521,6 +528,18 @@
   .grid-row { display:grid; grid-template-columns:repeat(4, 1fr); gap:var(--sp-2); margin-bottom:var(--sp-4); }
   .panel-card { background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-lg);
     padding:var(--sp-2); box-shadow:var(--shadow-1); }
+  .chart-subhead { font-size:11.5px; color:var(--text-tertiary); font-weight:500; }
+  .platform-breakdown-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--sp-2); margin-top:var(--sp-2); }
+  .pb-item { background:var(--hover-surface); border:1px solid var(--border); border-radius:var(--radius-md, 10px); padding:var(--sp-2); }
+  .pb-item-head { font-weight:700; font-size:13px; color:var(--text-primary); margin-bottom:6px; }
+  .pb-row { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; padding:3px 0; }
+  .pb-row .pb-num { font-weight:700; }
+  .pb-online .pb-num { color:var(--success); }
+  .pb-offline .pb-num { color:var(--danger); }
+  .pb-total { border-top:1px solid var(--border); margin-top:4px; padding-top:7px; }
+  .pb-total .pb-num, .pb-total span:first-child { font-weight:700; color:var(--text-primary); }
+  .pb-foot { margin-top:6px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--text-tertiary); }
+  @media (max-width: 900px) { .platform-breakdown-grid { grid-template-columns:1fr; } }
   .panel-card.wide { min-height:260px; }
   .panel-card-head { margin-bottom:var(--sp-2); }
   .panel-card-head h3 { font-size:13.5px; color:var(--text-primary); font-weight:700; }
@@ -990,12 +1009,6 @@
           <span>Critical Assets</span><span class="nav-count warn">0</span>
         </button>
 {% endif %}
-        {% if 'p-pending' in allowed_panels %}
-<button class="nav-item" data-panel="p-pending" data-label="Pending Customer Feedback">
-          <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-          <span>Pending Feedback</span><span class="nav-count">0</span>
-        </button>
-{% endif %}
         {% if 'p-border' in allowed_panels %}
 <button class="nav-item" data-panel="p-border" data-label="Border Risk">
           <svg class="nav-icon" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
@@ -1022,12 +1035,12 @@
 {% endif %}
       </nav>
 
-      <div class="nav-group-label">Cross-Analysis</div>
+      <div class="nav-group-label">Customer Feedback</div>
       <nav class="nav-group">
-        {% if 'p-priority' in allowed_panels %}
-<button class="nav-item priority-item" data-panel="p-priority" data-label="Priority Overlap">
-          <svg class="nav-icon" viewBox="0 0 24 24"><path d="m12 2 2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
-          <span>Priority Overlap</span><span class="nav-count danger">0</span>
+        {% if 'p-pending' in allowed_panels %}
+<button class="nav-item" data-panel="p-pending" data-label="Pending Customer Feedback">
+          <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <span>Pending Feedback</span><span class="nav-count">0</span>
         </button>
 {% endif %}
         {% if 'p-activity' in allowed_panels %}
@@ -1037,6 +1050,16 @@
         </button>
 {% endif %}
       </nav>
+
+      {% if 'p-priority' in allowed_panels %}
+      <div class="nav-group-label">Cross-Analysis</div>
+      <nav class="nav-group">
+<button class="nav-item priority-item" data-panel="p-priority" data-label="Priority Overlap">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="m12 2 2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+          <span>Priority Overlap</span><span class="nav-count danger">0</span>
+        </button>
+      </nav>
+      {% endif %}
 
       <div class="nav-group-label">Device Tampering Risk Report</div>
       <nav class="nav-group">
@@ -1072,13 +1095,31 @@
 {% endif %}
       </nav>
 
-      {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels or 'p-asset-install' in allowed_panels %}
-      <div class="nav-group-label">Settings</div>
+      {% if 'p-asset-install' in allowed_panels or 'p-ddr' in allowed_panels %}
+      <div class="nav-group-label">Reports</div>
       <nav class="nav-group">
         {% if 'p-asset-install' in allowed_panels %}
 <button class="nav-item" data-panel="p-asset-install" data-label="Asset Install Dates">
           <svg class="nav-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
           <span>Asset Install Dates</span>
+        </button>
+{% endif %}
+        {% if 'p-ddr' in allowed_panels %}
+<button class="nav-item" data-panel="p-ddr" data-label="DDR Reports">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6M9 9h1"/></svg>
+          <span>DDR Reports</span>
+        </button>
+{% endif %}
+      </nav>
+      {% endif %}
+
+      {% if 'p-settings' in allowed_panels or 'p-users' in allowed_panels or 'p-activitylog' in allowed_panels %}
+      <div class="nav-group-label">Administration</div>
+      <nav class="nav-group">
+        {% if 'p-activitylog' in allowed_panels %}
+<button class="nav-item" data-panel="p-activitylog" data-label="Activity &amp; Audit Log">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/><path d="M3 12h2M19 12h2M12 3v2M12 19v2"/></svg>
+          <span>Activity &amp; Audit Log</span>
         </button>
 {% endif %}
         {% if 'p-settings' in allowed_panels %}
@@ -1540,7 +1581,7 @@
           <div class="kpi-card clickable" data-goto="p-full" data-goto-label="Full Data">
             <div class="kpi-head"><span class="kpi-label">Total Assets</span></div>
             <div class="kpi-main"><span class="kpi-num" id="kpi-num-total" data-count="0">0</span></div>
-            <div class="kpi-foot muted">Across Teletrac, MiX Unity, FT Cloud</div>
+            <div class="kpi-foot muted" id="kpi-total-foot" title="How many of these assets actually have a report on each platform - a vehicle can be counted here from just one platform, it doesn't need all three.">Across Teletrac, MiX Unity, FT Cloud</div>
             <div class="kpi-goto">View all assets <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
           </div>
           <div class="kpi-card success clickable" data-goto="p-healthy" data-goto-label="Healthy Fleet">
@@ -1605,6 +1646,14 @@
             <div class="panel-card-head"><h3>Day-over-Day</h3></div>
             <div class="chart-body" id="chart-dayover"></div>
           </div>
+        </div>
+
+        <div class="panel-card" style="margin-bottom:var(--sp-4)">
+          <div class="panel-card-head">
+            <h3>Platform Breakdown</h3>
+            <span class="chart-subhead">Every KPI above is a per-vehicle verdict combining all three platforms - this is each platform judged on its own, so one platform's coverage never hides behind another's.</span>
+          </div>
+          <div class="platform-breakdown-grid" id="platform-breakdown-grid"></div>
         </div>
 
         <div class="section-head"><h2>Priority Watch</h2><span>Worst integrity cases, ranked</span></div>
@@ -1686,22 +1735,6 @@
           <table id="settings-table"></table>
           <p class="settings-note">Edit settings.ini next to the EXE and re-run to change these values. No code changes needed.</p>
         </div>
-        {% if sheet_url %}
-        <div class="panel-card">
-          <div class="panel-card-head">
-            <h3>Data Store</h3>
-            <span class="chart-subhead">Accounts and every feedback comment live in this Google Sheet &mdash;
-              it survives redeploys, and Sheets keeps its own revision history.</span>
-          </div>
-          <a class="btn-secondary sheet-link" href="{{ sheet_url }}" target="_blank" rel="noopener noreferrer">
-            <svg viewBox="0 0 24 24" class="btn-icon-inline"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
-            Open the Google Sheet
-            <svg viewBox="0 0 24 24" class="btn-icon-inline btn-icon-trail"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
-          </a>
-          <p class="settings-note">Opens in a new tab. Anyone you want to read it directly still needs to be
-            shared on the Sheet itself &mdash; this button only saves you passing the link around.</p>
-        </div>
-        {% endif %}
       </section>
 {% endif %}
 
@@ -1748,6 +1781,87 @@
       </section>
 {% endif %}
 
+      {% if 'p-ddr' in allowed_panels %}
+<section id="p-ddr" class="panel">
+        <div class="callout muted">
+          A per-client device status report, split by platform: <strong>OBC Status</strong> (MiX Unity-tracked
+          assets), <strong>AD Plus AI Camera Status</strong> (FT Cloud-tracked cameras), and
+          <strong>Fuel Probe Status</strong> (Teletrac-tracked fuel sensors). Export it, or email it straight to the
+          client &mdash; anything they send back gets logged the same way an in-app comment does. Click any row
+          below to add a comment against that vehicle right now. A device that hasn't reported today shows as
+          <strong>Pending Customer Confirmation</strong> here, regardless of the vehicle's overall status elsewhere.
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head"><h3>Client</h3></div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); display:flex; flex-wrap:wrap">
+            <select id="ddr-client-select" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;min-width:200px">
+              <option value="">Select a client&hellip;</option>
+            </select>
+            <a class="btn-secondary" id="ddr-export-btn" href="#">Export to Excel</a>
+          </div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>OBC Status</h3>
+            <span class="chart-subhead" id="ddr-obc-count">&nbsp;</span>
+          </div>
+          <div class="table-wrap"><table id="ddr-obc-table"></table></div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>AD Plus AI Camera Status</h3>
+            <span class="chart-subhead" id="ddr-camera-count">&nbsp;</span>
+          </div>
+          <div class="table-wrap"><table id="ddr-camera-table"></table></div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Fuel Probe Status</h3>
+            <span class="chart-subhead" id="ddr-fuel-count">&nbsp;</span>
+          </div>
+          <div class="table-wrap"><table id="ddr-fuel-table"></table></div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head"><h3>Email This Report</h3></div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
+            <input type="text" id="ddr-send-to" placeholder="client@example.com, another@example.com" style="flex:1;min-width:240px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit">
+            <input type="text" id="ddr-send-note" placeholder="Optional note&hellip;" style="flex:1;min-width:200px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit">
+            <button type="button" class="btn-primary" id="ddr-send-btn">Send</button>
+          </div>
+          <span id="ddr-send-status" class="settings-note"></span>
+        </div>
+      </section>
+{% endif %}
+
+      {% if 'p-activitylog' in allowed_panels %}
+<section id="p-activitylog" class="panel">
+        <div class="callout muted">
+          Two complementary trails: <strong>System Activity</strong> is every state-changing request the
+          server handled &mdash; who, from where, and what happened &mdash; captured automatically for every
+          route. <strong>Change History</strong> is field-level: exactly what a correction changed, from what
+          value to what, on an account, client, feedback entry, or tamper check.
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>System Activity</h3>
+            <span class="chart-subhead" id="activitylog-count">&nbsp;</span>
+          </div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); margin-bottom: 12px; display:flex">
+            <input type="text" id="activitylog-user-filter" placeholder="Filter by username&hellip;" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;max-width:220px">
+            <button type="button" class="btn-secondary" id="activitylog-refresh-btn">Refresh</button>
+          </div>
+          <div class="table-wrap"><table id="activitylog-table"></table></div>
+        </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Change History</h3>
+            <span class="chart-subhead" id="auditlog-count">&nbsp;</span>
+          </div>
+          <div class="table-wrap"><table id="auditlog-table"></table></div>
+        </div>
+      </section>
+{% endif %}
+
       {% if 'p-users' in allowed_panels %}
 <section id="p-users" class="panel">
         <div class="callout muted">
@@ -1756,9 +1870,9 @@
           feedback only. Create accounts for your team here instead of needing shell access.
         </div>
         <div class="callout danger" id="users-storage-warning" style="display:none">
-          <strong>Accounts are not being saved durably.</strong> Google Sheets isn't configured, so accounts are
-          written to a local file that Render replaces on every deploy &mdash; anything created here will be lost.
-          Set <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and <code>FEEDBACK_SHEET_ID</code> to fix this.
+          <strong>Accounts are not being saved durably.</strong> MySQL isn't configured, so accounts are
+          written to a local file that a fresh deploy can replace &mdash; anything created here will be lost.
+          Set <code>MYSQL_HOST</code>, <code>MYSQL_DATABASE</code> and <code>MYSQL_USER</code> to fix this.
         </div>
         <div class="panel-card">
           <div class="panel-card-head users-head">
@@ -1841,6 +1955,38 @@
           <div class="kpi-card clickable" data-goto="p-tquality" data-goto-label="Data Quality Log"><div class="kpi-head"><span class="kpi-label">Null GPS Excluded</span></div><div class="kpi-main"><span class="kpi-num" id="kpi-num-nullgps" data-count="0">0</span></div><div class="kpi-goto">View log <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div></div>
         </div>
         <p class="period-label" id="period-label"></p>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Advanced Export</h3>
+            <span class="chart-subhead">Build a custom Tampering Risk Report - client, date range, specific trucks, confirmed cases only - any combination, or leave everything blank for the full report.</span>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:flex-end">
+            <div class="ff-row" style="flex:1; min-width:170px; margin-bottom:0">
+              <label>Client</label>
+              <select id="tamper-export-client"><option value="">All clients</option></select>
+            </div>
+            <div class="ff-row" style="flex:1; min-width:140px; margin-bottom:0">
+              <label>From</label>
+              <input type="date" id="tamper-export-from">
+            </div>
+            <div class="ff-row" style="flex:1; min-width:140px; margin-bottom:0">
+              <label>To</label>
+              <input type="date" id="tamper-export-to">
+            </div>
+            <div class="ff-row" style="flex:2; min-width:220px; margin-bottom:0">
+              <label>Specific trucks <span class="ff-optional">(comma-separated plates)</span></label>
+              <input type="text" id="tamper-export-plates" placeholder="e.g. UBQ123A, UBQ456B">
+            </div>
+            <div style="display:flex; align-items:center; padding-bottom:11px; white-space:nowrap">
+              <label style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:500; font-size:13px">
+                <input type="checkbox" id="tamper-export-confirmed-only" style="width:auto"> Confirmed only
+              </label>
+            </div>
+            <div>
+              <a class="btn-primary" id="tamper-export-btn" href="/api/export/tampering/custom">Export</a>
+            </div>
+          </div>
+        </div>
         <div class="two-col">
           <div class="panel-card wide tamper-chart-card">
             <div class="panel-card-head">
@@ -1977,8 +2123,35 @@ let CURRENT_USERNAME = null;
 // security boundary is server-side (permissions.filter_payload_for_clients);
 // nothing here is load-bearing for access control.
 let RAW_DATA = null;
-let SELECTED_CLIENT = '';   // '' = all clients this user can see
+// '' = all clients this user can see. Restored from localStorage rather
+// than always starting blank, so pressing the browser's own refresh (not
+// the app's own 60s auto-refresh, which already preserves this in memory
+// - see setDashboardData()) doesn't silently drop back to "All" and make
+// it look like the filter itself failed. setDashboardData() below still
+// clears it if the remembered client isn't one this account can see.
+function _readPersistedClient() {
+  try {
+    return localStorage.getItem('controlroom_selected_client') || '';
+  } catch (e) {
+    // Storage blocked entirely (private/incognito mode, strict browser
+    // policy, etc.) - this must never be allowed to throw here: it runs
+    // at top-level script parse time, and an uncaught exception this
+    // early silently kills every line after it in the same <script>
+    // block, including the dashboard boot sequence and the 60s
+    // auto-refresh interval below. Falling back to "no remembered
+    // filter" is a much smaller loss than the whole page breaking.
+    return '';
+  }
+}
+let SELECTED_CLIENT = _readPersistedClient();
 const CLIENT_ALL = '';
+
+function _persistSelectedClient(value) {
+  try {
+    if (value) localStorage.setItem('controlroom_selected_client', value);
+    else localStorage.removeItem('controlroom_selected_client');
+  } catch (e) { /* private browsing / storage disabled - filter just won't survive a reload */ }
+}
 
 // Sections whose rows carry a client field, mirroring
 // permissions.CLIENT_SCOPED_SECTIONS on the server EXACTLY - this list
@@ -2041,6 +2214,20 @@ function applyClientView() {
   // above per-client tables and the two visibly disagree.
   const rows = view.full || [];
   const countBy = pred => rows.filter(pred).length;
+
+  // Same bug as severityBands above, one field over: sevCounts backs the
+  // Executive Dashboard's donut ("Fleet Status Breakdown") and bar chart
+  // ("Escalation Severity"), and control_room.py computes it server-side
+  // by tallying severity ACROSS EVERY ESCALATION IN THE WHOLE FLEET, not
+  // per client - so a GTL-filtered view kept showing AGL's and ADT's
+  // Critical/High counts baked into those two charts, well above what a
+  // filtered KPI total (rows.length) or the Critical Assets table
+  // actually showed. Re-tallied here from `rows` (already filtered to
+  // this client), mirroring _build_data()'s own sev_counts loop exactly.
+  view.sevCounts = { 'Critical - Long-term Fault': 0, 'High - Escalate This Week': 0, 'Elevated - Monitor': 0 };
+  rows.filter(r => r.status === 'Technical Escalation').forEach(r => {
+    view.sevCounts[r.severity] = (view.sevCounts[r.severity] || 0) + 1;
+  });
   view.kpi = Object.assign({}, RAW_DATA.kpi, {
     total: rows.length,
     online: countBy(r => r.status === 'Online'),
@@ -2068,6 +2255,18 @@ function applyClientView() {
     // Gaps examined is a whole-import processing statistic with no
     // per-vehicle rows behind it, so it can't be split per client.
     tamperGapsChecked: 0,
+    // "Total Assets" names all three platforms in its footer but is
+    // itself a per-VEHICLE union - a truck counted here needs a report
+    // from just ONE of the three, not all of them, and coverage varies
+    // wildly per platform (a fuel probe is nowhere near as universally
+    // fitted as a MiX Unity tracking unit). Without a real per-platform
+    // breakdown that footer reads as "these three platforms cover all
+    // of these assets equally," which isn't true. Counted the same way
+    // rowsForCategory in the DDR report does - has a real, non-"No data"
+    // timestamp for that platform.
+    mixCount: countBy(r => r.mixSeen && r.mixSeen !== 'No data'),
+    camCount: countBy(r => r.camSeen && r.camSeen !== 'No data'),
+    tltCount: countBy(r => r.tltSeen && r.tltSeen !== 'No data'),
   });
   DATA = view;
 }
@@ -2103,7 +2302,7 @@ function setDashboardData(payload) {
   // A previously-selected client can disappear (access revoked, client
   // removed) - fall back to "All" rather than silently rendering an
   // empty dashboard the user can't explain.
-  if (SELECTED_CLIENT && !available.includes(SELECTED_CLIENT)) SELECTED_CLIENT = CLIENT_ALL;
+  if (SELECTED_CLIENT && !available.includes(SELECTED_CLIENT)) { SELECTED_CLIENT = CLIENT_ALL; _persistSelectedClient(''); }
   applyClientView();
   renderClientFilter(available);
 }
@@ -2138,15 +2337,45 @@ function cssVar(name) {
 }
 
 function fillMissingSectionsWithSafeDefaults(d) {
-  // Sections a client role's response simply won't contain. Filling
-  // them with empty defaults means every existing render/chart call
-  // below can run unmodified instead of needing a guard at each site.
+  // Sections a client role's response simply won't contain - AND, just
+  // as importantly, sections a brand-new deployment's response won't
+  // contain either: load_dashboard_data() returns just {"meta": {...}}
+  // until the first import/poll cycle has ever run (confirmed directly
+  // against a fresh Azure deployment - no fleet_today.json on disk yet
+  // means every one of these keys is simply absent, not empty).
+  // Filling them with empty defaults means every existing render/chart
+  // call below can run unmodified instead of needing a guard at each
+  // site - critical/pending/healthy/recoveredList/newlyOfflineList/
+  // criticalCards were missing from this list entirely, which is what
+  // actually broke a fresh install's first load: DATA.critical.length
+  // (no fallback at its call site) threw on the very first render,
+  // and the boot() catch-all showed a misleading "Could not reach the
+  // server" for what was really an empty-dashboard rendering bug.
   const listDefaults = ['tamperConfirmed', 'tamperUnconfirmed', 'qualityLog', 'severityBands',
                          'topVehicles', 'doubleFlagged', 'tamperCards', 'settingsRows', 'border', 'full',
-                         'tamperChecked'];
+                         'tamperChecked', 'critical', 'pending', 'healthy', 'knownIssues',
+                         'recoveredList', 'newlyOfflineList', 'criticalCards',
+                         // recovered/newlyOffline are a THIRD shape distinct from the two
+                         // above - plain plate-string arrays the ticker iterates directly
+                         // (recoveredList/newlyOfflineList are the richer per-row objects
+                         // the Recovered/New table renders; kpi.recovered/kpi.newlyOffline
+                         // are just their counts). All three share overlapping names but
+                         // live in different places, and this one was missed the first
+                         // time through - confirmed live: DATA.newlyOffline.forEach() in
+                         // the ticker was the actual crash, not anything already listed.
+                         'recovered', 'newlyOffline'];
   listDefaults.forEach(k => { if (d[k] === undefined) d[k] = []; });
-  const kpiDefaults = ['tamperConfirmed', 'tamperUnconfirmed', 'tamperGapsChecked', 'nullGpsExcluded', 'doubleFlagged', 'border'];
-  if (d.kpi) kpiDefaults.forEach(k => { if (d.kpi[k] === undefined) d.kpi[k] = 0; });
+  // kpi itself can be entirely absent, not just missing a few fields -
+  // same reasoning as above. Every numeric KPI the header/sidebar reads
+  // needs a zero default in that case, not just the tamper-specific
+  // subset this used to cover.
+  d.kpi = d.kpi || {};
+  const kpiDefaults = ['healthPct', 'total', 'online', 'escalations', 'pending', 'knownIssues',
+                        'recovered', 'newlyOffline', 'tamperConfirmed', 'tamperUnconfirmed',
+                        'tamperGapsChecked', 'nullGpsExcluded', 'doubleFlagged', 'border',
+                        'mixCount', 'camCount', 'tltCount'];
+  kpiDefaults.forEach(k => { if (d.kpi[k] === undefined) d.kpi[k] = 0; });
+  d.sevCounts = d.sevCounts || {'Critical - Long-term Fault': 0, 'High - Escalate This Week': 0, 'Elevated - Monitor': 0};
   return d;
 }
 
@@ -2215,6 +2444,13 @@ async function boot() {
 
     if (loadingEl) loadingEl.style.display = 'none';
   } catch (err) {
+    // This used to fail silently - the boot screen said "Could not
+    // reach the server" for ANY thrown error, network or not, with
+    // nothing printed to the console to tell the two apart. That cost
+    // real time chasing a rendering bug as if it were a networking
+    // problem. Logged now so the real exception (message + stack) is
+    // always one glance at DevTools away, never a guessing game.
+    console.error('Dashboard boot failed:', err);
     if (loadingEl) loadingEl.style.display = 'none';
     if (errorEl) errorEl.style.display = '';
     if (errorMsgEl) errorMsgEl.textContent = 'Could not reach the server. Try again.';
@@ -2431,6 +2667,44 @@ wireOnce('confirm-modal', () => {
   });
 });
 
+/**
+ * Re-pulls the (now feedback-overlaid) payload and re-renders every
+ * table, chart, KPI and nav count from it. Returns a short description
+ * of what changed for the given plate, so the confirmation message can
+ * say something specific instead of a generic "saved".
+ *
+ * Deliberately declared here, at true top level, NOT inside
+ * renderEverything() below (where it used to live, textually nested in
+ * the source despite calling code elsewhere expecting it to be global).
+ * That nesting meant this function only ever existed inside
+ * renderEverything()'s own local scope - reachable from the feedback-
+ * submit handler (which happens to run from inside a call chain that is
+ * itself inside renderEverything()), but NOT from the top-level 60s
+ * setInterval(() => refreshDashboardData(), 60000) auto-refresh call far
+ * above, which threw "refreshDashboardData is not defined" every time it
+ * fired - the actual root cause of auto-refresh never working. This
+ * function doesn't close over anything local to renderEverything() (only
+ * the already-global DATA/fetch/setDashboardData/renderEverything), so
+ * moving it here changes nothing about what it does - only where it's
+ * reachable from.
+ */
+function refreshDashboardData(plate) {
+  const before = (DATA.full || []).find(r => r.plate === plate);
+  const beforeStatus = before ? before.status : null;
+  return fetch('/api/dashboard-data')
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+    .then(fresh => {
+      setDashboardData(fresh);
+      const after = (DATA.full || []).find(r => r.plate === plate);
+      renderEverything();
+      if (after && beforeStatus && after.status !== beforeStatus) {
+        return plate + ' moved from ' + beforeStatus + ' to ' + after.status + '.';
+      }
+      return '';
+    })
+    .catch(() => '');
+}
+
 function renderEverything() {
 
 // =====================================================================
@@ -2489,6 +2763,7 @@ wireOnce('sidebar-chrome', () => {
   if (clientSelect) {
     clientSelect.addEventListener('change', (e) => {
       SELECTED_CLIENT = e.target.value || CLIENT_ALL;
+      _persistSelectedClient(SELECTED_CLIENT);
       applyClientView();
       renderClientFilter((RAW_DATA && RAW_DATA.meta && RAW_DATA.meta.clients) || []);
       renderEverything();
@@ -2521,7 +2796,7 @@ function renderRecent() {
 // ---- Sidebar navigation (same show/hide logic as before) ----
 const PANEL_SUBS = {
   'p-exec': 'Cross-platform fleet health overview', 'p-full': 'Every asset, every platform, one table',
-  'p-critical': 'Ranked worst-first, technical escalation', 'p-pending': 'Awaiting confirmation from GTL',
+  'p-critical': 'Ranked worst-first, technical escalation', 'p-pending': 'Awaiting confirmation from the client',
   'p-border': 'Offline assets near a known crossing', 'p-recovered': 'Day-over-day change',
   'p-healthy': 'Reporting normally on all platforms', 'p-settings': 'Thresholds used to generate this report',
   'p-priority': 'Integrity issues confirmed by tampering evidence', 'p-tsummary': 'Location-continuity analysis overview',
@@ -3584,6 +3859,317 @@ if (usersForm) {
     });
   }
 
+  // ---- DDR Reports (Device Diagnostic Report - per-client, per-platform) ----
+  const ddrPanel = document.getElementById('p-ddr');
+  if (ddrPanel) {
+    // Same two columns sets every table on this app already uses -
+    // clicking a row opens the standard drill-down/feedback form
+    // automatically (see _wireRowClicks), because every row here still
+    // carries a real "plate" key.
+    const DDR_OBC_COLS = [
+      {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
+      {key: 'position', label: 'Last Position'}, {key: 'status', label: 'Status'},
+      {key: 'techComment', label: "Technician's Comment"},
+    ];
+    const DDR_CAMERA_COLS = [
+      {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
+      {key: 'position', label: 'Positioning Time'}, {key: 'status', label: 'Status'},
+      {key: 'techComment', label: "Technician's Comment"},
+    ];
+    const DDR_FUEL_COLS = [
+      {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
+      {key: 'position', label: 'Last Reading'}, {key: 'status', label: 'Status'},
+      {key: 'techComment', label: "Technician's Comment"},
+    ];
+    const ddrClientSelect = document.getElementById('ddr-client-select');
+    const ddrExportBtn = document.getElementById('ddr-export-btn');
+    let ddrClientsLoaded = false;
+
+    // Mirrors fleet_logic/ddr_report.py's rows_for_category()/_sheet_rows()
+    // exactly (mixSeen -> OBC, camSeen -> AD Plus AI Camera, tltSeen -> Fuel
+    // Probe; MITAC is not generated at all - no reliable data source for
+    // it, see that module's docstring) - if that mapping ever changes,
+    // change it here too, since this is a client-side preview of the same
+    // data, not a fetch from the server.
+    //
+    // Some rows carry the literal string "None" for action/feedback (a
+    // real artifact found in fleet_today.json, not something either
+    // side of this mirror introduces) - same defensive clean-up as the
+    // Python side, so the preview and the exported workbook always
+    // agree on what a blank comment looks like.
+    function ddrClean(v) {
+      return (v && String(v).trim().toLowerCase() !== 'none') ? String(v).trim() : '';
+    }
+    // The client's own explanation for a Known Issue row - genuine
+    // hand-written content, shown as-is regardless of any platform's
+    // freshness (the question of "why is this quiet" is already answered).
+    function ddrKnownIssueComment(r) {
+      return ddrClean(r.feedback);
+    }
+    // Mirrors ddr_report.py's _platform_recommended_comment(): same
+    // escalation ladder classify_fleet uses (settings.ini's
+    // long_term_fault_days/high_priority_days, exposed to the browser as
+    // DATA.meta.longTermFault/highPriorityDays), but keyed off how long
+    // THIS platform's own position has been stale - not r.action, which
+    // is the vehicle-wide figure (the STALEST of all three platforms).
+    // Showing r.action here was the earlier bug: a truck whose MiX unit
+    // died 40 days ago but whose fuel probe reported 13 hours ago showed
+    // "Recover device - long-term fault" right next to yesterday's Last
+    // Position, on the sheet that's specifically about the fuel probe.
+    function ddrPlatformRecommendedComment(seenValue) {
+      const dt = ddrParseDate(seenValue);
+      if (!dt) return '';
+      const daysSilent = (Date.now() - dt.getTime()) / 86400000;
+      const longTermFaultDays = (DATA.meta && DATA.meta.longTermFault) || 30;
+      const highPriorityDays = (DATA.meta && DATA.meta.highPriorityDays) || 7;
+      if (daysSilent >= longTermFaultDays) return 'Recover device - long-term fault, schedule field recovery';
+      if (daysSilent >= highPriorityDays) return 'Schedule physical inspection this week';
+      return 'Contact customer for status confirmation';
+    }
+    // Mirrors ddr_report.py's _platform_status_label()/_platform_reported_today():
+    // the vehicle-wide status ignores this category entirely (it only
+    // escalates once EVERY platform is offline, so a truck whose MiX has
+    // been dead for weeks but whose fuel probe reported minutes ago still
+    // reads "Pending Customer Confirmation" fleet-wide, even on the sheet
+    // that's specifically about the fuel probe). So this judges THIS
+    // category's own device on its own freshness instead: reported today
+    // -> Online, otherwise -> Pending Customer Confirmation. "Known Issue"
+    // is the one carry-over from the vehicle status - already explained
+    // by the client, so it isn't re-opened by a freshness check.
+    const DDR_MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+    function ddrReportedToday(seenValue) {
+      const m = /^(\d{1,2}) (\w{3}) (\d{4}),/.exec(seenValue || '');
+      if (!m || !(m[2] in DDR_MONTHS)) return false;
+      const now = new Date();
+      return parseInt(m[1], 10) === now.getDate() && DDR_MONTHS[m[2]] === now.getMonth()
+        && parseInt(m[3], 10) === now.getFullYear();
+    }
+    function ddrStatusFor(r, seenValue) {
+      if (r.status === 'Known Issue') return 'Known Issue';
+      return ddrReportedToday(seenValue) ? 'Online' : 'Pending Customer Confirmation';
+    }
+    // Mirrors ddr_report.py's _position_key(): parses the same "24 Aug
+    // 2026, 21:26" format into a real, comparable timestamp - a plain
+    // string sort would order "06 Aug" before "24 Aug" correctly by
+    // coincidence but "06 Aug 2026" after "24 Jul 2026" WRONG (alphabetic
+    // month-name order isn't chronological order). Unparseable returns
+    // null, sorted to the very end rather than crashing the render.
+    function ddrParseDate(seenValue) {
+      const m = /^(\d{1,2}) (\w{3}) (\d{4}), (\d{1,2}):(\d{2})$/.exec(seenValue || '');
+      if (!m || !(m[2] in DDR_MONTHS)) return null;
+      return new Date(parseInt(m[3], 10), DDR_MONTHS[m[2]], parseInt(m[1], 10), parseInt(m[4], 10), parseInt(m[5], 10));
+    }
+    function ddrSortByPositionDesc(list) {
+      return list.slice().sort((a, b) => {
+        const ta = ddrParseDate(a.position); const tb = ddrParseDate(b.position);
+        return (tb ? tb.getTime() : -Infinity) - (ta ? ta.getTime() : -Infinity);
+      });
+    }
+    // Online has nothing to comment on. Known Issue keeps the client's
+    // own explanation. Pending Customer Confirmation gets a comment
+    // recomputed from THIS row's own position - see
+    // ddrPlatformRecommendedComment()'s docstring above.
+    function ddrRow(r, seenValue) {
+      const status = ddrStatusFor(r, seenValue);
+      const techComment = status === 'Online' ? ''
+        : status === 'Known Issue' ? ddrKnownIssueComment(r)
+        : ddrPlatformRecommendedComment(seenValue);
+      return {client: r.client, plate: r.plate, position: seenValue, status, techComment};
+    }
+    function ddrRowsForClient(client) {
+      const rows = (RAW_DATA && RAW_DATA.full) || [];
+      const forClient = client ? rows.filter(r => r.client === client) : [];
+      const obc = ddrSortByPositionDesc(forClient.filter(r => r.mixSeen && r.mixSeen !== 'No data')
+        .map(r => ddrRow(r, r.mixSeen)));
+      const camera = ddrSortByPositionDesc(forClient.filter(r => r.camSeen && r.camSeen !== 'No data')
+        .map(r => ddrRow(r, r.camSeen)));
+      const fuel = ddrSortByPositionDesc(forClient.filter(r => r.tltSeen && r.tltSeen !== 'No data')
+        .map(r => ddrRow(r, r.tltSeen)));
+      return {obc, camera, fuel};
+    }
+
+    function ddrRender() {
+      const client = ddrClientSelect.value;
+      const {obc, camera, fuel} = ddrRowsForClient(client);
+      renderTable('ddr-obc-table', obc, DDR_OBC_COLS, 'ddr-obc-count');
+      renderTable('ddr-camera-table', camera, DDR_CAMERA_COLS, 'ddr-camera-count');
+      renderTable('ddr-fuel-table', fuel, DDR_FUEL_COLS, 'ddr-fuel-count');
+      ddrExportBtn.href = client ? '/api/ddr/export?client=' + encodeURIComponent(client) : '#';
+    }
+
+    function ddrLoadClients() {
+      fetch('/api/clients')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => {
+          const clients = (data.clients || []).map(c => c.name).filter(Boolean).sort();
+          const current = ddrClientSelect.value;
+          ddrClientSelect.innerHTML = '<option value="">Select a client&hellip;</option>' +
+            clients.map(c => '<option value="' + escapeHTML(c) + '">' + escapeHTML(c) + '</option>').join('');
+          if (clients.includes(current)) ddrClientSelect.value = current;
+          ddrRender();
+        })
+        .catch(() => {
+          ddrClientSelect.innerHTML = '<option value="">Could not load clients</option>';
+        });
+    }
+
+    // renderEverything() re-runs this whole block on every 60s auto-
+    // refresh tick (see refreshDashboardData) - without wireOnce, every
+    // tick would attach a FRESH set of listeners on top of the last set,
+    // on the same persistent DOM nodes (they're never rewritten via
+    // innerHTML like a table is). Left alone that means one click of
+    // "Send" some number of minutes into a session fires /api/ddr/send
+    // that many times over - the same report emailed to the customer
+    // repeatedly from a single click. wireOnce runs this setup exactly
+    // once for the page's lifetime; the functions it closes over
+    // (ddrRender etc.) still read RAW_DATA/the select's current value
+    // fresh on every call, so nothing here goes stale by being wired once.
+    wireOnce('ddr-listeners', () => {
+      ddrClientSelect.addEventListener('change', ddrRender);
+
+      document.getElementById('ddr-send-btn').addEventListener('click', () => {
+        const client = ddrClientSelect.value;
+        const statusEl = document.getElementById('ddr-send-status');
+        if (!client) { statusEl.textContent = 'Choose a client first.'; return; }
+        const to = document.getElementById('ddr-send-to').value.trim();
+        if (!to) { statusEl.textContent = 'Enter at least one email address.'; return; }
+        const note = document.getElementById('ddr-send-note').value.trim();
+        const btn = document.getElementById('ddr-send-btn');
+        btn.disabled = true; btn.textContent = 'Sending…';
+        statusEl.textContent = '';
+        fetch('/api/ddr/send', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({client, to, note}),
+        })
+          .then(r => r.json().then(b => ({ok: r.ok, b})))
+          .then(({ok, b}) => {
+            statusEl.textContent = (ok && b.ok) ? 'Sent to ' + b.to.join(', ') + '.'
+              : (b.error || b.reason || 'Could not send the report.');
+          })
+          .catch(() => { statusEl.textContent = 'Could not reach the server.'; })
+          .finally(() => { btn.disabled = false; btn.textContent = 'Send'; });
+      });
+
+      document.querySelectorAll('.nav-item[data-panel="p-ddr"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!ddrClientsLoaded) { ddrClientsLoaded = true; ddrLoadClients(); }
+          else ddrRender();  // RAW_DATA may have refreshed since last visit
+        });
+      });
+
+      // Auto-refresh while this panel is left open, same idea as the
+      // Asset Install Dates / Manage Users panels' own polling further
+      // down - otherwise a platform's data can arrive (a fresh FT Cloud
+      // or Teletrac poll landing in the background) while a technician
+      // is already sitting on this exact panel, and the numbers on
+      // screen just sit stale until they click away and back.
+      setInterval(() => {
+        if (document.getElementById('p-ddr').classList.contains('active')) ddrRender();
+      }, 60000);
+    });
+  }
+
+  // ---- Tampering Report: Advanced Export (client / date range / plates / confirmed-only) ----
+  const tamperExportBtn = document.getElementById('tamper-export-btn');
+  if (tamperExportBtn) {
+    const tamperExportClient = document.getElementById('tamper-export-client');
+    const tamperExportFrom = document.getElementById('tamper-export-from');
+    const tamperExportTo = document.getElementById('tamper-export-to');
+    const tamperExportPlates = document.getElementById('tamper-export-plates');
+    const tamperExportConfirmedOnly = document.getElementById('tamper-export-confirmed-only');
+    let tamperExportClientsLoaded = false;
+
+    function tamperExportUpdateLink() {
+      const params = new URLSearchParams();
+      if (tamperExportClient.value) params.set('client', tamperExportClient.value);
+      if (tamperExportFrom.value) params.set('from', tamperExportFrom.value);
+      if (tamperExportTo.value) params.set('to', tamperExportTo.value);
+      if (tamperExportPlates.value.trim()) params.set('plates', tamperExportPlates.value.trim());
+      if (tamperExportConfirmedOnly.checked) params.set('confirmed_only', 'true');
+      const qs = params.toString();
+      tamperExportBtn.href = '/api/export/tampering/custom' + (qs ? ('?' + qs) : '');
+    }
+    [tamperExportClient, tamperExportFrom, tamperExportTo, tamperExportConfirmedOnly].forEach(el =>
+      el.addEventListener('change', tamperExportUpdateLink));
+    tamperExportPlates.addEventListener('input', tamperExportUpdateLink);
+
+    // Same client list DDR's picker loads from - reused rather than
+    // duplicated, and only fetched the first time this panel is
+    // visited, same reasoning as ddrLoadClients().
+    function tamperExportLoadClients() {
+      fetch('/api/clients')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => {
+          const clients = (data.clients || []).map(c => c.name).filter(Boolean).sort();
+          const current = tamperExportClient.value;
+          tamperExportClient.innerHTML = '<option value="">All clients</option>' +
+            clients.map(c => '<option value="' + escapeHTML(c) + '">' + escapeHTML(c) + '</option>').join('');
+          if (clients.includes(current)) tamperExportClient.value = current;
+        })
+        .catch(() => {
+          tamperExportClient.innerHTML = '<option value="">Could not load clients</option>';
+        });
+    }
+    wireOnce('tamper-export-listeners', () => {
+      document.querySelectorAll('.nav-item[data-panel="p-tsummary"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!tamperExportClientsLoaded) { tamperExportClientsLoaded = true; tamperExportLoadClients(); }
+        });
+      });
+    });
+  }
+
+  // ---- Activity & Audit Log (admin only) ----
+  const activityLogPanel = document.getElementById('p-activitylog');
+  if (activityLogPanel) {
+    const ACTIVITY_COLS = [
+      {key: 'occurredAt', label: 'When'}, {key: 'username', label: 'User'}, {key: 'role', label: 'Role'},
+      {key: 'method', label: 'Method'}, {key: 'path', label: 'Path'}, {key: 'statusCode', label: 'Status'},
+      {key: 'durationMs', label: 'ms'}, {key: 'ipAddress', label: 'IP'},
+    ];
+    const AUDIT_COLS = [
+      {key: 'changedAt', label: 'When'}, {key: 'tableName', label: 'Table'}, {key: 'rowKey', label: 'Row'},
+      {key: 'field', label: 'Field'}, {key: 'oldValue', label: 'Old Value'}, {key: 'newValue', label: 'New Value'},
+      {key: 'changedBy', label: 'Changed By'},
+    ];
+    let activityLogLoaded = false;
+    const userFilterInput = document.getElementById('activitylog-user-filter');
+
+    function loadActivityLog() {
+      const params = new URLSearchParams({limit: '200'});
+      const u = (userFilterInput.value || '').trim();
+      if (u) params.set('username', u);
+      fetch('/api/admin/activity-log?' + params.toString())
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => renderTable('activitylog-table', data.entries || [], ACTIVITY_COLS, 'activitylog-count'))
+        .catch(() => {
+          document.getElementById('activitylog-table').innerHTML =
+            '<tbody><tr><td style="padding:20px;color:var(--text-tertiary)">Could not load the activity log.</td></tr></tbody>';
+        });
+    }
+
+    function loadAuditLog() {
+      fetch('/api/admin/audit-log?limit=200')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+        .then(data => renderTable('auditlog-table', data.entries || [], AUDIT_COLS, 'auditlog-count'))
+        .catch(() => {
+          document.getElementById('auditlog-table').innerHTML =
+            '<tbody><tr><td style="padding:20px;color:var(--text-tertiary)">Could not load the change history.</td></tr></tbody>';
+        });
+    }
+
+    document.getElementById('activitylog-refresh-btn').addEventListener('click', loadActivityLog);
+    // Filtering by username is a deliberate action (Enter), not an
+    // on-every-keystroke refetch - this hits MySQL, not a cached payload.
+    userFilterInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadActivityLog(); });
+
+    document.querySelectorAll('.nav-item[data-panel="p-activitylog"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!activityLogLoaded) { activityLogLoaded = true; loadActivityLog(); loadAuditLog(); }
+      });
+    });
+  }
+
   // ---- Client Contacts ----
   const clientsList = document.getElementById('clients-list');
   if (clientsList) {
@@ -3929,6 +4515,55 @@ kpiBindings.forEach(([id, value]) => {
 });
 const qsHealth = document.getElementById('qs-health'); if (qsHealth) qsHealth.textContent = DATA.kpi.healthPct + '%';
 const qsTotal = document.getElementById('qs-total'); if (qsTotal) qsTotal.textContent = DATA.kpi.total;
+const totalFoot = document.getElementById('kpi-total-foot');
+if (totalFoot) {
+  // See applyClientView()'s mixCount/camCount/tltCount comment - this
+  // replaces the old static "Across Teletrac, MiX Unity, FT Cloud" text
+  // (which named all three platforms but said nothing about how many of
+  // the total each one actually covers) with the real per-platform
+  // count, so "121 assets" can't be misread as 121 vehicles uniformly
+  // tracked by all three.
+  totalFoot.textContent = DATA.kpi.mixCount + ' MiX Unity · ' + DATA.kpi.camCount + ' FT Cloud · ' + DATA.kpi.tltCount + ' Teletrac';
+}
+
+// ---- Platform Breakdown (Executive Dashboard) ----
+// Every KPI in the row above (Online/Technical Escalation/etc.) is a
+// per-VEHICLE verdict that combines all three platforms - and for a
+// vehicle that only has, say, a MiX Unity report at all (no camera, no
+// fuel probe fitted), that combined verdict is unavoidably just MiX's
+// own read, since there's nothing else to combine it WITH. That's
+// correct, not a bug (classify_fleet weighs whatever platforms actually
+// exist for that vehicle) - but with MiX Unity covering far more of the
+// fleet than the other two (see the Total Assets footer above), the
+// blended KPIs above end up leaning heavily on MiX Unity in practice.
+// This section is each platform judged entirely on its own -
+// r.MIX/r.CAM/r.TLT (control_room.py's _platform_row) already carry
+// that independent per-platform verdict on every row, so no new data
+// pipeline is needed, just a separate tally instead of a blended one.
+function renderPlatformBreakdown() {
+  const grid = document.getElementById('platform-breakdown-grid');
+  if (!grid) return;
+  const rows = DATA.full || [];
+  const total = rows.length;
+  const PLATFORMS = [
+    {key: 'MIX', label: 'MiX Unity'},
+    {key: 'CAM', label: 'FT Cloud'},
+    {key: 'TLT', label: 'Teletrac'},
+  ];
+  grid.innerHTML = PLATFORMS.map(p => {
+    const online = rows.filter(r => r[p.key] === 'Online').length;
+    const offline = rows.filter(r => r[p.key] === 'Offline').length;
+    const installed = online + offline;  // has a real report on this platform, regardless of current state
+    return '<div class="pb-item">' +
+      '<div class="pb-item-head">' + escapeHTML(p.label) + '</div>' +
+      '<div class="pb-row pb-online"><span>Online</span><span class="pb-num">' + online + '</span></div>' +
+      '<div class="pb-row pb-offline"><span>Offline</span><span class="pb-num">' + offline + '</span></div>' +
+      '<div class="pb-row pb-total"><span>Total Assets Installed</span><span class="pb-num">' + installed + '</span></div>' +
+      '<div class="pb-foot">' + installed + ' of ' + total + ' assets tracked on this platform</div>' +
+    '</div>';
+  }).join('');
+}
+renderPlatformBreakdown();
 const qsCrit = document.getElementById('qs-crit'); if (qsCrit) qsCrit.textContent = DATA.kpi.escalations;
 const refreshPill = document.getElementById('refresh-pill');
 if (refreshPill) {
@@ -3937,7 +4572,12 @@ if (refreshPill) {
   // comment or "no follow-up" flag may be missing - say so rather than
   // presenting a partial picture as complete.
   const applied = DATA.meta.feedbackApplied !== false;
-  refreshPill.textContent = 'Updated ' + DATA.meta.generated + (applied ? '' : ' · feedback unavailable');
+  // meta.generated doesn't exist yet on a brand-new deployment - no
+  // import/poll cycle has ever run, so there's no real timestamp to
+  // show. Literal "Updated undefined" was the giveaway that nothing
+  // has been fetched yet; say that plainly instead.
+  const updatedText = DATA.meta.generated || 'No data imported yet';
+  refreshPill.textContent = 'Updated ' + updatedText + (applied ? '' : ' · feedback unavailable');
   refreshPill.classList.toggle('pill-warn', !applied);
   refreshPill.title = applied ? '' : "Couldn't load feedback this request - comments and follow-up flags may be missing.";
 }
@@ -4401,28 +5041,6 @@ document.getElementById('drill-feedback-form').addEventListener('submit', (e) =>
     });
 }));
 
-/**
- * Re-pulls the (now feedback-overlaid) payload and re-renders every
- * table, chart, KPI and nav count from it. Returns a short description
- * of what changed for the given plate, so the confirmation message can
- * say something specific instead of a generic "saved".
- */
-function refreshDashboardData(plate) {
-  const before = (DATA.full || []).find(r => r.plate === plate);
-  const beforeStatus = before ? before.status : null;
-  return fetch('/api/dashboard-data')
-    .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
-    .then(fresh => {
-      setDashboardData(fresh);
-      const after = (DATA.full || []).find(r => r.plate === plate);
-      renderEverything();
-      if (after && beforeStatus && after.status !== beforeStatus) {
-        return plate + ' moved from ' + beforeStatus + ' to ' + after.status + '.';
-      }
-      return '';
-    })
-    .catch(() => '');
-}
 function closeDrillDown() { document.getElementById('drill-backdrop').classList.remove('open'); }
 wireOnce('drill-close', () => {
   document.getElementById('drill-close').addEventListener('click', closeDrillDown);

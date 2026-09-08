@@ -27,7 +27,7 @@ SMTP_PORT = 587
 SMTP_SSL_PORT = 465
 
 
-def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, references=None):
+def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, references=None, attachments=None):
     """
     Sends one HTML email. Returns (message_id, None) on success, or
     (None, error_string) on failure - never raises, so a mail outage
@@ -37,6 +37,11 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     body - Gmail, Gmail mobile, Outlook mobile and Apple Mail all render
     it as the inbox preview snippet, which is what lets the subject stay
     frozen while the client still sees what changed at a glance.
+
+    attachments (optional): a list of (filename, bytes, maintype, subtype)
+    tuples - added for the DDR report (fleet_logic/ddr_report.py), the
+    first thing this app sends as a real file rather than an HTML body;
+    every existing caller passes nothing here and is unaffected.
     """
     address = os.environ.get("EMAIL_ADDRESS")
     password = os.environ.get("EMAIL_PASSWORD")
@@ -72,6 +77,9 @@ def send(to_addrs, subject, html_body, preheader="", in_reply_to=None, reference
     )
     msg.set_content("This message requires an HTML-capable email client to view.")
     msg.add_alternative(preheader_html + html_body, subtype="html")
+
+    for filename, data, maintype, subtype in (attachments or []):
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
 
     # Purely an internal bookkeeping token for sheets_store's thread
     # ledger (record_sent_message) - never attached to the outgoing

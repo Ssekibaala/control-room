@@ -25,19 +25,21 @@ DEFAULTS = {
         #
         # org_ids is now a LEGACY FALLBACK ONLY and is empty by design.
         # Which organisations get polled comes from the client registry
-        # (client_registry.load_registry() -> the Sheets "Clients" tab),
-        # so an org is always attached to a named client rather than
-        # floating loose - that mapping is what makes per-client access
-        # control and the dashboard's client filter possible at all.
-        # Anything listed here is only used if Sheets AND the local
-        # cache are both unavailable, and lands under one synthetic
-        # "Unassigned" client. Leave it empty unless you are
-        # deliberately running without Sheets.
+        # (client_registry.load_registry() -> the "clients" table in
+        # MySQL), so an org is always attached to a named client rather
+        # than floating loose - that mapping is what makes per-client
+        # access control and the dashboard's client filter possible at
+        # all. Anything listed here is only used if the database AND the
+        # local cache are both unavailable, and lands under one
+        # synthetic "Unassigned" client. Leave it empty unless you are
+        # deliberately running without a database.
         #
-        # poll_interval_minutes is how often the in-process poller (see
-        # app.py) re-fetches while the app is running; it does NOT
-        # persist across restarts/dyno sleep, so this is a best-effort
-        # cadence, not a guaranteed one.
+        # poll_interval_minutes is how often the poller re-fetches. On a
+        # deployment that still runs it as an in-process thread (see
+        # app.py), it's a best-effort cadence that does NOT persist
+        # across restarts. On a cron-triggered deployment (cPanel etc,
+        # see /api/cron/poll-all), the cron schedule itself is the real
+        # interval and this value is unused by that path.
         "org_ids": "",
         "poll_interval_minutes": "5",
         "inter_org_delay_seconds": "5",
@@ -202,6 +204,14 @@ def load_settings(path="settings.ini"):
                 config.set(section, key, val)
                 changed = True
     if changed or not os.path.exists(path):
+        # A fresh environment with no data/ directory at all yet (e.g. a
+        # Docker image, deliberately built without the repo's committed
+        # sample data - see .dockerignore) would otherwise fail here with
+        # FileNotFoundError on the open() below, since this is normally
+        # the very first write into that directory.
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(path, "w") as f:
             config.write(f)
 

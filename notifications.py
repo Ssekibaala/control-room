@@ -15,7 +15,7 @@ import os
 import json
 from datetime import datetime, timedelta
 
-import sheets_store
+import db_store
 import mailer
 import email_templates
 from users import notification_recipients
@@ -104,7 +104,7 @@ def _client_recipients(client=None):
     for r in notification_recipients(roles=("client",), client=client):
         add(r["email"])
     try:
-        for c in sheets_store.load_clients():
+        for c in db_store.load_clients():
             if client is not None and c["name"].strip() != client:
                 continue
             for email in c["emails"]:
@@ -230,7 +230,7 @@ def _send_per_client(classification, digest_key, slot_start, build, recipients=N
         key = f"{digest_key}:{client}"
         if not force:
             try:
-                last_sent = sheets_store.get_digest_last_sent(key)
+                last_sent = db_store.get_digest_last_sent(key)
                 if last_sent and last_sent >= slot_start:
                     result["perClient"][client] = "already sent in this window"
                     continue
@@ -255,7 +255,7 @@ def _send_per_client(classification, digest_key, slot_start, build, recipients=N
             continue
         if record:
             try:
-                sheets_store.set_digest_last_sent(key, when=_now())
+                db_store.set_digest_last_sent(key, when=_now())
             except Exception as e:
                 print(f"{digest_key} sent to {client} but could not record last-sent: {e}")
         result["sent"] = True
@@ -296,7 +296,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
                      respond_urls=None):
     """
     role/entry_type/requires_followup are exactly what was just written
-    to the Feedback tab by sheets_store.add_feedback(). respond_urls, if
+    to the Feedback tab by db_store.add_feedback(). respond_urls, if
     given, is {"no_followup": url, "needs_attention": url} - supplied by
     the caller because building them needs a signed token, which is the
     caller's job (app.py), not this module's.
@@ -306,7 +306,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
     """
     result = {"sent": False, "reason": None, "case_id": None}
     try:
-        case = sheets_store.get_or_create_open_case(plate)
+        case = db_store.get_or_create_open_case(plate)
         result["case_id"] = case["caseId"]
     except Exception as e:
         result["reason"] = f"could not open/read thread ledger: {e}"
@@ -319,7 +319,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
     # the one being asked a question or the one being told the outcome.
     recent = []
     try:
-        history = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
+        history = db_store.load_feedback_cached().get(plate, {}).get("history", [])
         recent = [
             {"comment": h["comment"], "addedBy": h["addedBy"], "requiresFollowup": h["requiresFollowup"],
              "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else ""}
@@ -389,7 +389,7 @@ def on_comment_added(plate, comment, added_by, role, entry_type, requires_follow
         sent = _send_and_record(plate, case, to, html, preheader, result)
         if requires_followup is False:
             try:
-                sheets_store.close_case(plate, case["caseId"])
+                db_store.close_case(plate, case["caseId"])
             except Exception:
                 pass  # the email already went out; a failed status flip just means the NEXT
                       # comment reopens this same case instead of starting a new one - harmless
@@ -406,7 +406,7 @@ def check_reconnections(classification, recovered, base_url="", episodes=None):
     plate and run_import.py's _day_over_day() has already worked out
     which plates just transitioned Offline->Online (`recovered`) by
     diffing against what was recorded last cycle
-    (sheets_store.load_vehicle_status/save_vehicle_status - there is
+    (db_store.load_vehicle_status/save_vehicle_status - there is
     otherwise NO memory of a previous cycle anywhere in this app). This
     function doesn't redo that diff - it only decides, for each plate
     already known to have just come back online, whether there's
@@ -458,7 +458,7 @@ def _record_recovery_notified(entries):
     The primary guard against a repeat is that the next cycle diffs
     against a vehicle status where this plate is already Online, so it
     is no longer a transition at all. But that write can fail
-    (sheets_store.save_vehicle_status is wrapped in a try/except in
+    (db_store.save_vehicle_status is wrapped in a try/except in
     run_import precisely because losing it must not kill the import),
     and when it does, the SAME recovery is rediscovered next cycle and
     mailed again. Keying on the episode - which offline spell this
@@ -654,7 +654,7 @@ def send_pending_confirmation_digest(classification, base_url, slot_start, overd
     communication, indefinitely.
 
     Gated on the configured weekly send window
-    (notifications.weekly_slot_start + sheets_store.get_digest_last_sent/
+    (notifications.weekly_slot_start + db_store.get_digest_last_sent/
     set_digest_last_sent) - escalation to Technical Escalation itself is
     untouched by any of this, it stays exactly the days-based rule in
     classifier.py it always was. This is an additive notification layer,
@@ -937,10 +937,10 @@ def _send_reconnect_check(plate, days_offline, open_comment, base_url, episode=N
     if not to:
         return False
 
-    case = sheets_store.get_or_create_open_case(plate)
+    case = db_store.get_or_create_open_case(plate)
     recent = []
     try:
-        history = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
+        history = db_store.load_feedback_cached().get(plate, {}).get("history", [])
         # Exclude the last entry - that's the same open ask already shown
         # above in its own highlighted box, showing it twice would be
         # redundant rather than informative.
@@ -1063,7 +1063,7 @@ def _send_asset_summary(plate, classification, to_addrs, base_url, note=None, se
 
     history = []
     try:
-        entries = sheets_store.load_feedback_cached().get(plate, {}).get("history", [])
+        entries = db_store.load_feedback_cached().get(plate, {}).get("history", [])
         history = [
             {"comment": h["comment"], "addedBy": h["addedBy"], "requiresFollowup": h["requiresFollowup"],
              "date": h["date"].strftime("%d %b %Y, %H:%M") if h["date"].year > 1 else ""}
@@ -1081,6 +1081,54 @@ def _send_asset_summary(plate, classification, to_addrs, base_url, note=None, se
         platform_seen=_platform_seen_rows(info))
 
     message_id, err = mailer.send(to_addrs, f"{plate} - vehicle status summary", html, preheader)
+    if err:
+        result["reason"] = err
+        return result
+    result["sent"] = True
+    return result
+
+
+def send_ddr_report(client, to_addrs, xlsx_bytes, sent_by="", note=None):
+    """
+    Emails a generated DDR (Device Diagnostic Report - see
+    fleet_logic/ddr_report.py) workbook as an attachment to hand-typed
+    addresses. Deliberately its own small function rather than another
+    branch of send_manual_report() above: that function's reports are
+    all built FROM `classification` (the raw per-plate dict), where the
+    DDR workbook is already-generated bytes handed in by the caller
+    (app.py's /api/ddr/send, which builds it from the same
+    already-feedback-overlaid rows the dashboard itself renders) - the
+    two don't share a natural call shape, so forcing this in alongside
+    them would be the awkward fit, not the reuse.
+
+    Same non-negotiable rule as every other manual send in this app:
+    the caller (app.py) has already checked `client` is one this session
+    is actually allowed to see, checked the same way every other
+    per-client route checks it - this function trusts that and does not
+    re-derive it, since it has no session to check against.
+    """
+    result = {"sent": False, "reason": None}
+    to_addrs = [a for a in (to_addrs or []) if a]
+    if not to_addrs:
+        result["reason"] = "no recipient address given"
+        return result
+
+    filename = f"DDR_{(client or 'All_Clients').replace(' ', '_')}_{_now().strftime('%Y%m%d')}.xlsx"
+    note_html = f"<p>{note}</p>" if note else ""
+    sent_by_html = f"<p style=\"color:#666;font-size:13px;\">Sent by {sent_by}.</p>" if sent_by else ""
+    html = (
+        f"<p>Attached is the current Device Diagnostic Report for "
+        f"<strong>{client or 'every client'}</strong>, generated {_now().strftime('%d %b %Y, %H:%M')}.</p>"
+        f"{note_html}"
+        f"<p>Please review each device's status and reply with any corrections or comments - "
+        f"anything you send back gets logged against the vehicle the same way an in-app comment would.</p>"
+        f"{sent_by_html}"
+    )
+    message_id, err = mailer.send(
+        to_addrs, f"Device Diagnostic Report - {client or 'All Clients'}", html,
+        attachments=[(filename, xlsx_bytes, "application",
+                      "vnd.openxmlformats-officedocument.spreadsheetml.sheet")],
+    )
     if err:
         result["reason"] = err
         return result
@@ -1113,7 +1161,7 @@ def _send_and_record(plate, case, to_addrs, html, preheader, result):
         result["reason"] = err
         return result
     try:
-        sheets_store.record_sent_message(plate, case, message_id)
+        db_store.record_sent_message(plate, case, message_id)
     except Exception:
         pass  # the email already sent; losing this update just means the NEXT email
               # in the case starts a fresh References chain instead of extending it

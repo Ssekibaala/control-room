@@ -49,7 +49,22 @@ def replace_with_retry(tmp_path, path, attempts=5, delay=0.15):
 
 
 def write_json_atomic(path, data, indent=None):
-    """Write data to path as JSON so no reader ever sees a partial file."""
+    """
+    Write data to path as JSON so no reader ever sees a partial file.
+
+    Also ensures path's parent directory exists first. Most callers
+    already do this themselves before calling in (run_import.py,
+    client_registry.py), but app.py's platform-poller snapshot writers
+    don't - they assume data/ is already there because the repo used to
+    ship it pre-populated. A fresh environment with no data/ directory
+    yet at all (a Docker image built without the repo's sample data, or
+    just a clean checkout before the first import has ever run) would
+    otherwise crash the very first poll with FileNotFoundError. A no-op,
+    zero-cost check for callers that already made sure themselves.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         with open(tmp_path, "w") as f:

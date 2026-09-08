@@ -155,7 +155,7 @@ def _parse_gap_date(g):
 
 def _filter_checked_gaps(cases, tamper_checks):
     """Drops any gap already explained by a physical check dated on or
-    after it - see sheets_store.load_tamper_checks()'s docstring for
+    after it - see db_store.load_tamper_checks()'s docstring for
     why the boundary is a check date, not a blanket per-plate
     suppression. A plate with no check record at all is untouched."""
     kept = []
@@ -209,7 +209,7 @@ def _day_over_day(results, previous_status, previous_detail=None, now=None):
     newly_offline, current_status, current_detail, episodes).
 
     current_status/current_detail are what the caller persists
-    (sheets_store.save_vehicle_status) so the NEXT cycle has something
+    (db_store.save_vehicle_status) so the NEXT cycle has something
     to diff against.
 
     `episodes` is {plate: {offlineSince, offlinePlatforms, lastSeenAt,
@@ -520,8 +520,8 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     fetch_reports() (or, for testing, pointed at the known-good local
     sample files). Returns the same data dict the dashboard serves.
 
-    tamper_checks (sheets_store.load_tamper_checks()'s shape) and
-    previous_status (sheets_store.load_vehicle_status()'s shape) are
+    tamper_checks (db_store.load_tamper_checks()'s shape) and
+    previous_status (db_store.load_vehicle_status()'s shape) are
     both loaded by the caller, same reason feedback_rows is: this
     function stays Sheets/network-free per its own docstring, the
     caller does the one read and hands the result in as plain data.
@@ -532,25 +532,42 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     mix_api_reports for the Teletrac and FT Cloud API pollers - see
     _load_teletrac_api_reports() and _load_ft_cloud_api_reports().
 
-    previous_detail (sheets_store.load_vehicle_status_detail()) is the
+    previous_detail (db_store.load_vehicle_status_detail()) is the
     offline-episode state for plates that were already offline last
     cycle. Optional and defaulting to nothing, so every existing caller
     - including the tests, which pass previous_status only - behaves
     exactly as before; without it, a recovery is still detected, it
     just can't say how long the vehicle had been gone.
+
+    paths=None is the live-API-only bootstrap case: a brand-new
+    deployment (confirmed live on a fresh Azure instance) has no
+    cached mail-based CSV/ZIP reports yet - not even a placeholder -
+    because run_import() has never completed a real mail fetch. That
+    used to be a hard requirement (refresh_live_snapshot() just
+    refused to run at all), which meant live MiX/Teletrac/FT Cloud
+    polls could succeed every 5 minutes forever while the dashboard
+    stayed permanently empty, waiting on a mailbox that might not even
+    have a matching email sitting in it right now. Every mail-sourced
+    signal is skipped in that case - the CSV/ZIP rows below, and
+    tampering analysis entirely, which has no live-API equivalent -
+    while classification still runs normally off whatever live API
+    reports are available.
     """
-    check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
+    has_mail_reports = paths is not None
+    if has_mail_reports:
+        check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
     settings = load_settings(settings_path or os.path.join(DATA_DIR, "settings.ini"))
     feedback = feedback_rows or {}
     tamper_checks = tamper_checks or {}
 
     all_rows = []
-    all_rows += teletrac_csv.parse(paths["teletrac_offline"])
-    all_rows += mix_mobile_status.parse(paths["mix_mobile_status"])
-    all_rows += mix_movement.parse(paths["mix_movement"])
-    all_rows += mix_power_events.parse(paths["mix_power_events"])
-    all_rows += ft_cloud_camera.parse(paths["ft_cloud_camera"])
+    if has_mail_reports:
+        all_rows += teletrac_csv.parse(paths["teletrac_offline"])
+        all_rows += mix_mobile_status.parse(paths["mix_mobile_status"])
+        all_rows += mix_movement.parse(paths["mix_movement"])
+        all_rows += mix_power_events.parse(paths["mix_power_events"])
+        all_rows += ft_cloud_camera.parse(paths["ft_cloud_camera"])
     all_rows += mix_api_reports or []
     all_rows += teletrac_api_reports or []
     all_rows += ft_cloud_api_reports or []
@@ -577,7 +594,17 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     now = max(timestamps) if timestamps else now_eat()
     results = classify_fleet(grouped, settings, feedback, now=now)
 
-    tamper_result = run_tamper_analysis(paths["mix_movement"], paths["mix_power_events"])
+    if has_mail_reports:
+        tamper_result = run_tamper_analysis(paths["mix_movement"], paths["mix_power_events"])
+    else:
+        # Same shape tamper_engine.analyse() always returns - tampering
+        # detection is entirely mail-report-derived (movement + power
+        # event CSVs), no live-API source exists for it, so it's simply
+        # empty until the real import eventually runs. Every other
+        # section of the dashboard is unaffected.
+        tamper_result = {"total_trip_records": 0, "total_assets": 0, "bad_trip_rows": 0, "bad_event_rows": 0,
+                          "gaps": [], "mismatches": [], "confirmed": [], "confirmed_power_cycle": [],
+                          "confirmed_no_reconnect": [], "unconfirmed": [], "skipped": []}
     confirmed_cases = _filter_checked_gaps(
         [_tamper_case_to_loader_shape(g) for g in tamper_result["confirmed"]], tamper_checks)
     unconfirmed_cases = _filter_checked_gaps(
@@ -609,9 +636,13 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     # Fleet Integrity, tamper_engine.build_workbook() for Tampering Risk)
     # - then hand their paths to _build_data(), which embeds them via
     # its own _b64_file() helper.
+    # Internal cache filenames only - never shown to a user (embedded as
+    # base64 in the API response, or filtered per-client and renamed at
+    # download time in app.py's /api/export/<name>). Named after this
+    # fleet-wide workbook's own content, not any one client.
     os.makedirs(DATA_DIR, exist_ok=True)
-    integrity_path = os.path.join(DATA_DIR, "GTL_integrity_report.xlsx")
-    tamper_path = os.path.join(DATA_DIR, "GTL_tampering_report.xlsx")
+    integrity_path = os.path.join(DATA_DIR, "fleet_integrity_report.xlsx")
+    tamper_path = os.path.join(DATA_DIR, "fleet_tampering_report.xlsx")
     report_writer.write_report(results, settings, recovered=recovered, newly_offline=newly_offline,
                                 output_path=integrity_path, report_date=now, history_available=history_available)
     build_tamper_workbook(tamper_result, tamper_path)
@@ -629,7 +660,7 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     # Same reasoning, for the weekly tamper risk report email.
     data["_tampering"] = tampering
     # current_status is what the caller persists for NEXT cycle's
-    # comparison (sheets_store.save_vehicle_status) - recovered is
+    # comparison (db_store.save_vehicle_status) - recovered is
     # reused as-is by notifications.check_reconnections so it isn't
     # recomputed a second time just to decide who to email.
     data["_current_status"] = current_status
@@ -790,7 +821,7 @@ def refresh_live_snapshot():
     Deliberately does NOT do what run_import() does beyond writing
     fleet_today.json:
       - no mail fetch (reuses cached files, see _cached_report_paths())
-      - does not call sheets_store.save_vehicle_status() - that write is
+      - does not call db_store.save_vehicle_status() - that write is
         the day-over-day anchor Recovered/Newly-Offline and
         check_reconnections compare against; updating it every 30
         minutes would compare each cycle to the PREVIOUS cycle instead
@@ -801,28 +832,41 @@ def refresh_live_snapshot():
         gate and app.py's /api/refresh-if-stale staleness check both
         key off that field meaning "the real mail-based pipeline ran";
         a lightweight refresh must never be mistaken for one of those
+
+    paths being None (no cached mail reports exist yet) used to mean
+    this whole function just refused to run - confirmed live on a
+    fresh deployment: MiX/Teletrac/FT Cloud polls kept succeeding every
+    5 minutes, forever, while the dashboard stayed permanently empty,
+    because nothing was allowed to build fleet_today.json until a real
+    mail fetch happened to find a matching, unconsumed report email
+    sitting in the inbox at exactly the right moment - not guaranteed
+    on a brand-new deployment's mailbox at all. process_reports()
+    accepts paths=None precisely for this case now: live API data
+    alone is enough to classify Online/Offline correctly, tampering
+    detection just stays empty (it has no live-API source) until the
+    real import eventually runs.
     """
     paths = _cached_report_paths()
-    if paths is None:
-        return {"status": "skipped", "reason": "no cached mail reports yet - real import hasn't run"}
 
     try:
-        import sheets_store
+        import db_store
         # Cached variant deliberately: this runs on every poll cycle,
-        # not once a day like run_import(), and an uncached read here
-        # was a material part of this app's Sheets traffic (enough to
-        # hit the read-per-minute quota during testing). The cache is
-        # stamp-aware, so a newly submitted comment still invalidates
-        # it - see sheets_store.load_feedback_cached().
-        feedback_rows = sheets_store.load_feedback_cached()
+        # not once a day like run_import(). Historically (when this was
+        # Sheets-backed) an uncached read here was a material part of
+        # this app's Sheets traffic, enough to hit the read-per-minute
+        # quota during testing; db_store.load_feedback_cached() is now a
+        # direct MySQL read (see its docstring for why the cache itself
+        # is no longer needed), kept under the same name so this call
+        # site didn't need to change.
+        feedback_rows = db_store.load_feedback_cached()
     except Exception:
         feedback_rows = {}
     try:
-        tamper_checks = sheets_store.load_tamper_checks()
+        tamper_checks = db_store.load_tamper_checks()
     except Exception:
         tamper_checks = {}
     try:
-        previous_status = sheets_store.load_vehicle_status()
+        previous_status = db_store.load_vehicle_status()
     except Exception:
         previous_status = None
 
@@ -868,7 +912,7 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     button (app.py's /api/checkin/trigger): force_digests bypasses each
     digest's own interval gate for this one run only (the gate itself,
     and every other call site, is untouched), and prompted_by is who
-    clicked it, recorded via sheets_store.record_manual_checkin() so
+    clicked it, recorded via db_store.record_manual_checkin() so
     the dashboard can show "last sent by X on Y" back to everyone, not
     just whoever happened to trigger it. A no-op for the ordinary
     scheduled import (both default to "don't force, nobody prompted").
@@ -884,20 +928,20 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     paths = fetch_reports(username, password)
 
     try:
-        import sheets_store
-        feedback_rows = sheets_store.load_feedback()
+        import db_store
+        feedback_rows = db_store.load_feedback()
     except RuntimeError as e:
         print(f"WARNING: feedback unavailable this run ({e}), continuing without it.")
         feedback_rows = {}
 
     try:
-        tamper_checks = sheets_store.load_tamper_checks()
+        tamper_checks = db_store.load_tamper_checks()
     except Exception as e:
         print(f"WARNING: tamper checks unavailable this run ({e}), continuing without them.")
         tamper_checks = {}
 
     try:
-        previous_detail = sheets_store.load_vehicle_status_detail()
+        previous_detail = db_store.load_vehicle_status_detail()
         previous_status = {p: d["status"] for p, d in previous_detail.items()}
     except Exception as e:
         print(f"WARNING: previous vehicle status unavailable this run ({e}), "
@@ -945,7 +989,7 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     # mean the day after this one starts back at "no history yet"
     # rather than one bad cycle just being skipped.
     try:
-        sheets_store.save_vehicle_status(current_status, current_detail)
+        db_store.save_vehicle_status(current_status, current_detail)
     except Exception as e:
         print(f"Could not persist this cycle's vehicle status: {e}")
 
@@ -995,7 +1039,7 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
                                   force=force_digests)
     if force_digests:
         try:
-            sheets_store.record_manual_checkin(prompted_by or "unknown")
+            db_store.record_manual_checkin(prompted_by or "unknown")
         except Exception as e:
             print(f"Manual check-in triggered but could not record who prompted it: {e}")
 
@@ -1084,12 +1128,12 @@ def current_snapshot():
     if paths is None:
         return None, None
     try:
-        import sheets_store
-        feedback_rows = sheets_store.load_feedback_cached()
+        import db_store
+        feedback_rows = db_store.load_feedback_cached()
     except Exception:
         feedback_rows = {}
     try:
-        tamper_checks = sheets_store.load_tamper_checks()
+        tamper_checks = db_store.load_tamper_checks()
     except Exception:
         tamper_checks = {}
 
