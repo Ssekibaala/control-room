@@ -4108,9 +4108,16 @@ if (usersForm) {
     // reads "Pending Customer Confirmation" fleet-wide, even on the sheet
     // that's specifically about the fuel probe). So this judges THIS
     // category's own device on its own freshness instead: reported today
-    // -> Online, otherwise -> Pending Customer Confirmation. "Known Issue"
-    // is the one carry-over from the vehicle status - already explained
-    // by the client, so it isn't re-opened by a freshness check.
+    // -> Online, otherwise -> Pending Customer Confirmation, or "Known
+    // Issue" if that absence was already explained by the client.
+    //
+    // Freshness is checked FIRST, "Known Issue" second - deliberately.
+    // A "Known Issue" feedback entry (e.g. "vehicle got an accident")
+    // never expires on its own, so checking status before freshness kept
+    // showing "Known Issue" on a device that had started reporting again
+    // - actively misleading on the one sheet whose whole point is "is
+    // this device reporting today". Reported today wins regardless of
+    // what an old feedback note says.
     const DDR_MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
     function ddrReportedToday(seenValue) {
       const m = /^(\d{1,2}) (\w{3}) (\d{4}),/.exec(seenValue || '');
@@ -4120,8 +4127,9 @@ if (usersForm) {
         && parseInt(m[3], 10) === now.getFullYear();
     }
     function ddrStatusFor(r, seenValue) {
+      if (ddrReportedToday(seenValue)) return 'Online';
       if (r.status === 'Known Issue') return 'Known Issue';
-      return ddrReportedToday(seenValue) ? 'Online' : 'Pending Customer Confirmation';
+      return 'Pending Customer Confirmation';
     }
     // Mirrors ddr_report.py's _position_key(): parses the same "24 Aug
     // 2026, 21:26" format into a real, comparable timestamp - a plain

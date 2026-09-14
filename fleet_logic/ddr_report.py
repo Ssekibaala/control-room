@@ -125,14 +125,22 @@ def _platform_status_label(row, seen_value, report_date):
     So this ignores the vehicle-wide status entirely and judges THIS
     category's own device on its own freshness: reported today -> Online.
     Not reported today -> Pending Customer Confirmation, needing the
-    client to confirm THIS device specifically. The one carry-over is
-    "Known Issue" - a deliberate, already-given client explanation, which
-    stays put rather than being re-opened by a freshness check.
+    client to confirm THIS device specifically, or "Known Issue" if
+    that absence was already explained by the client.
+
+    Freshness is checked FIRST, "Known Issue" second - deliberately, and
+    the order matters: a "Known Issue" feedback entry (e.g. "vehicle got
+    an accident") never expires or auto-clears on its own, so once the
+    device is back and reporting again, checking status before freshness
+    kept showing "Known Issue" on a device that is plainly online right
+    now, on the one sheet whose whole point is "is this device reporting
+    today" - actively misleading, not just stale. Reported today wins:
+    the device is online, full stop, whatever an old feedback note says.
     """
-    if (row.get("status") or "") == "Known Issue":
-        return "Known Issue"
     if _platform_reported_today(seen_value, report_date):
         return "Online"
+    if (row.get("status") or "") == "Known Issue":
+        return "Known Issue"
     return "Pending Customer Confirmation"
 
 
