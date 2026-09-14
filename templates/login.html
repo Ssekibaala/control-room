@@ -5,255 +5,399 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fleet Intelligence - Sign In</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // ============ BRAND TOKENS ============
+  // Sampled directly from static/Teletrac_Fleet_Solutions_logo.png
+  // (navy wordmark #1F3366, green ring #76C25F) - every color used on
+  // this page comes from this palette, nothing is hard-coded elsewhere.
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          'brand-navy': '#1F3366',
+          'brand-navy-deep': '#0E1B3A',
+          'brand-green': '#76C25F',
+          'brand-green-dark': '#5CA648',
+          base: '#0B1220',
+          surface: '#131C2B',
+          line: '#1F2A3C',
+          muted: '#8A97AB',
+          ink: '#E8EDF5',
+          danger: '#FF6B7F',
+        },
+        fontFamily: {
+          display: ['Manrope', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        },
+        keyframes: {
+          pulseDot: { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.35 } },
+          routeFlow: { to: { strokeDashoffset: '-64' } },
+          nodePulse: { '0%,100%': { opacity: 0.35, transform: 'scale(1)' }, '50%': { opacity: 1, transform: 'scale(1.6)' } },
+          fadeSlideIn: { from: { opacity: 0, transform: 'translateY(10px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
+          spin: { to: { transform: 'rotate(360deg)' } },
+        },
+        animation: {
+          pulseDot: 'pulseDot 1.8s ease-in-out infinite',
+          routeFlow: 'routeFlow 5s linear infinite',
+          nodePulse: 'nodePulse 3.4s ease-in-out infinite',
+          fadeSlideIn: 'fadeSlideIn 0.5s cubic-bezier(.16,1,.3,1) both',
+          spin: 'spin 0.7s linear infinite',
+        },
+      },
+    },
+  };
+</script>
 <style>
-  :root {
-    --bg:#050507; --panel:#0B0B10; --card-bg:#12121A; --border:rgba(255,255,255,0.09); --divider:rgba(255,255,255,0.06);
-    --text-primary:#F5F6F8; --text-secondary:rgba(245,246,248,0.60); --text-tertiary:rgba(245,246,248,0.38);
-    --primary:#3B82F6; --primary-2:#8B5CF6; --success:#2DD4A7; --danger:#FF5C7A;
-  }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { height:100%; }
-  body {
-    background:var(--bg); color:var(--text-primary); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    display:flex; -webkit-font-smoothing:antialiased;
-  }
+  /* Things Tailwind's utility classes can't express cleanly: multi-stop
+     radial gradients, a mask on the grid overlay, and reduced-motion
+     opt-outs that need to reach animations defined in the config above. */
+  html, body { height: 100%; }
+  body { font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif; }
 
-  /* ============ LEFT: BRAND PANEL ============ */
-  .brand-panel {
-    flex:1.15; position:relative; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;
-    padding:48px 56px; background:
-      radial-gradient(circle at 15% 8%, rgba(59,130,246,0.35), transparent 45%),
-      radial-gradient(circle at 85% 92%, rgba(139,92,246,0.28), transparent 48%),
-      linear-gradient(160deg, #0A0A12, #050507);
+  .brand-glow {
+    background:
+      radial-gradient(circle at 12% 8%, rgba(118,194,95,0.16), transparent 42%),
+      radial-gradient(circle at 88% 94%, rgba(31,51,102,0.55), transparent 50%),
+      linear-gradient(165deg, #142445 0%, #0E1B3A 55%, #0B1220 100%);
   }
-  /* Wallpaper: a route/telemetry map drawn in SVG rather than a stock
-     photo - it stays crisp at any size, adds no network request, and
-     is actually on-topic for a fleet product. Sits under the grid. */
-  .brand-wallpaper { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; opacity:0.5; }
-  .brand-wallpaper .route { fill:none; stroke-linecap:round; stroke-linejoin:round; }
-  .brand-wallpaper .route-dash { stroke-dasharray:5 11; animation:routeFlow 5s linear infinite; }
-  @keyframes routeFlow { to { stroke-dashoffset:-64; } }
-  .brand-wallpaper .node { animation:nodePulse 3.4s ease-in-out infinite; transform-box:fill-box; transform-origin:center; }
-  .brand-wallpaper .node:nth-of-type(2) { animation-delay:0.9s; }
-  .brand-wallpaper .node:nth-of-type(3) { animation-delay:1.8s; }
-  .brand-wallpaper .node:nth-of-type(4) { animation-delay:2.6s; }
-  @keyframes nodePulse { 0%,100%{opacity:0.35;transform:scale(1);} 50%{opacity:1;transform:scale(1.5);} }
-  .brand-panel::before {
-    content:""; position:absolute; inset:0; opacity:0.5; pointer-events:none;
-    background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
-    background-size:44px 44px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%, #000 40%, transparent 90%);
+  .brand-grid::before {
+    content: "";
+    position: absolute; inset: 0; pointer-events: none; opacity: 0.5;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 40%, transparent 90%);
   }
-  /* Glow pool behind the headline so text never sits on a busy line. */
-  .brand-panel::after {
-    content:""; position:absolute; left:-10%; top:28%; width:80%; height:52%; pointer-events:none;
-    background:radial-gradient(ellipse at center, rgba(5,5,10,0.92), transparent 68%);
+  /* Glow pool behind the headline so it never sits on a busy grid line. */
+  .brand-grid::after {
+    content: "";
+    position: absolute; left: -10%; top: 26%; width: 80%; height: 54%; pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(11,18,32,0.92), transparent 68%);
   }
+  .route-dash { stroke-dasharray: 5 11; }
+  input:-webkit-autofill { -webkit-text-fill-color: #E8EDF5; -webkit-box-shadow: 0 0 0 1000px #131C2B inset; caret-color: #E8EDF5; }
+  input[type="checkbox"] { accent-color: #76C25F; }
+
   @media (prefers-reduced-motion: reduce) {
-    .brand-wallpaper .route-dash, .brand-wallpaper .node { animation:none; }
-  }
-  .partner-badge { display:inline-flex; align-items:center; gap:9px; position:relative; z-index:1;
-    background:#fff; border-radius:12px; padding:8px 16px 8px 10px; width:fit-content; margin-bottom:28px;
-    box-shadow:0 8px 24px rgba(0,0,0,0.25); }
-  .partner-badge img { height:26px; width:auto; display:block; }
-  .partner-badge .divider { width:1px; height:20px; background:rgba(15,23,42,0.15); }
-  .partner-badge .caption { font-size:9.5px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#5b6472; line-height:1.3; }
-
-  .brand-top { display:flex; align-items:center; gap:12px; position:relative; z-index:1; }
-  .brand-mark { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,var(--primary),var(--primary-2));
-    color:#fff; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-weight:700; font-size:12px;
-    box-shadow:0 6px 20px rgba(59,130,246,0.35); }
-  .brand-top .name { font-weight:700; font-size:15px; font-family:'Manrope'; }
-  .brand-top .sub { font-size:11px; color:var(--text-tertiary); }
-
-  .brand-mid { position:relative; z-index:1; max-width:460px; }
-  .brand-eyebrow { display:inline-flex; align-items:center; gap:7px; font-size:11px; font-weight:600; letter-spacing:0.6px;
-    text-transform:uppercase; color:var(--success); background:rgba(45,212,167,0.12); border:1px solid rgba(45,212,167,0.25);
-    padding:5px 11px; border-radius:20px; margin-bottom:22px; }
-  .brand-eyebrow .dot { width:6px; height:6px; border-radius:50%; background:var(--success); animation:pulse 1.8s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.35;} }
-  .brand-mid h1 { font-family:'Manrope'; font-size:34px; font-weight:800; line-height:1.18; letter-spacing:-0.02em; margin-bottom:16px; }
-  .brand-mid h1 span { background:linear-gradient(135deg,#8FBFFF,var(--primary),var(--primary-2)); -webkit-background-clip:text;
-    background-clip:text; -webkit-text-fill-color:transparent; }
-  .brand-mid p { font-size:14.5px; line-height:1.65; color:var(--text-secondary); max-width:400px; }
-
-  .brand-stats { display:flex; gap:28px; margin-top:38px; position:relative; z-index:1; }
-  .brand-stat .num { font-family:'JetBrains Mono'; font-size:22px; font-weight:700; }
-  .brand-stat .label { font-size:11px; color:var(--text-tertiary); margin-top:2px; }
-
-  .brand-foot { font-size:11.5px; color:var(--text-tertiary); position:relative; z-index:1; }
-
-  /* ============ RIGHT: FORM PANEL ============ */
-  .form-panel { flex:1; display:flex; align-items:center; justify-content:center; padding:32px; background:var(--panel); }
-  .form-wrap { width:100%; max-width:340px; }
-  .form-wrap h2 { font-family:'Manrope'; font-size:23px; font-weight:700; margin-bottom:6px; letter-spacing:-0.01em; }
-  .form-wrap .lede { font-size:13px; color:var(--text-secondary); margin-bottom:32px; }
-
-  .field { margin-bottom:16px; }
-  .field label { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:7px; font-weight:600; }
-  .input-shell { position:relative; display:flex; align-items:center; }
-  .input-shell svg { position:absolute; left:13px; width:15px; height:15px; stroke:var(--text-tertiary); fill:none; stroke-width:1.8; pointer-events:none; }
-  .input-shell input {
-    width:100%; background:var(--card-bg); border:1px solid var(--border); color:var(--text-primary);
-    padding:11px 14px 11px 38px; border-radius:10px; font-size:14px; font-family:inherit;
-  }
-  .input-shell input:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(59,130,246,0.15); }
-  .toggle-visibility { position:absolute; right:10px; background:none; border:none; color:var(--text-tertiary); cursor:pointer;
-    width:26px; height:26px; display:flex; align-items:center; justify-content:center; border-radius:6px; }
-  .toggle-visibility:hover { color:var(--text-primary); background:rgba(255,255,255,0.06); }
-  .toggle-visibility svg { position:static; width:15px; height:15px; }
-
-  button[type="submit"] {
-    width:100%; margin-top:6px; background:linear-gradient(135deg,var(--primary),var(--primary-2)); border:none; color:#fff;
-    padding:12px; border-radius:10px; font-size:14px; font-weight:700; font-family:inherit; cursor:pointer;
-    box-shadow:0 6px 18px rgba(59,130,246,0.3); transition:transform 0.15s, filter 0.15s;
-  }
-  button[type="submit"]:hover { filter:brightness(1.08); transform:translateY(-1px); }
-  button[type="submit"]:active { transform:translateY(0) scale(0.99); }
-  button[type="submit"]:disabled { opacity:0.6; cursor:default; transform:none; }
-  .error { color:var(--danger); font-size:12.5px; margin-top:14px; min-height:16px; display:flex; align-items:center; gap:6px; }
-
-  .form-foot { margin-top:28px; padding-top:20px; border-top:1px solid var(--divider); font-size:11.5px; color:var(--text-tertiary); text-align:center; }
-
-  @media (max-width:900px) {
-    .brand-panel { display:none; }
-    .form-panel { padding:24px; }
+    .animate-pulseDot, .animate-routeFlow, .animate-nodePulse, .animate-fadeSlideIn, .animate-spin { animation: none !important; }
   }
 </style>
 </head>
-<body>
+<body class="min-h-screen flex flex-col md:flex-row bg-base text-ink antialiased">
 
-<div class="brand-panel">
-  <svg class="brand-wallpaper" viewBox="0 0 900 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<!-- ============ LEFT: BRAND PANEL ============ -->
+<div class="relative hidden md:flex md:flex-1 md:basis-[54%] flex-col justify-between overflow-hidden brand-glow brand-grid px-10 py-10 lg:px-14 lg:py-12">
+
+  <!-- Low-opacity route/topology motif: on-topic for a fleet product,
+       stays crisp at any size, and adds no network request. -->
+  <svg class="absolute inset-0 w-full h-full opacity-50 pointer-events-none" viewBox="0 0 900 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <defs>
       <linearGradient id="routeA" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#3B82F6" stop-opacity="0"/>
-        <stop offset="45%" stop-color="#3B82F6" stop-opacity="0.85"/>
-        <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+        <stop offset="0%" stop-color="#76C25F" stop-opacity="0"/>
+        <stop offset="45%" stop-color="#76C25F" stop-opacity="0.85"/>
+        <stop offset="100%" stop-color="#1F3366" stop-opacity="0"/>
       </linearGradient>
       <linearGradient id="routeB" x1="1" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#2DD4A7" stop-opacity="0"/>
-        <stop offset="50%" stop-color="#2DD4A7" stop-opacity="0.6"/>
-        <stop offset="100%" stop-color="#2DD4A7" stop-opacity="0"/>
+        <stop offset="0%" stop-color="#3E5A93" stop-opacity="0"/>
+        <stop offset="50%" stop-color="#3E5A93" stop-opacity="0.65"/>
+        <stop offset="100%" stop-color="#3E5A93" stop-opacity="0"/>
       </linearGradient>
     </defs>
-    <g stroke="rgba(255,255,255,0.10)" stroke-width="1.1">
-      <path class="route" d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210"/>
-      <path class="route" d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490"/>
-      <path class="route" d="M120 -40 C 180 200, 90 380, 200 560 S 330 820, 300 940"/>
-      <path class="route" d="M640 -40 C 700 220, 590 400, 690 600 S 800 830, 760 940"/>
+    <g stroke="rgba(255,255,255,0.10)" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210"/>
+      <path d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490"/>
+      <path d="M120 -40 C 180 200, 90 380, 200 560 S 330 820, 300 940"/>
+      <path d="M640 -40 C 700 220, 590 400, 690 600 S 800 830, 760 940"/>
     </g>
-    <path class="route route-dash" d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210"
-          stroke="url(#routeA)" stroke-width="2.4"/>
-    <path class="route route-dash" d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490"
-          stroke="url(#routeB)" stroke-width="2"/>
-    <circle class="node" cx="470" cy="280" r="4" fill="#3B82F6"/>
-    <circle class="node" cx="200" cy="560" r="3.4" fill="#8B5CF6"/>
-    <circle class="node" cx="690" cy="600" r="3.4" fill="#2DD4A7"/>
-    <circle class="node" cx="760" cy="180" r="3" fill="#3B82F6"/>
+    <path class="route-dash animate-routeFlow" d="M-40 250 C 180 190, 300 330, 470 280 S 760 150, 960 210" fill="none" stroke-linecap="round" stroke="url(#routeA)" stroke-width="2.4"/>
+    <path class="route-dash animate-routeFlow" d="M-40 520 C 200 480, 320 610, 520 560 S 780 430, 960 490" fill="none" stroke-linecap="round" stroke="url(#routeB)" stroke-width="2"/>
+    <circle class="animate-nodePulse" style="transform-box:fill-box; transform-origin:center;" cx="470" cy="280" r="4" fill="#76C25F"/>
+    <circle class="animate-nodePulse" style="transform-box:fill-box; transform-origin:center; animation-delay:0.9s;" cx="200" cy="560" r="3.4" fill="#3E5A93"/>
+    <circle class="animate-nodePulse" style="transform-box:fill-box; transform-origin:center; animation-delay:1.8s;" cx="690" cy="600" r="3.4" fill="#76C25F"/>
+    <circle class="animate-nodePulse" style="transform-box:fill-box; transform-origin:center; animation-delay:2.6s;" cx="760" cy="180" r="3" fill="#3E5A93"/>
   </svg>
-  <div class="partner-badge">
-    <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions">
-    <div class="divider"></div>
-    <div class="caption">Live data<br>from Teletrac</div>
-  </div>
-  <div class="brand-top">
-    <div class="brand-mark">FI</div>
-    <div>
-      <div class="name">Fleet Intelligence</div>
-      <div class="sub">Command Centre</div>
+
+  <!-- Logo, given real breathing room -->
+  <div class="relative z-10 animate-fadeSlideIn">
+    <div class="inline-flex items-center gap-3 bg-white rounded-xl pl-2.5 pr-4 py-2 shadow-lg shadow-black/25 w-fit">
+      <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions" class="h-7 w-auto block">
+      <div class="w-px h-5 bg-brand-navy/15"></div>
+      <span class="text-[9.5px] font-bold uppercase tracking-wide text-slate-600 leading-tight">Live data<br>from Teletrac</span>
     </div>
   </div>
 
-  <div class="brand-mid">
-    <div class="brand-eyebrow"><span class="dot"></span>Live monitoring</div>
-    <h1>Every asset, <span>one view.</span></h1>
-    <p>Cross-platform fleet health, tampering detection, and border-risk monitoring for Globe Trotters Ltd &mdash; unified across Teletrac, MiX Unity, and FT Cloud.</p>
-    <div class="brand-stats">
-      <div class="brand-stat"><div class="num">3</div><div class="label">Platforms merged</div></div>
-      <div class="brand-stat"><div class="num">24/7</div><div class="label">Continuous tracking</div></div>
-      <div class="brand-stat"><div class="num">Role</div><div class="label">Based access</div></div>
-    </div>
+  <!-- Headline, eyebrow, supporting copy, stats -->
+  <div class="relative z-10 max-w-lg animate-fadeSlideIn" style="animation-delay:80ms">
+    <span class="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-brand-green bg-brand-green/10 border border-brand-green/25 rounded-full px-3 py-1.5 mb-6">
+      <span class="relative flex h-1.5 w-1.5">
+        <span class="animate-pulseDot absolute inline-flex h-full w-full rounded-full bg-brand-green"></span>
+      </span>
+      Live monitoring
+    </span>
+    <h1 class="font-display text-4xl font-extrabold leading-tight tracking-tight mb-4">
+      Every asset, <span class="text-brand-green">one view.</span>
+    </h1>
+    <p class="text-[15px] leading-relaxed text-muted max-w-md">
+      Cross-platform fleet health, tampering detection, and border-risk monitoring &mdash;
+      unified across Teletrac, MiX Unity, and FT Cloud.
+    </p>
+
+    <dl class="flex items-baseline gap-8 mt-10 pt-6 border-t border-line">
+      <div>
+        <dt class="sr-only">Platforms merged</dt>
+        <dd class="font-mono text-2xl font-bold text-ink">3</dd>
+        <dt class="text-[11px] text-muted mt-1">Platforms merged</dt>
+      </div>
+      <div>
+        <dt class="sr-only">Continuous tracking</dt>
+        <dd class="font-mono text-2xl font-bold text-ink">24/7</dd>
+        <dt class="text-[11px] text-muted mt-1">Continuous tracking</dt>
+      </div>
+      <div>
+        <dt class="sr-only">Based access</dt>
+        <dd class="font-mono text-2xl font-bold text-ink">Role</dd>
+        <dt class="text-[11px] text-muted mt-1">Based access</dt>
+      </div>
+    </dl>
   </div>
 
-  <div class="brand-foot">Globe Trotters Ltd &middot; Cross-Platform Integrity Monitor</div>
+  <div class="relative z-10 text-[11.5px] text-muted">TeleTrac Fleet Solutions &middot; Cross-Platform Integrity Monitor</div>
 </div>
 
-<div class="form-panel">
-  <form class="form-wrap" id="login-form">
-    <h2>Sign in</h2>
-    <div class="lede">Enter your credentials to access the dashboard.</div>
+<!-- ============ COMPACT MOBILE HEADER (brand panel, collapsed) ============ -->
+<div class="md:hidden flex items-center gap-3 px-5 py-4 bg-brand-navy-deep border-b border-line flex-shrink-0">
+  <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions" class="h-6 w-auto block bg-white rounded-md px-1.5 py-1">
+  <div class="min-w-0">
+    <div class="text-[13px] font-bold text-ink leading-tight">Fleet Intelligence</div>
+    <div class="text-[11px] text-muted leading-tight truncate">Every asset, one view</div>
+  </div>
+</div>
 
-    <div class="field">
-      <label for="username">Username</label>
-      <div class="input-shell">
-        <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        <input type="text" id="username" autocomplete="username" required>
-      </div>
+<!-- ============ RIGHT: FORM PANEL ============ -->
+<div class="flex-1 flex items-center justify-center bg-surface px-6 py-10 sm:px-10">
+  <div class="w-full max-w-[400px] animate-fadeSlideIn" style="animation-delay:120ms">
+
+    {% if request.args.get('reset') == 'success' %}
+    <div class="flex items-start gap-2.5 rounded-lg border border-brand-green/30 bg-brand-green/10 px-3.5 py-3 mb-6 text-[13px] text-brand-green" role="status">
+      <svg viewBox="0 0 24 24" class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+      <span>Password updated. Sign in with your new password.</span>
     </div>
+    {% endif %}
 
-    <div class="field">
-      <label for="password">Password</label>
-      <div class="input-shell">
-        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <input type="password" id="password" autocomplete="current-password" required style="padding-right:38px;">
-        <button type="button" class="toggle-visibility" id="toggle-pw" tabindex="-1" aria-label="Show password">
-          <svg id="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+    <!-- ============ SIGN-IN VIEW ============ -->
+    <div id="signin-view">
+      <h2 class="font-display text-2xl font-bold tracking-tight mb-1.5">Sign in</h2>
+      <p class="text-[13px] text-muted mb-8">Enter your credentials to access the dashboard.</p>
+
+      <form id="login-form" novalidate>
+        <div class="mb-4">
+          <label for="username" class="block text-xs font-semibold text-muted mb-1.5">Username</label>
+          <div class="relative flex items-center">
+            <svg viewBox="0 0 24 24" class="absolute left-3.5 w-[15px] h-[15px] stroke-muted fill-none pointer-events-none" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <input type="text" id="username" name="username" autocomplete="username" required
+              aria-describedby="error-msg"
+              class="w-full h-12 bg-base border border-line text-ink placeholder:text-muted/60 rounded-lg pl-10 pr-3.5 text-sm
+                     transition-colors duration-150 outline-none
+                     hover:border-muted/50
+                     focus:border-brand-green focus:ring-4 focus:ring-brand-green/15
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     aria-[invalid=true]:border-danger aria-[invalid=true]:ring-4 aria-[invalid=true]:ring-danger/15">
+          </div>
+        </div>
+
+        <div class="mb-2">
+          <div class="flex items-center justify-between mb-1.5">
+            <label for="password" class="block text-xs font-semibold text-muted">Password</label>
+            <button type="button" id="show-forgot" class="text-xs font-semibold text-brand-green hover:text-brand-green-dark transition-colors duration-150">Forgot password?</button>
+          </div>
+          <div class="relative flex items-center">
+            <svg viewBox="0 0 24 24" class="absolute left-3.5 w-[15px] h-[15px] stroke-muted fill-none pointer-events-none" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input type="password" id="password" name="password" autocomplete="current-password" required
+              aria-describedby="error-msg"
+              class="w-full h-12 bg-base border border-line text-ink placeholder:text-muted/60 rounded-lg pl-10 pr-11 text-sm
+                     transition-colors duration-150 outline-none
+                     hover:border-muted/50
+                     focus:border-brand-green focus:ring-4 focus:ring-brand-green/15
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     aria-[invalid=true]:border-danger aria-[invalid=true]:ring-4 aria-[invalid=true]:ring-danger/15">
+            <button type="button" id="toggle-pw" tabindex="-1" aria-label="Show password"
+              class="absolute right-2.5 w-7 h-7 flex items-center justify-center rounded-md text-muted
+                     hover:text-ink hover:bg-white/5 transition-colors duration-150">
+              <svg id="eye-icon" viewBox="0 0 24 24" class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <label class="flex items-center gap-2 mt-4 mb-1 text-[13px] text-muted select-none cursor-pointer w-fit">
+          <input type="checkbox" id="remember-me" class="w-3.5 h-3.5 rounded bg-base border-line">
+          Remember me
+        </label>
+
+        <button type="submit" id="submit-btn"
+          class="w-full mt-5 h-12 rounded-lg bg-brand-green text-brand-navy-deep font-bold text-sm
+                 shadow-[0_6px_18px_rgba(118,194,95,0.28)] transition-all duration-150
+                 hover:bg-brand-green-dark hover:-translate-y-px active:translate-y-0 active:scale-[0.99]
+                 disabled:opacity-60 disabled:cursor-default disabled:translate-y-0
+                 flex items-center justify-center gap-2">
+          <svg id="submit-spinner" class="hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+          <span id="submit-label">Sign in</span>
         </button>
+
+        <div id="error-msg" class="hidden items-center gap-1.5 mt-3.5 text-[12.5px] text-danger" role="alert"></div>
+      </form>
+
+      <div class="mt-7 pt-5 border-t border-line text-center text-[11.5px] leading-relaxed text-muted">
+        Access is role-based &mdash; admin, technician, and client see different panels.
       </div>
     </div>
 
-    <button type="submit" id="submit-btn">Sign in</button>
-    <div class="error" id="error-msg"></div>
+    <!-- ============ FORGOT-PASSWORD VIEW (hidden until requested) ============ -->
+    <div id="forgot-view" class="hidden">
+      <button type="button" id="back-to-signin" class="inline-flex items-center gap-1.5 text-xs font-semibold text-muted hover:text-ink transition-colors duration-150 mb-6">
+        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg>
+        Back to sign in
+      </button>
+      <h2 class="font-display text-2xl font-bold tracking-tight mb-1.5">Reset your password</h2>
+      <p class="text-[13px] text-muted mb-8 leading-relaxed">Enter your username or email and, if we find a match, we'll send a link to reset your password.</p>
 
-    <div class="form-foot">Access is role-based &mdash; admin, technician, and client see different panels.</div>
-  </form>
+      <form id="forgot-form" novalidate>
+        <div class="mb-2">
+          <label for="identifier" class="block text-xs font-semibold text-muted mb-1.5">Username or email</label>
+          <div class="relative flex items-center">
+            <svg viewBox="0 0 24 24" class="absolute left-3.5 w-[15px] h-[15px] stroke-muted fill-none pointer-events-none" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <input type="text" id="identifier" name="identifier" autocomplete="username" required
+              class="w-full h-12 bg-base border border-line text-ink placeholder:text-muted/60 rounded-lg pl-10 pr-3.5 text-sm
+                     transition-colors duration-150 outline-none hover:border-muted/50
+                     focus:border-brand-green focus:ring-4 focus:ring-brand-green/15">
+          </div>
+        </div>
+
+        <button type="submit" id="forgot-submit-btn"
+          class="w-full mt-5 h-12 rounded-lg bg-brand-green text-brand-navy-deep font-bold text-sm
+                 shadow-[0_6px_18px_rgba(118,194,95,0.28)] transition-all duration-150
+                 hover:bg-brand-green-dark hover:-translate-y-px active:translate-y-0 active:scale-[0.99]
+                 disabled:opacity-60 disabled:cursor-default disabled:translate-y-0
+                 flex items-center justify-center gap-2">
+          <svg id="forgot-spinner" class="hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+          <span id="forgot-submit-label">Send reset link</span>
+        </button>
+
+        <div id="forgot-msg" class="hidden items-start gap-1.5 mt-3.5 text-[12.5px]" role="status"></div>
+      </form>
+    </div>
+
+  </div>
 </div>
 
 <script>
-const pwInput = document.getElementById('password');
-const toggleBtn = document.getElementById('toggle-pw');
-const eyeIcon = document.getElementById('eye-icon');
-toggleBtn.addEventListener('click', () => {
-  const show = pwInput.type === 'password';
-  pwInput.type = show ? 'text' : 'password';
-  toggleBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
-  eyeIcon.innerHTML = show
-    ? '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.3 21.3 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a21.3 21.3 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
-    : '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>';
-});
+(function () {
+  const signinView = document.getElementById('signin-view');
+  const forgotView = document.getElementById('forgot-view');
 
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = document.getElementById('submit-btn');
-  const errEl = document.getElementById('error-msg');
-  errEl.textContent = '';
-  btn.disabled = true;
-  btn.textContent = 'Signing in...';
+  document.getElementById('show-forgot').addEventListener('click', () => {
+    signinView.classList.add('hidden');
+    forgotView.classList.remove('hidden');
+    document.getElementById('identifier').focus();
+  });
+  document.getElementById('back-to-signin').addEventListener('click', () => {
+    forgotView.classList.add('hidden');
+    signinView.classList.remove('hidden');
+    document.getElementById('username').focus();
+  });
 
-  try {
-    const resp = await fetch('/api/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value,
-      }),
-    });
-    if (resp.ok) {
-      window.location.href = '/';
-    } else {
-      const body = await resp.json();
-      errEl.textContent = body.error || 'Sign in failed.';
-      btn.disabled = false;
-      btn.textContent = 'Sign in';
-    }
-  } catch (err) {
-    errEl.textContent = 'Could not reach the server. Try again.';
-    btn.disabled = false;
-    btn.textContent = 'Sign in';
+  // ---- Password visibility toggle ----
+  const pwInput = document.getElementById('password');
+  const toggleBtn = document.getElementById('toggle-pw');
+  const eyeIcon = document.getElementById('eye-icon');
+  toggleBtn.addEventListener('click', () => {
+    const show = pwInput.type === 'password';
+    pwInput.type = show ? 'text' : 'password';
+    toggleBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    eyeIcon.innerHTML = show
+      ? '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.3 21.3 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a21.3 21.3 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+      : '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>';
+  });
+
+  function showFieldError(msg) {
+    const errEl = document.getElementById('error-msg');
+    errEl.textContent = msg;
+    errEl.classList.toggle('hidden', !msg);
+    errEl.classList.toggle('flex', !!msg);
+    document.getElementById('username').setAttribute('aria-invalid', msg ? 'true' : 'false');
+    document.getElementById('password').setAttribute('aria-invalid', msg ? 'true' : 'false');
   }
-});
+
+  // ---- Sign in ----
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    const spinner = document.getElementById('submit-spinner');
+    const label = document.getElementById('submit-label');
+    showFieldError('');
+    btn.disabled = true;
+    spinner.classList.remove('hidden');
+    label.textContent = 'Signing in...';
+
+    try {
+      const resp = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: pwInput.value,
+          remember: document.getElementById('remember-me').checked,
+        }),
+      });
+      if (resp.ok) {
+        window.location.href = '/';
+        return;
+      }
+      const body = await resp.json().catch(() => ({}));
+      showFieldError(body.error || 'Sign in failed.');
+    } catch (err) {
+      showFieldError('Could not reach the server. Try again.');
+    }
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    label.textContent = 'Sign in';
+  });
+
+  // ---- Forgot password ----
+  document.getElementById('forgot-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('forgot-submit-btn');
+    const spinner = document.getElementById('forgot-spinner');
+    const label = document.getElementById('forgot-submit-label');
+    const msgEl = document.getElementById('forgot-msg');
+    msgEl.classList.add('hidden');
+    btn.disabled = true;
+    spinner.classList.remove('hidden');
+    label.textContent = 'Sending...';
+
+    try {
+      const resp = await fetch('/api/password/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: document.getElementById('identifier').value }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      msgEl.textContent = resp.ok
+        ? (body.message || "If that account exists, we've sent a reset link to its email address.")
+        : (body.error || 'Something went wrong. Try again.');
+      msgEl.className = 'flex items-start gap-1.5 mt-3.5 text-[12.5px] ' + (resp.ok ? 'text-brand-green' : 'text-danger');
+    } catch (err) {
+      msgEl.textContent = 'Could not reach the server. Try again.';
+      msgEl.className = 'flex items-start gap-1.5 mt-3.5 text-[12.5px] text-danger';
+    }
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    label.textContent = 'Send reset link';
+  });
+})();
 </script>
 
 </body>

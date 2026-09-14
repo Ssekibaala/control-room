@@ -776,6 +776,38 @@ def build_recovery_notice_email(vehicles, timestamp, client=None):
     return _shell(inner, client), preheader
 
 
+def build_password_reset_email(username, reset_url, timestamp):
+    """
+    The "forgot password" link. Deliberately says which account it's
+    for (the username, never the password itself) so someone with more
+    than one login can tell them apart, and deliberately gives no other
+    account detail - anyone who intercepts this email already had to
+    have access to the inbox it was sent to.
+    """
+    inner = f"""
+      <tr><td style="padding:26px 28px 8px;">
+        <span style="font-size:19px;font-weight:800;color:{INK};">Reset your password</span><br>
+        <span style="font-size:12px;color:{MUTED};">Requested {_esc(timestamp)}</span>
+      </td></tr>
+      <tr><td style="padding:0 28px 20px;">
+        <span style="font-size:13px;color:{INK};line-height:1.6;">
+          Someone asked to reset the password for the Fleet Intelligence account
+          <strong>{_esc(username)}</strong>. If that was you, choose a new password below - this link
+          works once and expires in 1 hour. If you didn't request this, you can ignore this email;
+          your password hasn't been changed.
+        </span>
+      </td></tr>
+      <tr><td style="padding:0 28px 28px;">{_button('Choose a new password', reset_url, PRIMARY)}</td></tr>
+      <tr><td style="padding:0 28px 22px;">
+        <span style="font-size:11.5px;color:{MUTED};word-break:break-all;">
+          Or paste this link into your browser:<br>{_esc(reset_url)}
+        </span>
+      </td></tr>
+    """
+    preheader = f"Reset the password for {username}"
+    return _shell(inner), preheader
+
+
 def build_internal_action_email(plate, comment, author, role, timestamp, recent_trail,
                                 client=None, dashboard_url=""):
     """

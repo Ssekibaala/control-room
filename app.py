@@ -26,7 +26,7 @@ import logging
 import threading
 import functools
 from logging.handlers import RotatingFileHandler
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template, g
 
 from dotenv import load_dotenv
@@ -40,6 +40,7 @@ from permissions import (
     MANAGE_USERS_ROLES, ROLES, PANEL_LABELS, LockoutError,
 )
 from respond_tokens import make_respond_token, read_respond_token
+from reset_tokens import make_reset_token, read_reset_token
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "importer"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fleet_logic"))
@@ -49,6 +50,11 @@ import atomic_json
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me")
+# Only takes effect when a login sets session.permanent = True (the
+# "Remember me" checkbox) - a session that doesn't is still a normal
+# browser-session cookie, cleared when the browser closes, same as
+# before this existed.
+app.permanent_session_lifetime = timedelta(days=30)
 
 
 # ---- Server-side logging ------------------------------------------------
@@ -237,6 +243,11 @@ def api_login():
         return jsonify({"error": "This account has been deactivated. Contact your administrator."}), 403
     session["username"] = username
     session["role"] = role
+    # "Remember me": a permanent session survives closing the browser,
+    # up to app.permanent_session_lifetime above. Unchecked, the cookie
+    # is the ordinary browser-session kind and disappears the moment the
+    # browser closes - that's the actual, safer default, so it's opt-in.
+    session.permanent = bool(body.get("remember"))
     return jsonify({"username": username, "role": role, "panels": allowed_panels(role)})
 
 
@@ -256,6 +267,135 @@ def api_session():
         "role": session["role"],
         "panels": allowed_panels(session["role"]),
     })
+
+
+@app.route("/api/account", methods=["GET"])
+@login_required
+def api_account():
+    """The signed-in user's own profile - unlike /api/users, this needs
+    no role check, since anyone with a session is entitled to see their
+    own account."""
+    user = users_store.get_user(session["username"])
+    if not user:
+        # Session outlived the account (e.g. deleted mid-session, or a
+        # migration mid-flight) - treat it like a logged-out visitor
+        # rather than crash rendering half a profile.
+        session.clear()
+        return jsonify({"error": "Account no longer exists"}), 401
+    return jsonify({
+        "username": session["username"],
+        "role": user.get("role", ""),
+        "email": user.get("email", ""),
+        "clients": user.get("clients", []),
+        "lastLogin": user.get("last_login", ""),
+        "createdAt": user.get("created_at", ""),
+    })
+
+
+@app.route("/api/account/email", methods=["PUT"])
+@login_required
+def api_account_set_email():
+    """Self-service version of /api/users/<username>/email - lets
+    anyone keep their own notification address current without needing
+    an admin/technician to do it for them."""
+    body = request.get_json(force=True, silent=True) or {}
+    email = (body.get("email") or "").strip()
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify({"error": "That doesn't look like a valid email address"}), 400
+    try:
+        found = users_store.set_email(session["username"], email)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the address: {e}"}), 503
+    if not found:
+        return jsonify({"error": "Account no longer exists"}), 404
+    return jsonify({"email": email})
+
+
+@app.route("/api/account/password", methods=["PUT"])
+@login_required
+def api_account_set_password():
+    """Self-service password change: proves the caller knows the
+    CURRENT password before accepting a new one - the one thing that
+    tells this apart from anyone with a hijacked session being able to
+    lock the real owner out."""
+    body = request.get_json(force=True, silent=True) or {}
+    current_password = body.get("current_password") or ""
+    new_password = body.get("new_password") or ""
+
+    if not users_store.check_password(session["username"], current_password):
+        return jsonify({"error": "Current password is incorrect"}), 401
+    if len(new_password) < 8:
+        return jsonify({"error": "New password must be at least 8 characters"}), 400
+    if new_password == current_password:
+        return jsonify({"error": "New password must be different from your current password"}), 400
+
+    try:
+        users_store.set_password(session["username"], new_password)
+    except Exception as e:
+        return jsonify({"error": f"Could not save the new password: {e}"}), 503
+    return jsonify({"ok": True})
+
+
+@app.route("/api/password/forgot", methods=["POST"])
+def api_password_forgot():
+    """
+    Requests a reset-link email. Always answers with the same generic
+    message whether or not an account matched - the alternative (a
+    distinct "no such account" error) lets anyone probe which usernames
+    or emails are registered, which is exactly what this must not leak
+    for a fleet-security product.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    identifier = (body.get("identifier") or "").strip()
+    generic = {"ok": True, "message": "If that account exists, a reset link has been sent to its email address."}
+
+    if not identifier:
+        return jsonify(generic)
+
+    user = users_store.get_user(identifier)
+    username = identifier if user else None
+    if not user:
+        username, user = users_store.find_by_email(identifier)
+
+    if not user or not user.get("active", True):
+        return jsonify(generic)
+    email = (user.get("email") or "").strip()
+    if not email:
+        return jsonify(generic)
+
+    try:
+        import mailer
+        import email_templates
+        token = make_reset_token(username)
+        reset_url = f"{public_base_url()}{url_for('reset_password_page')}?token={token}"
+        html_body, preheader = email_templates.build_password_reset_email(
+            username, reset_url, now_eat().strftime("%d %b %Y, %H:%M"),
+        )
+        mailer.send([email], "Reset your Fleet Intelligence password", html_body, preheader)
+    except Exception as e:
+        logger.warning(f"password reset email failed for {username!r}: {e}")
+    return jsonify(generic)
+
+
+@app.route("/api/password/reset", methods=["POST"])
+def api_password_reset():
+    """Completes a reset-link click: the signed token stands in for
+    "knows the current password" here, the same role current_password
+    plays in api_account_set_password above."""
+    body = request.get_json(force=True, silent=True) or {}
+    token = body.get("token") or ""
+    new_password = body.get("password") or ""
+
+    username, error = read_reset_token(token)
+    if error:
+        return jsonify({"error": error}), 400
+    if len(new_password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    found = users_store.set_password(username, new_password)
+    if not found:
+        return jsonify({"error": "This account no longer exists"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/users", methods=["GET"])
@@ -3198,6 +3338,19 @@ def login_page():
     if "username" in session:
         return redirect(url_for("index"))
     return render_template("login.html")
+
+
+@app.route("/reset-password")
+def reset_password_page():
+    """
+    Landing page for the emailed reset link. Deliberately reachable
+    while logged in too - the "forgot password" flow is exactly how
+    someone recovers a second account, or fixes a compromised one they
+    can otherwise still access.
+    """
+    token = request.args.get("token", "")
+    username, error = (None, "Missing reset token.") if not token else read_reset_token(token)
+    return render_template("reset_password.html", token=token, token_error=error)
 
 
 if __name__ == "__main__":

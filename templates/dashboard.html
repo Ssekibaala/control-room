@@ -8,13 +8,20 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* ============ DESIGN TOKENS: DARK (default) ============ */
+  /* Rebranded to TeleTrac's own navy/green (sampled from
+     static/Teletrac_Fleet_Solutions_logo.png - navy #1F3366, green
+     #76C25F - same source as templates/login.html) instead of the
+     generic blue/purple this shipped with. --primary is now the brand
+     green: distinct enough in hue from --success's teal-mint that
+     "this is clickable/active" and "this is healthy" still read as two
+     different colors, not one green doing double duty. */
   :root {
-    --bg:#05050A; --surface:#0D0D14; --header-bg:rgba(13,13,20,0.72); --sidebar-bg:rgba(10,10,16,0.82);
-    --panel-bg:#12121C; --card-bg:#161622; --card-bg-2:#1C1C2C; --border:rgba(255,255,255,0.10); --divider:rgba(255,255,255,0.08);
-    --text-primary:#FAFAFC; --text-secondary:rgba(250,250,252,0.66); --text-tertiary:rgba(250,250,252,0.42);
+    --bg:#070B14; --surface:#0E1626; --header-bg:rgba(9,14,25,0.74); --sidebar-bg:rgba(8,13,22,0.86);
+    --panel-bg:#101B2E; --card-bg:#141F34; --card-bg-2:#1A2740; --border:rgba(255,255,255,0.10); --divider:rgba(255,255,255,0.08);
+    --text-primary:#F5F7FB; --text-secondary:rgba(245,247,251,0.66); --text-tertiary:rgba(245,247,251,0.42);
     --hover-surface:rgba(255,255,255,0.07);
 
-    --primary:#2E8CFF; --primary-2:#7B61FF; --primary-hover:#59A6FF; --primary-surface:rgba(46,140,255,0.18);
+    --primary:#4CC97E; --primary-2:#1F3366; --primary-hover:#6FE39C; --primary-surface:rgba(76,201,126,0.16);
     --success:#2EE6A6; --success-surface:rgba(46,230,166,0.16);
     --danger:#FF5C7A; --danger-2:#FF3D71; --danger-surface:rgba(255,92,122,0.18);
     --warning:#FFB020; --warning-surface:rgba(255,176,32,0.18);
@@ -22,11 +29,19 @@
     --info:#4FC3FF; --info-surface:rgba(79,195,255,0.16);
     --investigation:#C563FF; --investigation-2:#7B61FF; --investigation-surface:rgba(197,99,255,0.18);
 
-    --grad-primary: linear-gradient(135deg, var(--primary), var(--primary-2));
+    /* Decorative only (accent strips, active-nav rail, gauge stroke,
+       gradient-clipped numbers) - never a background with body text
+       sitting on top of it. .btn-primary uses its own solid brand-green
+       pair below instead, precisely so button text stays readable
+       against every pixel of it, not just the green end. */
+    --grad-primary: linear-gradient(135deg, var(--primary-2), var(--primary));
     --grad-danger: linear-gradient(135deg, var(--danger), var(--danger-2));
     --grad-invest: linear-gradient(135deg, var(--investigation), var(--investigation-2));
-    --grad-success: linear-gradient(135deg, #2EE6A6, #2E8CFF);
+    --grad-success: linear-gradient(135deg, #2EE6A6, var(--primary));
     --grad-warm: linear-gradient(135deg, #FFB020, #FF5C7A);
+
+    --btn-grad: linear-gradient(135deg, var(--primary-hover), var(--primary));
+    --on-btn: #0B1220;
 
     --shadow-1: 0 1px 2px rgba(0,0,0,0.55), 0 1px 1px rgba(0,0,0,0.35);
     --shadow-2: 0 10px 28px rgba(0,0,0,0.5), 0 3px 8px rgba(0,0,0,0.35);
@@ -42,18 +57,21 @@
 
   /* ============ DESIGN TOKENS: LIGHT ============ */
   :root[data-theme="light"] {
-    --bg:#F2F2F5; --surface:#FFFFFF; --header-bg:rgba(255,255,255,0.78); --sidebar-bg:rgba(255,255,255,0.86);
-    --panel-bg:#FFFFFF; --card-bg:#FFFFFF; --card-bg-2:#F7F9FC; --border:rgba(0,0,0,0.08); --divider:rgba(0,0,0,0.06);
-    --text-primary:#1D1D1F; --text-secondary:rgba(29,29,31,0.62); --text-tertiary:rgba(29,29,31,0.42);
-    --hover-surface:rgba(0,0,0,0.035);
+    --bg:#F1F4F2; --surface:#FFFFFF; --header-bg:rgba(255,255,255,0.78); --sidebar-bg:rgba(255,255,255,0.86);
+    --panel-bg:#FFFFFF; --card-bg:#FFFFFF; --card-bg-2:#F6F9F7; --border:rgba(15,30,25,0.09); --divider:rgba(15,30,25,0.07);
+    --text-primary:#12201A; --text-secondary:rgba(18,32,26,0.62); --text-tertiary:rgba(18,32,26,0.42);
+    --hover-surface:rgba(15,30,25,0.035);
 
-    --primary:#007AFF; --primary-2:#5856D6; --primary-hover:#0064D6; --primary-surface:rgba(0,122,255,0.10);
+    --primary:#1E7A40; --primary-2:#1F3366; --primary-hover:#166534; --primary-surface:rgba(30,122,64,0.10);
     --success:#248A3D; --success-surface:rgba(36,138,61,0.10);
     --danger:#D70015; --danger-2:#FF375F; --danger-surface:rgba(215,0,21,0.09);
     --warning:#C93400; --warning-surface:rgba(201,52,0,0.09);
     --elevated:#9A6B00; --elevated-surface:rgba(154,107,0,0.10);
     --info:#0071A4; --info-surface:rgba(0,113,164,0.09);
     --investigation:#8944AB; --investigation-2:#5856D6; --investigation-surface:rgba(137,68,171,0.10);
+
+    --btn-grad: linear-gradient(135deg, #3FAE64, #2E9650);
+    --on-btn: #FFFFFF;
 
     --shadow-1: 0 1px 2px rgba(0,0,0,0.06), 0 1px 1px rgba(0,0,0,0.04);
     --shadow-2: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.05);
@@ -69,9 +87,9 @@
     font-size:15px; line-height:1.5; overflow-x:hidden; -webkit-font-smoothing:antialiased;
     transition: background 0.35s ease, color 0.35s ease;
     background-image:
-      radial-gradient(circle at 8% -8%, rgba(46,140,255,0.22), transparent 42%),
-      radial-gradient(circle at 92% 4%, rgba(197,99,255,0.18), transparent 40%),
-      radial-gradient(circle at 50% 100%, rgba(46,230,166,0.08), transparent 45%);
+      radial-gradient(circle at 8% -8%, rgba(76,201,126,0.16), transparent 42%),
+      radial-gradient(circle at 92% 4%, rgba(31,51,102,0.38), transparent 40%),
+      radial-gradient(circle at 50% 100%, rgba(46,230,166,0.07), transparent 45%);
     background-attachment: fixed;
     background-size: 140% 140%;
     animation: meshShift 30s ease-in-out infinite alternate;
@@ -205,6 +223,10 @@
   .topbar-right { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
   .header-pill { display:flex; align-items:center; gap:6px; background:var(--hover-surface); border:1px solid var(--border);
     border-radius:20px; padding:6px 12px; font-size:11.5px; color:var(--text-secondary); font-family:'JetBrains Mono'; white-space:nowrap; }
+  /* #username-display is a <button> (opens My Account) - undo default
+     button chrome so it still reads as the same pill. */
+  button.header-pill { font-family:'JetBrains Mono'; transition:background-color 0.15s, border-color 0.15s; }
+  button.header-pill:hover { background:var(--card-bg); border-color:var(--primary); color:var(--text-primary); }
   .live-pill { color:var(--success); border-color:var(--success-surface); }
   .live-pill .pulse-dot { width:6px; height:6px; border-radius:50%; background:var(--success); animation:blink 1.6s ease-in-out infinite; }
   .search-box { position:relative; display:flex; align-items:center; }
@@ -443,9 +465,15 @@
   :root[data-theme="light"] .theme-toggle .knob { transform:translateX(22px); background:linear-gradient(135deg,#FF9F0A,#FFD60A); }
 
   .export-wrap { position:relative; }
-  .btn-primary { display:flex; align-items:center; gap:6px; background:var(--grad-primary); border:none; color:#fff;
-    padding:9px 15px; border-radius:12px; font-family:inherit; font-size:12.5px; font-weight:600; cursor:pointer;
-    box-shadow:0 4px 14px rgba(10,132,255,0.3); }
+  /* Solid brand-green (--btn-grad), not the navy-to-green --grad-primary
+     used for decorative accents elsewhere - a button's own label sits on
+     top of every pixel of this background, and text needs to stay
+     readable at the navy end too, so buttons get their own green-only
+     pair plus a text color chosen to read on it (dark ink on the bright
+     green this ends up in both themes; see --on-btn). */
+  .btn-primary { display:flex; align-items:center; gap:6px; background:var(--btn-grad); border:none; color:var(--on-btn);
+    padding:9px 15px; border-radius:12px; font-family:inherit; font-size:12.5px; font-weight:700; cursor:pointer;
+    box-shadow:0 4px 14px rgba(76,201,126,0.28); }
   .btn-primary:hover { transform:translateY(-1px); filter:brightness(1.06); }
   .btn-primary:active { transform:translateY(0) scale(0.98); }
   .btn-primary .chev { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2.5; }
@@ -483,7 +511,7 @@
   .notif-row.info .notif-row-count { background:var(--info-surface); color:var(--info); }
   .notif-empty { padding:20px 14px; text-align:center; color:var(--text-tertiary); font-size:12.5px; }
 
-  .avatar { width:32px; height:32px; border-radius:50%; background:var(--grad-invest); color:#fff;
+  .avatar { width:32px; height:32px; border-radius:50%; background:var(--grad-primary); color:#fff;
     display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-size:10px; font-weight:700; }
 
   .content { padding:var(--sp-3) var(--sp-4) var(--sp-6); }
@@ -1249,6 +1277,75 @@
     </div>
   </div>
 
+  <!-- My Account: profile + self-service password change. Available to
+       every signed-in role (unlike the admin-only modals below, which
+       manage OTHER people's accounts) - the server-side endpoints it
+       calls (/api/account/*) act on the caller's own session only. -->
+  <div class="drill-backdrop" id="myaccount-backdrop">
+    <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="My account">
+      <div class="drill-head">
+        <div>
+          <div class="drill-title">My Account</div>
+          <div class="drill-subtitle">Your profile, and how you sign in.</div>
+        </div>
+        <button class="icon-btn" id="myaccount-close" aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="drill-body padded">
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
+          <div class="avatar" id="ma-avatar" style="width:44px; height:44px; font-size:15px; flex-shrink:0;"></div>
+          <div style="min-width:0;">
+            <div style="font-size:15px; font-weight:700; color:var(--text-primary); word-break:break-all;" id="ma-username"></div>
+            <div style="display:flex; align-items:center; gap:8px; margin-top:5px; flex-wrap:wrap;">
+              <span class="role-pill" id="ma-role"></span>
+              <span style="font-size:11.5px; color:var(--text-tertiary);" id="ma-clients"></span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; gap:22px; flex-wrap:wrap; margin-bottom:22px; padding:11px 14px; background:var(--panel-bg); border:1px solid var(--divider); border-radius:10px;">
+          <div>
+            <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-tertiary);">Last sign-in</div>
+            <div style="font-size:12.5px; margin-top:3px; color:var(--text-secondary);" id="ma-last-login"></div>
+          </div>
+          <div>
+            <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-tertiary);">Member since</div>
+            <div style="font-size:12.5px; margin-top:3px; color:var(--text-secondary);" id="ma-created"></div>
+          </div>
+        </div>
+
+        <form id="myaccount-email-form">
+          <div class="ff-row">
+            <label for="ma-email">Notification email</label>
+            <input type="email" id="ma-email" placeholder="Where updates and alerts go" autocomplete="off">
+            <div class="ff-hint">Used for vehicle updates, digests, and password-reset links.</div>
+          </div>
+          <div id="ma-email-msg" class="ff-msg"></div>
+          <button type="submit" class="btn-primary user-form-submit">Save Email</button>
+        </form>
+
+        <div style="border-top:1px solid var(--divider); margin:24px 0;"></div>
+
+        <form id="myaccount-password-form">
+          <div class="ff-row">
+            <label for="ma-current-password">Current password</label>
+            <input type="password" id="ma-current-password" autocomplete="current-password" required>
+          </div>
+          <div class="ff-row">
+            <label for="ma-new-password">New password</label>
+            <input type="password" id="ma-new-password" placeholder="At least 8 characters" autocomplete="new-password" required>
+          </div>
+          <div class="ff-row">
+            <label for="ma-new-password-confirm">Confirm new password</label>
+            <input type="password" id="ma-new-password-confirm" placeholder="Re-enter the new password" autocomplete="new-password" required>
+          </div>
+          <div id="ma-password-msg" class="ff-msg"></div>
+          <button type="submit" class="btn-primary user-form-submit">Change Password</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
 {% if can_manage_users %}
   <div class="drill-backdrop" id="sendreport-backdrop">
     <div class="drill-box createuser-box" role="dialog" aria-modal="true" aria-label="Send a report">
@@ -1562,7 +1659,7 @@
         <button class="icon-btn" id="fullscreen-btn" title="Toggle full screen">
           <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
         </button>
-        <span id="username-display" class="header-pill" style="margin-right:4px"></span><button class="icon-btn" id="logout-btn" title="Log out"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button>
+        <button type="button" id="username-display" class="header-pill" style="margin-right:4px; cursor:pointer" title="My account"></button><button class="icon-btn" id="logout-btn" title="Log out"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button>
       </div>
     </header>
     <div class="tour-progress" id="tour-progress"><div class="tour-progress-fill" id="tour-progress-fill"></div></div>
@@ -1621,8 +1718,8 @@
               <svg viewBox="0 0 200 200" class="radial">
                 <defs>
                   <linearGradient id="healthGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#0A84FF"/>
-                    <stop offset="100%" stop-color="#BF5AF2"/>
+                    <stop offset="0%" stop-color="#1F3366"/>
+                    <stop offset="100%" stop-color="#4CC97E"/>
                   </linearGradient>
                 </defs>
                 <circle cx="100" cy="100" r="82" class="radial-track"/>
@@ -3375,6 +3472,84 @@ if (usersForm) {
     return fetch(url, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
       .then(r => r.json().then(b => ({ok: r.ok, b})));
   }
+
+  // ---- My Account modal: every role gets this (unlike the modals
+  // below, which manage OTHER people's accounts and only render into
+  // the page at all when can_manage_users is true server-side). ----
+  const myAccountBackdrop = document.getElementById('myaccount-backdrop');
+
+  function openMyAccountModal() {
+    myAccountBackdrop.classList.add('open');
+    const emailMsg = document.getElementById('ma-email-msg');
+    const pwMsg = document.getElementById('ma-password-msg');
+    emailMsg.textContent = ''; emailMsg.className = 'ff-msg';
+    pwMsg.textContent = ''; pwMsg.className = 'ff-msg';
+    document.getElementById('myaccount-password-form').reset();
+    fetch('/api/account').then(r => r.json()).then(info => {
+      document.getElementById('ma-avatar').textContent = (info.username || '?').slice(0, 2).toUpperCase();
+      document.getElementById('ma-username').textContent = info.username || '';
+      const roleEl = document.getElementById('ma-role');
+      roleEl.textContent = info.role || '';
+      roleEl.className = 'role-pill ' + (info.role || '');
+      document.getElementById('ma-clients').textContent = (info.clients && info.clients.length) ? info.clients.join(', ') : '';
+      document.getElementById('ma-last-login').textContent = info.lastLogin || 'Never';
+      document.getElementById('ma-created').textContent = info.createdAt || '—';
+      document.getElementById('ma-email').value = info.email || '';
+    }).catch(() => {});
+  }
+  function closeMyAccountModal() { myAccountBackdrop.classList.remove('open'); }
+
+  wireOnce('myaccount-modal', () => {
+    document.getElementById('username-display').addEventListener('click', openMyAccountModal);
+    document.getElementById('myaccount-close').addEventListener('click', closeMyAccountModal);
+    myAccountBackdrop.addEventListener('click', (e) => { if (e.target === myAccountBackdrop) closeMyAccountModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && myAccountBackdrop.classList.contains('open')) closeMyAccountModal();
+    });
+
+    document.getElementById('myaccount-email-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('ma-email-msg');
+      const email = document.getElementById('ma-email').value.trim();
+      const btn = e.target.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      msg.textContent = ''; msg.className = 'ff-msg';
+      putJSON('/api/account/email', {email}).then(({ok, b}) => {
+        btn.disabled = false; btn.textContent = 'Save Email';
+        if (ok) { msg.textContent = 'Saved.'; msg.className = 'ff-msg ok'; }
+        else { msg.textContent = b.error || 'Could not save that change.'; msg.className = 'ff-msg err'; }
+      }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Save Email';
+        msg.textContent = 'Could not reach the server.'; msg.className = 'ff-msg err';
+      });
+    });
+
+    document.getElementById('myaccount-password-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('ma-password-msg');
+      const current = document.getElementById('ma-current-password').value;
+      const next = document.getElementById('ma-new-password').value;
+      const confirm = document.getElementById('ma-new-password-confirm').value;
+      msg.textContent = ''; msg.className = 'ff-msg';
+      if (next.length < 8) { msg.textContent = 'New password must be at least 8 characters.'; msg.className = 'ff-msg err'; return; }
+      if (next !== confirm) { msg.textContent = 'New passwords do not match.'; msg.className = 'ff-msg err'; return; }
+
+      const btn = e.target.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      putJSON('/api/account/password', {current_password: current, new_password: next}).then(({ok, b}) => {
+        btn.disabled = false; btn.textContent = 'Change Password';
+        if (ok) {
+          msg.textContent = 'Password updated.'; msg.className = 'ff-msg ok';
+          document.getElementById('myaccount-password-form').reset();
+        } else {
+          msg.textContent = b.error || 'Could not change your password.'; msg.className = 'ff-msg err';
+        }
+      }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Change Password';
+        msg.textContent = 'Could not reach the server.'; msg.className = 'ff-msg err';
+      });
+    });
+  });
 
   function openEditUserModal(user) {
     EDIT_TARGET_USER = user;

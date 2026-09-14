@@ -112,6 +112,50 @@ def add_user(username, role, password, clients=None, email=""):
     return {"username": username, "role": role, "clients": clients or [], "email": email}
 
 
+def set_password(username, new_password):
+    """Sets a new password for an existing account. Returns True if the
+    account was found. Shared by both self-service "change password"
+    (current password already verified by the caller) and the emailed
+    "forgot password" reset flow (a signed token stands in for the
+    current password there)."""
+    password_hash = generate_password_hash(new_password)
+    if _db_available():
+        import db_store
+        return db_store.set_user_password(username, password_hash)
+    users = _load_local()
+    if username not in users:
+        return False
+    users[username]["password_hash"] = password_hash
+    _save_local(users)
+    return True
+
+
+def check_password(username, password):
+    """True if password matches this account's current hash. Used to
+    make sure someone changing their own password actually knows the
+    old one first - deliberately separate from verify_login(), which
+    also checks active status and stamps last_login, neither of which
+    belongs in a mid-session check."""
+    user = get_user(username)
+    if not user:
+        return False
+    return check_password_hash(user["password_hash"], password)
+
+
+def find_by_email(email):
+    """Case-insensitive lookup of the account (username, info) using a
+    given address, or (None, None) if no account has it on file. Used
+    by "forgot password", where someone may only remember their email,
+    not their username."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None, None
+    for username, info in load_users().items():
+        if (info.get("email") or "").strip().lower() == email:
+            return username, info
+    return None, None
+
+
 def set_email(username, email):
     """Backfills the address for an account created before emails were
     collected. Returns True if the account was found."""

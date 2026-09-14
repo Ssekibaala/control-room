@@ -384,6 +384,21 @@ def set_user_email(username, email):
         return cur.rowcount > 0
 
 
+def set_user_password(username, password_hash):
+    """Overwrites the stored hash for a self-service or emailed-reset
+    password change. The audit log gets a placeholder, not the actual
+    hash - a hash is still sensitive (it's exactly what an offline
+    cracking attempt wants) and "a password was changed" is all the
+    audit trail needs to say."""
+    with db.cursor() as cur:
+        cur.execute("SELECT 1 FROM users WHERE username=%s", (username,))
+        if not cur.fetchone():
+            return False
+        log_change(cur, "users", username, "password", "(previous)", "(changed)", username)
+        cur.execute("UPDATE users SET password_hash=%s WHERE username=%s", (password_hash, username))
+        return cur.rowcount > 0
+
+
 def set_user_clients(username, clients):
     """Updates the client assignments for a user. Clients is a comma-
     separated string or list."""
