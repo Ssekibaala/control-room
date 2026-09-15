@@ -91,52 +91,84 @@ def check_periods_overlap(movement_csv_path, event_csv_path):
 
 def fetch_reports(username, password, work_dir=WORK_DIR):
     """
-    Connects to the mailbox and downloads all five reports into
-    work_dir. Needs real network access, cannot run in this sandbox.
-    Returns a dict of {report_key: local_file_path}.
+    Connects to the mailbox and downloads whichever of the five reports
+    are actually available right now into work_dir - each fetched
+    independently, so one missing/renamed/never-sent email doesn't
+    block the other four. This used to abort the ENTIRE fetch at
+    whichever report it reached first (fetch order put teletrac_offline
+    ahead of the two MiX reports tampering analysis actually needs) -
+    confirmed live: a client's real tampering cases went missing from
+    every export because a missing Teletrac email meant mix_movement/
+    mix_power_events were never even attempted that run, despite both
+    being available. Needs real network access, cannot run in this
+    sandbox.
+
+    Returns (paths, errors): paths is {report_key: local_file_path} for
+    whichever succeeded, errors is {report_key: message} for whichever
+    didn't - both plain dicts, never raising for an individual report.
+    Only a genuine mailbox connection failure still raises (nothing
+    downstream is possible without a mailbox at all).
     """
     os.makedirs(work_dir, exist_ok=True)
     conn = mail_reader.connect(username, password)
     paths = {}
+    errors = {}
+
+    def _direct_attachment(key, ext):
+        subject = mail_reader.REPORT_SUBJECTS[key]
+        folder = mail_reader.REPORT_FOLDERS[key]
+        msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
+        if msg is None:
+            raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
+        filename, content = mail_reader.extract_attachment(msg)
+        if content is None:
+            raise ImportError_(f"Email for '{subject}' had no attachment")
+        path = os.path.join(work_dir, key + ext)
+        with open(path, "wb") as f:
+            f.write(content)
+        return path
+
+    def _signed_link(key):
+        import requests
+        subject = mail_reader.REPORT_SUBJECTS[key]
+        folder = mail_reader.REPORT_FOLDERS[key]
+        msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
+        if msg is None:
+            raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
+        html = mail_reader._get_html_body(msg)
+        link = mail_reader.extract_download_link(html)
+        if link is None:
+            raise ImportError_(f"Could not find a download link in the email for '{subject}'")
+        resp = requests.get(link, timeout=60)
+        resp.raise_for_status()
+        path = os.path.join(work_dir, key + ".csv")
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
 
     try:
-        # Direct-attachment reports
         for key, ext in [("teletrac_offline", ".csv"), ("ft_cloud_camera", ".zip")]:
-            subject = mail_reader.REPORT_SUBJECTS[key]
-            folder = mail_reader.REPORT_FOLDERS[key]
-            msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
-            if msg is None:
-                raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
-            filename, content = mail_reader.extract_attachment(msg)
-            if content is None:
-                raise ImportError_(f"Email for '{subject}' had no attachment")
-            path = os.path.join(work_dir, key + ext)
-            with open(path, "wb") as f:
-                f.write(content)
-            paths[key] = path
-
-        # Signed-link reports
-        import requests
+            try:
+                paths[key] = _direct_attachment(key, ext)
+            except Exception as e:
+                # Deliberately broad, not just ImportError_ - confirmed
+                # live that a bad mailbox/folder select raises a raw
+                # imaplib error (RuntimeError, see find_latest_message's
+                # docstring), and a network blip on the signed-link
+                # download raises a requests exception. Either one used
+                # to propagate straight out of this function and abort
+                # every report after it - the exact opposite of what
+                # per-report independence is supposed to guarantee.
+                errors[key] = str(e)
         for key in ("mix_movement", "mix_mobile_status", "mix_power_events"):
-            subject = mail_reader.REPORT_SUBJECTS[key]
-            folder = mail_reader.REPORT_FOLDERS[key]
-            msg = mail_reader.find_latest_message(conn, subject, mailbox=folder)
-            if msg is None:
-                raise ImportError_(f"No email found matching subject '{subject}' in '{folder}'")
-            html = mail_reader._get_html_body(msg)
-            link = mail_reader.extract_download_link(html)
-            if link is None:
-                raise ImportError_(f"Could not find a download link in the email for '{subject}'")
-            resp = requests.get(link, timeout=60)
-            resp.raise_for_status()
-            path = os.path.join(work_dir, key + ".csv")
-            with open(path, "wb") as f:
-                f.write(resp.content)
-            paths[key] = path
+            try:
+                paths[key] = _signed_link(key)
+            except Exception as e:
+                errors[key] = str(e)
     finally:
         conn.logout()
 
-    return paths
+    return paths, errors
 
 
 def _parse_gap_date(g):
@@ -539,22 +571,22 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     exactly as before; without it, a recovery is still detected, it
     just can't say how long the vehicle had been gone.
 
-    paths=None is the live-API-only bootstrap case: a brand-new
-    deployment (confirmed live on a fresh Azure instance) has no
-    cached mail-based CSV/ZIP reports yet - not even a placeholder -
-    because run_import() has never completed a real mail fetch. That
-    used to be a hard requirement (refresh_live_snapshot() just
-    refused to run at all), which meant live MiX/Teletrac/FT Cloud
-    polls could succeed every 5 minutes forever while the dashboard
-    stayed permanently empty, waiting on a mailbox that might not even
-    have a matching email sitting in it right now. Every mail-sourced
-    signal is skipped in that case - the CSV/ZIP rows below, and
-    tampering analysis entirely, which has no live-API equivalent -
-    while classification still runs normally off whatever live API
-    reports are available.
+    paths=None (or missing some of its five keys) is the partial/
+    live-API-only case: paths only ever has an entry for a mail report
+    that was actually fetched - fetch_reports() fetches all five
+    independently now, precisely so one missing/renamed email (say,
+    the Teletrac offline report) can't block the OTHER four from being
+    used, tampering analysis included. Confirmed live: a real client's
+    tampering cases were going missing from every report specifically
+    because of this - the two MiX reports tampering needs were sitting
+    in the mailbox the whole time, just never reached, because the
+    fetch died on an unrelated Teletrac email first. Each mail-sourced
+    signal below is only attempted when its own specific file exists;
+    live API reports and classification are unaffected either way.
     """
-    has_mail_reports = paths is not None
-    if has_mail_reports:
+    paths = paths or {}
+    has_movement_pair = "mix_movement" in paths and "mix_power_events" in paths
+    if has_movement_pair:
         check_periods_overlap(paths["mix_movement"], paths["mix_power_events"])
 
     settings = load_settings(settings_path or os.path.join(DATA_DIR, "settings.ini"))
@@ -562,11 +594,15 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     tamper_checks = tamper_checks or {}
 
     all_rows = []
-    if has_mail_reports:
+    if "teletrac_offline" in paths:
         all_rows += teletrac_csv.parse(paths["teletrac_offline"])
+    if "mix_mobile_status" in paths:
         all_rows += mix_mobile_status.parse(paths["mix_mobile_status"])
+    if "mix_movement" in paths:
         all_rows += mix_movement.parse(paths["mix_movement"])
+    if "mix_power_events" in paths:
         all_rows += mix_power_events.parse(paths["mix_power_events"])
+    if "ft_cloud_camera" in paths:
         all_rows += ft_cloud_camera.parse(paths["ft_cloud_camera"])
     all_rows += mix_api_reports or []
     all_rows += teletrac_api_reports or []
@@ -594,14 +630,15 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
     now = max(timestamps) if timestamps else now_eat()
     results = classify_fleet(grouped, settings, feedback, now=now)
 
-    if has_mail_reports:
+    if has_movement_pair:
         tamper_result = run_tamper_analysis(paths["mix_movement"], paths["mix_power_events"])
     else:
         # Same shape tamper_engine.analyse() always returns - tampering
         # detection is entirely mail-report-derived (movement + power
-        # event CSVs), no live-API source exists for it, so it's simply
-        # empty until the real import eventually runs. Every other
-        # section of the dashboard is unaffected.
+        # event CSVs, specifically - the other three mail reports don't
+        # feed it), no live-API source exists for it, so it's simply
+        # empty until BOTH of those two are actually available. Every
+        # other section of the dashboard is unaffected.
         tamper_result = {"total_trip_records": 0, "total_assets": 0, "bad_trip_rows": 0, "bad_event_rows": 0,
                           "gaps": [], "mismatches": [], "confirmed": [], "confirmed_power_cycle": [],
                           "confirmed_no_reconnect": [], "unconfirmed": [], "skipped": []}
@@ -791,21 +828,28 @@ def _cached_report_paths():
     The paths fetch_reports() would have written today's (or the last
     run's) mail reports to. Reused by refresh_live_snapshot() so a
     lightweight API-driven reclassification never touches the mailbox -
-    only files already on disk from the last real mail fetch. Returns
-    None if any expected file is missing (most commonly: no mail-based
-    import has ever run in this environment yet), which the caller
-    treats as "nothing to refresh from yet."
+    only files already on disk from the last real mail fetch.
+
+    Returns whichever of the five actually exist on disk right now, not
+    all-or-nothing - fetch_reports() itself fetches each report
+    independently (one missing email no longer blocks the other four,
+    see its own docstring), so this has to be equally granular or a
+    single stale mailbox subscription would silently keep tampering
+    analysis (which only needs the two MiX reports) starved even on
+    days both of ITS files are sitting on disk from a successful fetch.
+    Returns None only when NONE of the five exist yet (most commonly:
+    no mail-based import has ever run in this environment at all),
+    which the caller treats as "nothing to refresh from yet."
     """
-    paths = {
+    candidates = {
         "teletrac_offline": os.path.join(WORK_DIR, "teletrac_offline.csv"),
         "mix_mobile_status": os.path.join(WORK_DIR, "mix_mobile_status.csv"),
         "mix_movement": os.path.join(WORK_DIR, "mix_movement.csv"),
         "mix_power_events": os.path.join(WORK_DIR, "mix_power_events.csv"),
         "ft_cloud_camera": os.path.join(WORK_DIR, "ft_cloud_camera.zip"),
     }
-    if not all(os.path.exists(p) for p in paths.values()):
-        return None
-    return paths
+    paths = {k: p for k, p in candidates.items() if os.path.exists(p)}
+    return paths or None
 
 
 def refresh_live_snapshot():
@@ -925,7 +969,10 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
     if not username or not password:
         raise ImportError_("EMAIL_ADDRESS / EMAIL_PASSWORD not set")
 
-    paths = fetch_reports(username, password)
+    paths, fetch_errors = fetch_reports(username, password)
+    if fetch_errors:
+        print(f"WARNING: {len(fetch_errors)}/5 mailed report(s) unavailable this run "
+              f"(continuing with whichever succeeded): {fetch_errors}")
 
     try:
         import db_store
@@ -1043,7 +1090,15 @@ def run_import(username=None, password=None, force=False, force_digests=False, p
         except Exception as e:
             print(f"Manual check-in triggered but could not record who prompted it: {e}")
 
-    return {"status": "ok", "generated": data["meta"]["generated"], "digests": digest_results}
+    # Surfaced so a partial fetch shows up somewhere an admin actually
+    # sees it (the /api/import response) instead of only in a server
+    # log nobody's watching - this run still succeeds overall, but
+    # "succeeded" no longer silently means "all five reports, no
+    # questions asked."
+    result = {"status": "ok", "generated": data["meta"]["generated"], "digests": digest_results}
+    if fetch_errors:
+        result["reportFetchWarnings"] = fetch_errors
+    return result
 
 
 def send_digests(classification, tampering, base_url, digest_settings, force=False):
@@ -1122,11 +1177,25 @@ def current_snapshot():
     Both the scheduled-digest thread and the ad-hoc "email this to one
     person" route need the same thing run_import() gets for free
     halfway through its own pipeline, without running that pipeline.
-    Returns (None, None) when there's nothing to classify yet.
+    Returns (None, None) when there's truly nothing to classify from
+    yet (no cached mail reports AND no live API snapshot either).
+
+    paths (from _cached_report_paths()) is passed straight through to
+    process_reports() even when it's None - same fix already made in
+    refresh_live_snapshot() below, just not carried over here until
+    now. Confirmed live: this is exactly what silently broke the
+    "Send a report" ad-hoc feature and the scheduled digest thread on
+    an install with a working live API feed but no matching mail
+    reports (e.g. a lapsed mailbox subscription) - the dashboard
+    itself proves live data is there (it reads fleet_today.json,
+    written by refresh_live_snapshot(), which never had this bug), but
+    this function was refusing to even try classifying from the same
+    live API data, always returning (None, None) instead. See
+    process_reports()'s own handling of paths=None for why this is
+    safe: live API data alone is enough to classify Online/Offline,
+    tampering detection just stays empty without the mail reports.
     """
     paths = _cached_report_paths()
-    if paths is None:
-        return None, None
     try:
         import db_store
         feedback_rows = db_store.load_feedback_cached()

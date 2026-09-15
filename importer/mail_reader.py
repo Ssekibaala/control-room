@@ -79,11 +79,26 @@ def _decode(value):
 
 def find_latest_message(conn, subject_substring, mailbox="INBOX"):
     """Returns the raw email.message.Message for the most recent email
-    whose subject contains subject_substring, or None if not found."""
+    whose subject contains subject_substring, or None if not found.
+
+    Raises RuntimeError if the mailbox itself can't be opened - this
+    used to go unchecked, so a folder that doesn't exist (or an IMAP
+    server that renamed/renumbered it) left the connection sitting in
+    AUTH state, and the SEARCH call two lines down then failed with a
+    raw, confusing "command SEARCH illegal in state AUTH" - which looks
+    nothing like "wrong folder name" unless you already know IMAP well
+    enough to guess it. Confirmed live: this is exactly what silently
+    broke every MiX report (all three live in "INBOX.Mix subscriptions",
+    not plain INBOX) once fetch_reports() was fixed to actually reach
+    them instead of dying earlier on an unrelated Teletrac check.
+    """
     # Quoted unconditionally: IMAP mailbox names containing a space (like
     # "INBOX.Mix subscriptions") are rejected as an invalid atom otherwise,
     # and a quoted plain "INBOX" is still valid per RFC 3501.
-    conn.select(f'"{mailbox}"')
+    typ, data = conn.select(f'"{mailbox}"')
+    if typ != "OK":
+        detail = data[0].decode(errors="replace") if data and data[0] else "no further detail from the server"
+        raise RuntimeError(f"Could not open mailbox '{mailbox}': {detail}")
     # IMAP SEARCH with quoted substring, case-insensitive per RFC 3501 SUBJECT search
     status, data = conn.search(None, f'(SUBJECT "{subject_substring}")')
     if status != "OK" or not data or not data[0]:
