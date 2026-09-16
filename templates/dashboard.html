@@ -2279,11 +2279,20 @@ function applyClientView() {
   const view = Object.assign({}, RAW_DATA);
   CLIENT_ROW_SECTIONS.forEach(key => {
     if (Array.isArray(view[key])) {
-      view[key] = view[key].filter(r => r && r.client === SELECTED_CLIENT);
+      view[key] = view[key].filter(r => r && String(r.client || '').trim() === SELECTED_CLIENT);
     }
   });
+  // Trimmed the same way above and below - the server's own equivalent
+  // filter (permissions.filter_payload_for_clients) compares client
+  // names via .strip(), not a bare ===, specifically so incidental
+  // whitespace on one row's client field can't make it disappear where
+  // every visually-identical row survives. This client-side mirror
+  // used a bare === and had no such tolerance - one such row would
+  // pass the server's filter (correctly) and then silently vanish
+  // again here, client-side, only when a client filter happened to be
+  // active.
   const owner = {};
-  (RAW_DATA.full || []).forEach(r => { if (r && r.plate) owner[r.plate] = r.client; });
+  (RAW_DATA.full || []).forEach(r => { if (r && r.plate) owner[r.plate] = String(r.client || '').trim(); });
   CLIENT_PLATE_SECTIONS.forEach(key => {
     if (Array.isArray(view[key])) {
       view[key] = view[key].filter(r => r && owner[r.plate] === SELECTED_CLIENT);
@@ -2399,7 +2408,27 @@ function setDashboardData(payload) {
   // A previously-selected client can disappear (access revoked, client
   // removed) - fall back to "All" rather than silently rendering an
   // empty dashboard the user can't explain.
-  if (SELECTED_CLIENT && !available.includes(SELECTED_CLIENT)) { SELECTED_CLIENT = CLIENT_ALL; _persistSelectedClient(''); }
+  //
+  // Same treatment when there's nothing to choose between at all
+  // (one client, or zero) - the filter UI itself stays hidden in
+  // exactly that case (see renderClientFilter's `available.length < 2`
+  // below), so a stale filter value must not silently keep applying
+  // here even though the UI that would let anyone change or notice it
+  // is gone. This matters because the persisted value lives in
+  // localStorage, keyed to the BROWSER ORIGIN, not to which account is
+  // logged in - an admin filtering by one client, then a client-role
+  // account signing in on that same browser afterwards, inherits that
+  // leftover value. For a single-client session it would almost always
+  // just re-filter rows already scoped to that one client by the
+  // server, a no-op - except applyClientView()'s filter is a strict
+  // `===`, with no trimming, unlike the server's own comparison, so
+  // the one plate whose client field picked up incidental whitespace
+  // somewhere upstream quietly drops out of every section again,
+  // client-side, after the server already got it right. A single/zero-
+  // client session has no legitimate reason to re-filter its own data
+  // at all, so it no longer tries to.
+  if (available.length < 2) { SELECTED_CLIENT = CLIENT_ALL; _persistSelectedClient(''); }
+  else if (SELECTED_CLIENT && !available.includes(SELECTED_CLIENT)) { SELECTED_CLIENT = CLIENT_ALL; _persistSelectedClient(''); }
   applyClientView();
   renderClientFilter(available);
 }
