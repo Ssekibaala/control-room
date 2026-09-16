@@ -2936,6 +2936,50 @@ def _ft_cloud_subscribed_unique_ids():
     return ids or None
 
 
+_last_webhook_triggered_poll = {"at": 0.0}
+_webhook_poll_lock = threading.Lock()
+# Deliberately its own lock, separate from _live_refresh_lock above:
+# that one guards a cheap local reclassification, this one guards a
+# real outbound FT Cloud API poll (_ft_cloud_api_poll_once), which is
+# what actually reads the webhook state this event just updated and
+# folds it into FT_CLOUD_API_SNAPSHOT_PATH - refresh_live_snapshot()
+# on its own would just re-read that same, still-stale file. A burst
+# of webhook events (FT can post one per device per update) must not
+# each trigger a real poll.
+_WEBHOOK_POLL_MIN_INTERVAL_SECONDS = 45
+
+
+def _ft_cloud_webhook_triggered_refresh():
+    """
+    A fresh webhook event used to sit unused until the next scheduled
+    poll cycle (up to poll_interval_minutes, 5 by default) folded it
+    into the live snapshot - confirmed live: a vehicle reporting fresh
+    GPS on FT Cloud's own platform right now still showed "3 days ago"
+    on this dashboard, because nothing had told this app to look again
+    sooner. This closes that gap: run the same poll-then-refresh
+    api_ft_cloud_poll_now() does, on the same 45s cooldown as every
+    other webhook this window, in a background thread so the HTTP
+    response to FT (which must stay fast, see
+    _ft_cloud_subscribed_unique_ids()'s docstring) is never held up
+    waiting on it.
+    """
+    with _webhook_poll_lock:
+        since = time.time() - _last_webhook_triggered_poll["at"]
+        if since < _WEBHOOK_POLL_MIN_INTERVAL_SECONDS:
+            return
+        _last_webhook_triggered_poll["at"] = time.time()
+
+    def _run():
+        try:
+            result = _ft_cloud_api_poll_once()
+            if result["status"] == "ok":
+                _refresh_live_snapshot_after_poll("FT Cloud webhook")
+        except Exception as e:
+            print(f"Webhook-triggered FT Cloud poll failed: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @app.route("/webhook/ftcloud/<secret>", methods=["POST"])
 def ft_cloud_webhook_receiver(secret):
     """
@@ -2965,6 +3009,10 @@ def ft_cloud_webhook_receiver(secret):
     except Exception as e:
         print(f"FT Cloud webhook receiver error (answering 200 anyway): {e}")
         return jsonify({"ok": True}), 200
+    # See _ft_cloud_webhook_triggered_refresh()'s docstring: without
+    # this, a real event sat in the state file unused until the next
+    # scheduled poll (up to 5 minutes later) happened to look at it.
+    _ft_cloud_webhook_triggered_refresh()
     return jsonify({"ok": True, **result}), 200
 
 
