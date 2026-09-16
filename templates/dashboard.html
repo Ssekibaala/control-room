@@ -4755,7 +4755,24 @@ if (totalFoot) {
 function renderPlatformBreakdown() {
   const grid = document.getElementById('platform-breakdown-grid');
   if (!grid) return;
-  const rows = DATA.full || [];
+  // DATA.full is gated to the "Full Data" panel (admin/technician by
+  // default, see permissions.py's PANEL_KEYS/PANEL_ACCESS) and the
+  // server strips it entirely for anyone without that panel - but this
+  // card lives on the Executive Dashboard, which every role including
+  // client gets. Confirmed live: a client-role session's Fleet Health/
+  // Assets/Critical numbers (all server-precomputed into DATA.kpi
+  // before that stripping happens) were correct while this card sat
+  // at a permanent "0 of 0 on every platform", because it read
+  // DATA.full directly and that section simply isn't there for this
+  // role. Falls back to the union of the per-status sections a client
+  // DOES always get (same rows they already see via Critical/Healthy/
+  // Pending/Known Issues individually - nothing new is exposed) -
+  // same fallback pattern already used for the activity feed's
+  // plate-click lookup a few hundred lines up. Only used when full is
+  // genuinely empty; admin/technician (where full is the superset)
+  // take the first branch exactly as before, unchanged.
+  const rows = (DATA.full && DATA.full.length) ? DATA.full :
+    [...(DATA.critical || []), ...(DATA.pending || []), ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
   const total = rows.length;
   const PLATFORMS = [
     {key: 'MIX', label: 'MiX Unity'},
