@@ -25,11 +25,20 @@ def _parse_timestamp(ts):
     timestamps tracked wall-clock UTC at fetch time, ~3h behind EAT.
     Converted here so it's directly comparable to every other
     AssetReport.last_report_time in the app (see schema.utc_to_eat()).
+
+    GPSDateTime's seconds carry a variable-precision fractional part
+    when present ("2026-09-17T14:43:59.01", "...21:13:17.217") that the
+    plain "%Y-%m-%dT%H:%M:%S" strptime format never matched - confirmed
+    live against real GTL/AGL data, where 5 of 98 current-data rows had
+    this shape and silently landed on last_report_time=None (shown as
+    "No Data" for Teletrac, even for a device that had reported minutes
+    earlier). fromisoformat() accepts both the plain and fractional
+    forms in one pass.
     """
     if not ts:
         return None
     try:
-        return utc_to_eat(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
+        return utc_to_eat(datetime.fromisoformat(ts))
     except ValueError:
         return None
 
