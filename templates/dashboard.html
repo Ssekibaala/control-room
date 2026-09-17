@@ -5438,30 +5438,56 @@ renderTable('full-table', DATA.full, INTEGRITY_COLS, 'full-count');
 const roleIntegrityCols = CURRENT_ROLE === 'client' ? INTEGRITY_COLS_CLIENT : INTEGRITY_COLS;
 renderTable('critical-table', DATA.critical, roleIntegrityCols, 'critical-count');
 
-// ---- Offline Assets: same rows Critical/Pending/Healthy/Known Issues
-// already carry (full-or-fallback-union, same pattern and reasoning
-// as renderPlatformBreakdown()'s - DATA.full is gated to admin/
-// technician's "Full Data" panel, so a client role falls back to the
-// union of sections it always gets), just cut by a user-chosen "how
-// long silent" instead of the system's fixed offline_threshold_days.
-// r.days is days_silent, already computed server-side from the
-// STALEST platform's last report and forced to 0 for a fully-online
-// asset (see classifier.py's classify_fleet) - multiplying by 24 is
-// all an hours cut needs, no new data required.
+// ---- Offline Assets: a genuine override of the system's fixed
+// offline_threshold_days (2 days), not just a narrower view of the
+// same "Technical Escalation" bucket. Two things had to change from
+// the first pass at this, both found from a real report against real
+// data:
+//
+// 1. "Offline" now means every platform that has ANY data on this
+//    asset is NOT currently Online - not just the STALEST one (r.days
+//    is days_silent, computed server-side from the single stalest
+//    platform; a vehicle reporting fine on MiX an hour ago but with a
+//    41-day-old FT Cloud timestamp was showing up as "offline" purely
+//    on FT Cloud's staleness, even though it's plainly being tracked
+//    right now). isFullyOffline() below checks all three platform
+//    columns directly instead.
+// 2. Rows keep the STATUS the fixed 2-day system threshold gave them
+//    (e.g. "Pending Customer Confirmation", which specifically means
+//    "hasn't reached that 2-day cutoff yet") - showing that label on
+//    a row this panel just included because it crossed a 6-HOUR cutoff
+//    contradicts itself in the same table. Rows now display an
+//    "Offline (>= <chosen duration>)" status instead, UNLESS they're a
+//    "Known Issue" - a client's own explanation stays put regardless
+//    of which duration is selected, same reasoning classify_fleet
+//    itself uses for never re-opening one on a freshness check.
+//
+// Same full-or-fallback-union data source renderPlatformBreakdown()
+// uses (DATA.full is gated to admin/technician's "Full Data" panel,
+// so a client role falls back to the sections it always gets) - no
+// new data needed either way.
 function offlineAssetsRows() {
   return (DATA.full && DATA.full.length) ? DATA.full :
     [...(DATA.critical || []), ...(DATA.pending || []), ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
 }
-function renderOfflinePanel(hours) {
+function isFullyOffline(r) {
+  return r.TLT !== 'Online' && r.MIX !== 'Online' && r.CAM !== 'Online';
+}
+function renderOfflinePanel(hours, label) {
   OFFLINE_THRESHOLD_HOURS = hours;
+  const durationLabel = label || (hours % 24 === 0 ? (hours / 24) + ' day' + (hours === 24 ? '' : 's') : hours + ' hrs');
   const rows = offlineAssetsRows()
-    .filter(r => ((r.days || 0) * 24) >= hours)
-    .sort((a, b) => (b.days || 0) - (a.days || 0));
+    .filter(r => isFullyOffline(r) && ((r.days || 0) * 24) >= hours)
+    .sort((a, b) => (b.days || 0) - (a.days || 0))
+    .map(r => r.status === 'Known Issue' ? r : Object.assign({}, r, {status: 'Offline ≥ ' + durationLabel}));
   renderTable('offline-table', rows, roleIntegrityCols, 'offline-count');
   const badge = document.querySelector('.nav-item[data-panel="p-offline"] .nav-count');
   if (badge) badge.textContent = rows.length;
 }
-if (document.getElementById('offline-table')) renderOfflinePanel(OFFLINE_THRESHOLD_HOURS);
+if (document.getElementById('offline-table')) {
+  const selectedBtn = document.querySelector('#offline-threshold-filters .activity-filter-btn.selected');
+  renderOfflinePanel(OFFLINE_THRESHOLD_HOURS, selectedBtn ? selectedBtn.textContent.trim() : null);
+}
 wireOnce('offline-threshold-filters', () => {
   const wrap = document.getElementById('offline-threshold-filters');
   if (!wrap) return;
@@ -5470,7 +5496,7 @@ wireOnce('offline-threshold-filters', () => {
     if (!btn) return;
     wrap.querySelectorAll('.activity-filter-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
-    renderOfflinePanel(parseInt(btn.dataset.hours, 10));
+    renderOfflinePanel(parseInt(btn.dataset.hours, 10), btn.textContent.trim());
   });
 });
 renderTable('pending-table', DATA.pending, roleIntegrityCols, 'pending-count');
