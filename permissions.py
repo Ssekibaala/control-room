@@ -28,6 +28,7 @@ PANEL_LABELS = {
     "p-exec": "Executive Dashboard",
     "p-full": "Full Data",
     "p-critical": "Critical Assets",
+    "p-offline": "Offline Assets",
     "p-pending": "Pending Feedback",
     "p-border": "Border Risk",
     "p-recovered": "Recovered / New",
@@ -85,6 +86,12 @@ _DEFAULT_PANEL_ACCESS = {
     "p-exec":          ("admin", "technician", "client"),
     "p-full":          ("admin", "technician"),
     "p-critical":      ("admin", "technician", "client"),   # client sees a reduced version, see below
+    # Same rows as critical/pending/healthy/known (no new data section -
+    # see PANEL_SECTIONS above, nothing added there on purpose), just a
+    # user-adjustable "how long silent" cut instead of the system's own
+    # fixed offline_threshold_days. Every role gets it for the same
+    # reason p-critical does: it's a VIEW of data already theirs.
+    "p-offline":       ("admin", "technician", "client"),
     "p-pending":       ("admin", "technician", "client"),
     "p-border":        ("admin", "technician"),
     "p-recovered":     ("admin", "technician", "client"),

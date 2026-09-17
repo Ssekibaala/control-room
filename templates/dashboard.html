@@ -1037,6 +1037,12 @@
           <span>Critical Assets</span><span class="nav-count warn">0</span>
         </button>
 {% endif %}
+        {% if 'p-offline' in allowed_panels %}
+<button class="nav-item" data-panel="p-offline" data-label="Offline Assets">
+          <svg class="nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <span>Offline Assets</span><span class="nav-count warn">0</span>
+        </button>
+{% endif %}
         {% if 'p-border' in allowed_panels %}
 <button class="nav-item" data-panel="p-border" data-label="Border Risk">
           <svg class="nav-icon" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
@@ -1779,6 +1785,27 @@
       </section>
 {% endif %}
 
+      {% if 'p-offline' in allowed_panels %}
+<section id="p-offline" class="panel">
+        <div class="grid-toolbar">
+          <div>
+            <h3>Offline Assets</h3>
+            <span class="chart-subhead">Pick how long "offline" means for this view - independent of the system's own fixed escalation threshold, so an issue shows up here long before it reaches Critical Assets.</span>
+          </div>
+          <span class="row-count" id="offline-count"></span>
+        </div>
+        <div class="activity-filters" id="offline-threshold-filters" style="margin:0 0 var(--sp-2)">
+          <button class="activity-filter-btn" data-hours="6">6 hrs</button>
+          <button class="activity-filter-btn" data-hours="12">12 hrs</button>
+          <button class="activity-filter-btn" data-hours="18">18 hrs</button>
+          <button class="activity-filter-btn" data-hours="24">24 hrs</button>
+          <button class="activity-filter-btn selected" data-hours="48">2 days</button>
+          <button class="activity-filter-btn" data-hours="72">3 days</button>
+        </div>
+        <div class="table-wrap"><table id="offline-table"></table></div>
+      </section>
+{% endif %}
+
       {% if 'p-pending' in allowed_panels %}
 <section id="p-pending" class="panel">
         <div class="grid-toolbar"><h3>Pending Customer Feedback</h3><span class="row-count" id="pending-count"></span></div>
@@ -2208,6 +2235,13 @@ const DATA_PLACEHOLDER_UNUSED = null;
 let DATA = null;
 let CURRENT_ROLE = null;
 let CURRENT_USERNAME = null;
+// The Offline Assets panel's user-chosen cut, in hours - persists
+// across re-renders (feedback submits, the 60s auto-refresh) the same
+// way SELECTED_CLIENT does, so picking "6 hrs" doesn't silently reset
+// to the default on the next redraw. 48h = 2 days, matching
+// settings.ini's own offline_threshold_days default - so a session
+// that never touches this filter sees exactly what it always saw.
+let OFFLINE_THRESHOLD_HOURS = 48;
 
 // ---- Client filter -------------------------------------------------
 // DATA is what everything renders from, so the filter works by keeping
@@ -5403,6 +5437,42 @@ const SETTINGS_COLS = [{key:'setting', label:'Setting'}, {key:'value', label:'Va
 renderTable('full-table', DATA.full, INTEGRITY_COLS, 'full-count');
 const roleIntegrityCols = CURRENT_ROLE === 'client' ? INTEGRITY_COLS_CLIENT : INTEGRITY_COLS;
 renderTable('critical-table', DATA.critical, roleIntegrityCols, 'critical-count');
+
+// ---- Offline Assets: same rows Critical/Pending/Healthy/Known Issues
+// already carry (full-or-fallback-union, same pattern and reasoning
+// as renderPlatformBreakdown()'s - DATA.full is gated to admin/
+// technician's "Full Data" panel, so a client role falls back to the
+// union of sections it always gets), just cut by a user-chosen "how
+// long silent" instead of the system's fixed offline_threshold_days.
+// r.days is days_silent, already computed server-side from the
+// STALEST platform's last report and forced to 0 for a fully-online
+// asset (see classifier.py's classify_fleet) - multiplying by 24 is
+// all an hours cut needs, no new data required.
+function offlineAssetsRows() {
+  return (DATA.full && DATA.full.length) ? DATA.full :
+    [...(DATA.critical || []), ...(DATA.pending || []), ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
+}
+function renderOfflinePanel(hours) {
+  OFFLINE_THRESHOLD_HOURS = hours;
+  const rows = offlineAssetsRows()
+    .filter(r => ((r.days || 0) * 24) >= hours)
+    .sort((a, b) => (b.days || 0) - (a.days || 0));
+  renderTable('offline-table', rows, roleIntegrityCols, 'offline-count');
+  const badge = document.querySelector('.nav-item[data-panel="p-offline"] .nav-count');
+  if (badge) badge.textContent = rows.length;
+}
+if (document.getElementById('offline-table')) renderOfflinePanel(OFFLINE_THRESHOLD_HOURS);
+wireOnce('offline-threshold-filters', () => {
+  const wrap = document.getElementById('offline-threshold-filters');
+  if (!wrap) return;
+  wrap.addEventListener('click', (e) => {
+    const btn = e.target.closest('.activity-filter-btn');
+    if (!btn) return;
+    wrap.querySelectorAll('.activity-filter-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    renderOfflinePanel(parseInt(btn.dataset.hours, 10));
+  });
+});
 renderTable('pending-table', DATA.pending, roleIntegrityCols, 'pending-count');
 renderTable('border-table', DATA.border, INTEGRITY_COLS, 'border-count');
 renderTable('healthy-table', DATA.healthy, HEALTHY_COLS, 'healthy-count');
