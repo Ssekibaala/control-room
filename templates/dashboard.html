@@ -1925,25 +1925,15 @@
           </div>
         </div>
         <div class="panel-card">
-          <div class="panel-card-head">
-            <h3>OBC Status</h3>
-            <span class="chart-subhead" id="ddr-obc-count">&nbsp;</span>
+          <div class="panel-card-head"><h3>Device Status</h3></div>
+          <div class="activity-filters" id="ddr-tabs" style="margin:0 0 var(--sp-2); flex-wrap:wrap">
+            <button type="button" class="activity-filter-btn selected" data-ddr-tab="obc">OBC Status<span class="nav-count" id="ddr-obc-badge" style="margin-left:6px">0</span></button>
+            <button type="button" class="activity-filter-btn" data-ddr-tab="camera">AD Plus AI Camera Status<span class="nav-count" id="ddr-camera-badge" style="margin-left:6px">0</span></button>
+            <button type="button" class="activity-filter-btn" data-ddr-tab="fuel">Fuel Probe Status<span class="nav-count" id="ddr-fuel-badge" style="margin-left:6px">0</span></button>
           </div>
-          <div class="table-wrap"><table id="ddr-obc-table"></table></div>
-        </div>
-        <div class="panel-card">
-          <div class="panel-card-head">
-            <h3>AD Plus AI Camera Status</h3>
-            <span class="chart-subhead" id="ddr-camera-count">&nbsp;</span>
-          </div>
-          <div class="table-wrap"><table id="ddr-camera-table"></table></div>
-        </div>
-        <div class="panel-card">
-          <div class="panel-card-head">
-            <h3>Fuel Probe Status</h3>
-            <span class="chart-subhead" id="ddr-fuel-count">&nbsp;</span>
-          </div>
-          <div class="table-wrap"><table id="ddr-fuel-table"></table></div>
+          <div class="table-wrap" id="ddr-tabpanel-obc"><table id="ddr-obc-table"></table></div>
+          <div class="table-wrap" id="ddr-tabpanel-camera" hidden><table id="ddr-camera-table"></table></div>
+          <div class="table-wrap" id="ddr-tabpanel-fuel" hidden><table id="ddr-fuel-table"></table></div>
         </div>
         <div class="panel-card">
           <div class="panel-card-head"><h3>Email This Report</h3></div>
@@ -4234,12 +4224,18 @@ if (usersForm) {
       return {obc, camera, fuel};
     }
 
+    // Counts live on the tab buttons themselves (a bare number badge,
+    // not renderTable's own "N records" sentence - too wide for a tab)
+    // so all three are visible at a glance without switching tabs.
     function ddrRender() {
       const client = ddrClientSelect.value;
       const {obc, camera, fuel} = ddrRowsForClient(client);
-      renderTable('ddr-obc-table', obc, DDR_OBC_COLS, 'ddr-obc-count');
-      renderTable('ddr-camera-table', camera, DDR_CAMERA_COLS, 'ddr-camera-count');
-      renderTable('ddr-fuel-table', fuel, DDR_FUEL_COLS, 'ddr-fuel-count');
+      renderTable('ddr-obc-table', obc, DDR_OBC_COLS);
+      renderTable('ddr-camera-table', camera, DDR_CAMERA_COLS);
+      renderTable('ddr-fuel-table', fuel, DDR_FUEL_COLS);
+      const obcBadge = document.getElementById('ddr-obc-badge'); if (obcBadge) obcBadge.textContent = obc.length;
+      const camBadge = document.getElementById('ddr-camera-badge'); if (camBadge) camBadge.textContent = camera.length;
+      const fuelBadge = document.getElementById('ddr-fuel-badge'); if (fuelBadge) fuelBadge.textContent = fuel.length;
       ddrExportBtn.href = client ? '/api/ddr/export?client=' + encodeURIComponent(client) : '#';
     }
 
@@ -4300,6 +4296,24 @@ if (usersForm) {
         btn.addEventListener('click', () => {
           if (!ddrClientsLoaded) { ddrClientsLoaded = true; ddrLoadClients(); }
           else ddrRender();  // RAW_DATA may have refreshed since last visit
+        });
+      });
+
+      // ---- OBC / AD Plus AI Camera / Fuel Probe tabs - one visible at
+      // a time instead of stacking all three, so reviewing the camera
+      // status doesn't mean scrolling past OBC's own (often long) table
+      // first. renderTable() itself is untouched: all three tables are
+      // still rendered on every ddrRender(), this only toggles which
+      // wrapper is hidden. wireOnce already covers this whole block, so
+      // this only ever binds once.
+      document.querySelectorAll('#ddr-tabs .activity-filter-btn').forEach(tabBtn => {
+        tabBtn.addEventListener('click', () => {
+          document.querySelectorAll('#ddr-tabs .activity-filter-btn').forEach(b => b.classList.remove('selected'));
+          tabBtn.classList.add('selected');
+          ['obc', 'camera', 'fuel'].forEach(key => {
+            const panel = document.getElementById('ddr-tabpanel-' + key);
+            if (panel) panel.hidden = (key !== tabBtn.dataset.ddrTab);
+          });
         });
       });
 
