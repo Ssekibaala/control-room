@@ -1859,6 +1859,17 @@
           <table id="settings-table"></table>
           <p class="settings-note">Edit settings.ini next to the EXE and re-run to change these values. No code changes needed.</p>
         </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>FT Cloud Webhook</h3>
+            <span class="chart-subhead">Live position/status pushes from FT Cloud (AD Plus AI Camera data). If a device's camera status looks stuck on an old date, check the status below and re-subscribe - this replaces any existing subscription with one pointed at this server.</span>
+          </div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
+            <button type="button" class="btn-secondary" id="ftwebhook-check-btn">Check Status</button>
+            <button type="button" class="btn-primary" id="ftwebhook-subscribe-btn">Re-subscribe</button>
+          </div>
+          <div id="ftwebhook-result" class="settings-note" style="white-space:pre-wrap"></div>
+        </div>
       </section>
 {% endif %}
 
@@ -5529,6 +5540,63 @@ renderTable('tchecked-table', DATA.tamperChecked || [], TCHECKED_COLS, 'tchecked
 renderTable('recovered-table', DATA.recoveredList, SIMPLE_COLS);
 renderTable('newlyoffline-table', DATA.newlyOfflineList, SIMPLE_COLS);
 renderTable('settings-table', DATA.settingsRows, SETTINGS_COLS);
+
+// ---- FT Cloud Webhook status/re-subscribe (admin-only, p-settings) ----
+// Was a devtools-console-only action (fetch('/api/ftcloud/webhook/
+// subscribe', ...)) - real friction confirmed live (the console's own
+// "allow pasting" guard, browser extension noise crowding the output,
+// a command that's easy to mistype or leave unrun). A button that
+// calls the exact same endpoints removes all of that.
+(function() {
+  const checkBtn = document.getElementById('ftwebhook-check-btn');
+  const subscribeBtn = document.getElementById('ftwebhook-subscribe-btn');
+  if (!checkBtn || !subscribeBtn) return;  // not this role/panel
+  const resultEl = document.getElementById('ftwebhook-result');
+
+  function renderStatus(d) {
+    if (d.error) { resultEl.textContent = 'Error: ' + d.error; resultEl.style.color = 'var(--danger)'; return; }
+    const gps = (d.subscriptions && d.subscriptions.GPS) || {};
+    const online = (d.subscriptions && d.subscriptions.ONLINE_STATE) || {};
+    resultEl.textContent = [
+      'GPS: ' + (gps.subscribed ? ('subscribed, ' + gps.deviceCount + ' device(s)') : 'NOT subscribed'),
+      'ONLINE_STATE: ' + (online.subscribed ? ('subscribed, ' + online.deviceCount + ' device(s)') : 'NOT subscribed'),
+      'Events received so far: ' + ((d.received && d.received.devices) || 0) + ' device(s)',
+      'This server’s public URL: ' + (d.publicBaseUrl || '(not set)'),
+    ].join('\n');
+    resultEl.style.color = 'var(--text-secondary)';
+  }
+
+  wireOnce('ftwebhook-controls', () => {
+    checkBtn.addEventListener('click', () => {
+      resultEl.textContent = 'Checking…'; resultEl.style.color = 'var(--text-tertiary)';
+      fetch('/api/ftcloud/webhook/status')
+        .then(r => r.json()).then(renderStatus)
+        .catch(() => { resultEl.textContent = 'Could not reach the server.'; resultEl.style.color = 'var(--danger)'; });
+    });
+    subscribeBtn.addEventListener('click', () => {
+      subscribeBtn.disabled = true; subscribeBtn.textContent = 'Re-subscribing…';
+      resultEl.textContent = 'Re-subscribing… (unsubscribes any existing registration first, can take a few seconds)';
+      resultEl.style.color = 'var(--text-tertiary)';
+      fetch('/api/ftcloud/webhook/subscribe', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+        .then(r => r.json().then(b => ({ok: r.ok, b})))
+        .then(({ok, b}) => {
+          subscribeBtn.disabled = false; subscribeBtn.textContent = 'Re-subscribe';
+          if (b.error) { resultEl.textContent = 'Error: ' + b.error; resultEl.style.color = 'var(--danger)'; return; }
+          resultEl.textContent = [
+            'Callback URL: ' + b.callbackUrl,
+            'Devices: ' + b.deviceCount,
+            'GPS: ' + b.results.GPS,
+            'ONLINE_STATE: ' + b.results.ONLINE_STATE,
+          ].join('\n');
+          resultEl.style.color = ok ? 'var(--success)' : 'var(--danger)';
+        })
+        .catch(() => {
+          subscribeBtn.disabled = false; subscribeBtn.textContent = 'Re-subscribe';
+          resultEl.textContent = 'Could not reach the server.'; resultEl.style.color = 'var(--danger)';
+        });
+    });
+  });
+})();
 
 // =====================================================================
 // CHARTS. All underlying math (fractions, max-scaling, circumference)
