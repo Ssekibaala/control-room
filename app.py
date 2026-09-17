@@ -3041,12 +3041,24 @@ def api_ft_cloud_webhook_subscribe():
         return jsonify({"error": "No public base URL available (PUBLIC_BASE_URL / "
                                   "RENDER_EXTERNAL_URL). FT must be able to reach this app."}), 400
 
-    from settings import load_settings
+    import client_registry
     from adapters.ft_cloud_api_client import FtCloudApiClient
-    settings = load_settings(os.path.join(os.path.dirname(__file__), "data", "settings.ini"))
-    fleet_ids = settings["FT_CLOUD_API_FLEET_IDS"]
+    # Same source _ft_cloud_api_poll_once() already reads (the real
+    # per-client registry), not settings.ini's legacy flat fleet_ids
+    # list - that list predates multi-client support and nothing keeps
+    # it in sync with the registry a client gets added/mapped through.
+    # Confirmed live: this was still reading the abandoned settings.ini
+    # value, so re-subscribing after a client's FT Cloud mapping
+    # changed silently used a stale (or empty) device list instead of
+    # picking up the change, on a value that also lives on a separate
+    # persistent volume from the database it was supposed to mirror -
+    # exactly the kind of drift that's already been fixed everywhere
+    # else this app reads client->platform mappings from.
+    settings = _load_settings()
+    clients = _poll_registry(settings)
+    fleet_ids = client_registry.ids_for_platform(clients, "ftCloud")
     if not fleet_ids:
-        return jsonify({"error": "no fleet_ids configured in settings.ini [ft_cloud_api]"}), 400
+        return jsonify({"error": "no FT Cloud fleets mapped to any client in the registry"}), 400
 
     client = FtCloudApiClient()
     if not client.is_configured():
@@ -3063,13 +3075,32 @@ def api_ft_cloud_webhook_subscribe():
 
     results = {}
     for t in types:
+        # FT's subscribe call is NOT "update if exists" - calling it
+        # again while a subscription for this type is already active
+        # (e.g. re-pointing at a new callback URL/host, or after the
+        # device list changed) is refused outright with "The message
+        # type has been subscribed", a 400 this previously surfaced as
+        # results[t] = "failed: ..." while still answering the request
+        # itself with 200 OK - easy to read as success at a glance.
+        # Confirmed live: a stale subscription from an old deployment
+        # stayed the active one indefinitely because every later
+        # attempt to fix it hit exactly this wall, silently. Unsubscribe
+        # first (ignored if nothing was subscribed - that's not an
+        # error here) so subscribing is always effectively "replace
+        # with this callback URL and device list", not "fails forever
+        # after the first success".
+        try:
+            client.unsubscribe_webhook(t)
+        except Exception:
+            pass  # nothing was subscribed for this type yet - fine
         try:
             client.subscribe_webhook(t, f"{callback_url}?type={t}", unique_ids)
             results[t] = "subscribed"
         except Exception as e:
             results[t] = f"failed: {e}"
+    status = 200 if all(v == "subscribed" for v in results.values()) else 502
     return jsonify({"deviceCount": len(unique_ids), "callbackUrl": callback_url.replace(secret, "***"),
-                     "results": results})
+                     "results": results}), status
 
 
 @app.route("/api/ftcloud/webhook/status", methods=["GET"])
