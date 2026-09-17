@@ -33,7 +33,7 @@ import os
 import json
 import threading
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from schema import now_eat, utc_to_eat
 
 logger = logging.getLogger(__name__)
@@ -66,9 +66,23 @@ def _parse_ts(value):
             return utc_to_eat(datetime.utcfromtimestamp(ms))
         except (ValueError, OSError):
             return None
+    text = str(value).strip()
+    # RFC3339 legally allows fractional seconds and either a literal "Z"
+    # or a numeric offset (e.g. "+00:00") - fromisoformat() handles all
+    # of that, the three strptime formats below only ever matched the
+    # narrowest single shape. Normalise "Z" first since fromisoformat()
+    # only accepts that literal from Python 3.11 onward.
+    try:
+        normalised = text[:-1] + "+00:00" if text.endswith("Z") else text
+        dt = datetime.fromisoformat(normalised)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return utc_to_eat(dt)
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
-            return utc_to_eat(datetime.strptime(str(value), fmt))
+            return utc_to_eat(datetime.strptime(text, fmt))
         except ValueError:
             continue
     return None
