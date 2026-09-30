@@ -25,6 +25,7 @@ import base64
 import logging
 import threading
 import functools
+import configparser
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from flask import Flask, request, session, jsonify, redirect, url_for, Response, render_template, g
@@ -3137,6 +3138,42 @@ def api_ft_cloud_webhook_status():
             "unparsedSamples": state.get("unparsed", [])[:3],
         },
     })
+
+
+@app.route("/api/settings/excluded-plates", methods=["GET", "POST"])
+@login_required
+def api_settings_excluded_plates():
+    """
+    Plates hidden from the whole platform until removed from this list -
+    settings.ini [filters] excluded_plates, the same value
+    process_reports() reads before classification ever sees a row for
+    that plate. A quick, reversible way to pull one asset off the
+    dashboard (client asked, investigation pending, whatever the reason)
+    without a code change or redeploy: add it here, remove it here when
+    it should come back.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+    from schema import normalize_plate
+
+    ini_path = os.path.join(os.path.dirname(__file__), "data", "settings.ini")
+    if request.method == "GET":
+        return jsonify({"plates": _load_settings()["EXCLUDED_PLATES"]})
+
+    raw = (request.json or {}).get("plates", "") if request.is_json else ""
+    if isinstance(raw, list):
+        raw = ",".join(str(p) for p in raw)
+    plates = sorted({normalize_plate(p) for p in str(raw).split(",") if p.strip()})
+
+    config = configparser.ConfigParser()
+    if os.path.exists(ini_path):
+        config.read(ini_path)
+    if not config.has_section("filters"):
+        config.add_section("filters")
+    config.set("filters", "excluded_plates", ",".join(plates))
+    with open(ini_path, "w") as f:
+        config.write(f)
+    return jsonify({"plates": plates})
 
 
 @app.route("/api/ftcloud/webhook/unsubscribe", methods=["POST"])

@@ -9,6 +9,8 @@ auto-created so it's there to edit next time.
 import configparser
 import os
 
+from schema import normalize_plate
+
 DEFAULTS = {
     "thresholds": {
         "offline_threshold_days": "2",       # asset counts as offline after this many days silent
@@ -18,6 +20,7 @@ DEFAULTS = {
     },
     "filters": {
         "ignore_demo_vehicles": "true",      # drop TMS demo / test-site rows
+        "excluded_plates": "",               # comma-separated plates hidden from the whole platform until removed here
     },
     "mix_api": {
         # Live MiX Integrate API polling (replaces the mailed report
@@ -221,6 +224,9 @@ def load_settings(path="settings.ini"):
         "HIGH_PRIORITY_DAYS": config.getint("thresholds", "high_priority_days"),
         "BORDER_RADIUS_KM": config.getfloat("thresholds", "border_radius_km"),
         "IGNORE_DEMO_VEHICLES": config.getboolean("filters", "ignore_demo_vehicles"),
+        "EXCLUDED_PLATES": sorted({
+            normalize_plate(p) for p in config.get("filters", "excluded_plates").split(",") if p.strip()
+        }),
         "MIX_API_ORG_IDS": [o.strip() for o in config.get("mix_api", "org_ids").split(",") if o.strip()],
         "MIX_API_POLL_INTERVAL_MINUTES": config.getfloat("mix_api", "poll_interval_minutes"),
         "MIX_API_INTER_ORG_DELAY_SECONDS": config.getfloat("mix_api", "inter_org_delay_seconds"),

@@ -1887,6 +1887,17 @@
           </div>
           <div id="ftwebhook-result" class="settings-note" style="white-space:pre-wrap"></div>
         </div>
+        <div class="panel-card">
+          <div class="panel-card-head">
+            <h3>Excluded Plates</h3>
+            <span class="chart-subhead">Plates listed here are hidden from every panel, report and export platform-wide until removed - use this to pull one asset off the dashboard temporarily (e.g. while an issue is investigated), no redeploy needed. Comma-separated.</span>
+          </div>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
+            <input type="text" id="excluded-plates-input" placeholder="e.g. UBM059L, UBQ968H" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit">
+            <button type="button" class="btn-primary" id="excluded-plates-save-btn">Save</button>
+          </div>
+          <div id="excluded-plates-result" class="settings-note"></div>
+        </div>
       </section>
 {% endif %}
 
@@ -5631,6 +5642,50 @@ renderTable('settings-table', DATA.settingsRows, SETTINGS_COLS);
         })
         .catch(() => {
           subscribeBtn.disabled = false; subscribeBtn.textContent = 'Re-subscribe';
+          resultEl.textContent = 'Could not reach the server.'; resultEl.style.color = 'var(--danger)';
+        });
+    });
+  });
+})();
+
+// ---- Excluded Plates (admin-only, p-settings) ----
+// Loads the current list on page load (read-only GET, cheap), and
+// saves a full replacement list on demand - same settings.ini
+// [filters] excluded_plates value process_reports() filters every row
+// against before classification, so a plate added here is gone from
+// the whole platform on the next refresh, and back the moment it's
+// removed from the box and saved again.
+(function() {
+  const input = document.getElementById('excluded-plates-input');
+  const saveBtn = document.getElementById('excluded-plates-save-btn');
+  if (!input || !saveBtn) return;  // not this role/panel
+  const resultEl = document.getElementById('excluded-plates-result');
+
+  fetch('/api/settings/excluded-plates')
+    .then(r => r.json())
+    .then(d => { if (Array.isArray(d.plates)) input.value = d.plates.join(', '); })
+    .catch(() => {});
+
+  wireOnce('excluded-plates-controls', () => {
+    saveBtn.addEventListener('click', () => {
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      resultEl.textContent = '';
+      fetch('/api/settings/excluded-plates', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({plates: input.value}),
+      })
+        .then(r => r.json().then(b => ({ok: r.ok, b})))
+        .then(({ok, b}) => {
+          saveBtn.disabled = false; saveBtn.textContent = 'Save';
+          if (!ok || b.error) { resultEl.textContent = 'Error: ' + (b.error || 'save failed'); resultEl.style.color = 'var(--danger)'; return; }
+          input.value = b.plates.join(', ');
+          resultEl.textContent = b.plates.length
+            ? 'Saved. Hidden platform-wide: ' + b.plates.join(', ')
+            : 'Saved. No plates excluded.';
+          resultEl.style.color = 'var(--success)';
+        })
+        .catch(() => {
+          saveBtn.disabled = false; saveBtn.textContent = 'Save';
           resultEl.textContent = 'Could not reach the server.'; resultEl.style.color = 'var(--danger)';
         });
     });

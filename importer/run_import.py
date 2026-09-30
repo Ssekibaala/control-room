@@ -625,6 +625,19 @@ def process_reports(paths, settings_path=None, feedback_rows=None, tamper_checks
         if dropped:
             print(f"Excluded {dropped} row(s) for {len(retired)} decommissioned vehicle(s)")
 
+    # Manual, reversible exclusion - settings.ini [filters] excluded_plates.
+    # For a plate someone asked to have hidden from the whole platform
+    # temporarily (not retired, just paused), with no code change needed
+    # to lift it later: remove it from that one line and the plate is
+    # back everywhere on the next refresh.
+    excluded = set(settings["EXCLUDED_PLATES"])
+    if excluded:
+        before = len(all_rows)
+        all_rows = [r for r in all_rows if r.asset_plate not in excluded]
+        dropped = before - len(all_rows)
+        if dropped:
+            print(f"Excluded {dropped} row(s) for {len(excluded)} manually-excluded plate(s)")
+
     grouped, skipped = group_by_plate(all_rows)
     timestamps = [r.last_report_time for r in all_rows if r.last_report_time]
     now = max(timestamps) if timestamps else now_eat()
