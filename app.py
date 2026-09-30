@@ -3140,6 +3140,10 @@ def api_ft_cloud_webhook_status():
     })
 
 
+def _settings_ini_path():
+    return os.path.join(os.path.dirname(__file__), "data", "settings.ini")
+
+
 @app.route("/api/settings/excluded-plates", methods=["GET", "POST"])
 @login_required
 def api_settings_excluded_plates():
@@ -3156,7 +3160,7 @@ def api_settings_excluded_plates():
         return jsonify({"error": "Not permitted for your role"}), 403
     from schema import normalize_plate
 
-    ini_path = os.path.join(os.path.dirname(__file__), "data", "settings.ini")
+    ini_path = _settings_ini_path()
     if request.method == "GET":
         return jsonify({"plates": _load_settings()["EXCLUDED_PLATES"]})
 
@@ -3174,6 +3178,81 @@ def api_settings_excluded_plates():
     with open(ini_path, "w") as f:
         config.write(f)
     return jsonify({"plates": plates})
+
+
+@app.route("/api/settings/thresholds", methods=["GET", "POST"])
+@login_required
+def api_settings_thresholds():
+    """
+    The report-configuration values shown in Settings > Report
+    Configuration (settingsRows in control_room.py) - previously
+    editable only by hand-editing settings.ini on disk, which
+    production's persistent data/ volume puts out of this app's own
+    reach anyway (see _settings_ini_path()/excluded-plates above for
+    the same reasoning). Same read-modify-write.
+    """
+    if session["role"] not in MANAGE_USERS_ROLES:
+        return jsonify({"error": "Not permitted for your role"}), 403
+
+    def _as_dict(s):
+        return {
+            "offlineThresholdDays": s["OFFLINE_THRESHOLD_DAYS"],
+            "highPriorityDays": s["HIGH_PRIORITY_DAYS"],
+            "longTermFaultDays": s["LONG_TERM_FAULT_DAYS"],
+            "borderRadiusKm": s["BORDER_RADIUS_KM"],
+            "ignoreDemoVehicles": s["IGNORE_DEMO_VEHICLES"],
+        }
+
+    ini_path = _settings_ini_path()
+    if request.method == "GET":
+        return jsonify(_as_dict(_load_settings()))
+
+    body = request.json or {}
+    errors = {}
+    parsed = {}
+
+    def _num(key, cast, inclusive_min):
+        if key not in body:
+            return
+        try:
+            v = cast(body[key])
+        except (TypeError, ValueError):
+            errors[key] = "must be a number"
+            return
+        if v < inclusive_min:
+            errors[key] = f"must be at least {inclusive_min}"
+            return
+        parsed[key] = v
+
+    _num("offlineThresholdDays", float, 0.1)
+    _num("highPriorityDays", int, 1)
+    _num("longTermFaultDays", int, 1)
+    _num("borderRadiusKm", float, 0)
+    if errors:
+        return jsonify({"error": "Invalid value(s)", "fields": errors}), 400
+
+    config = configparser.ConfigParser()
+    if os.path.exists(ini_path):
+        config.read(ini_path)
+    if not config.has_section("thresholds"):
+        config.add_section("thresholds")
+    if not config.has_section("filters"):
+        config.add_section("filters")
+
+    if "offlineThresholdDays" in parsed:
+        config.set("thresholds", "offline_threshold_days", str(parsed["offlineThresholdDays"]))
+    if "highPriorityDays" in parsed:
+        config.set("thresholds", "high_priority_days", str(parsed["highPriorityDays"]))
+    if "longTermFaultDays" in parsed:
+        config.set("thresholds", "long_term_fault_days", str(parsed["longTermFaultDays"]))
+    if "borderRadiusKm" in parsed:
+        config.set("thresholds", "border_radius_km", str(parsed["borderRadiusKm"]))
+    if "ignoreDemoVehicles" in body:
+        config.set("filters", "ignore_demo_vehicles", "true" if body["ignoreDemoVehicles"] else "false")
+
+    with open(ini_path, "w") as f:
+        config.write(f)
+    return jsonify(_as_dict(_load_settings()))
 
 
 @app.route("/api/ftcloud/webhook/unsubscribe", methods=["POST"])

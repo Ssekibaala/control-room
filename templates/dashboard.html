@@ -1872,9 +1872,39 @@
       {% if 'p-settings' in allowed_panels %}
 <section id="p-settings" class="panel">
         <div class="panel-card">
-          <div class="panel-card-head"><h3>Report Configuration</h3></div>
-          <table id="settings-table"></table>
-          <p class="settings-note">Edit settings.ini next to the EXE and re-run to change these values. No code changes needed.</p>
+          <div class="panel-card-head">
+            <h3>Report Configuration</h3>
+            <span class="chart-subhead">Saves straight to settings.ini - takes effect on the next data refresh, no redeploy needed.</span>
+          </div>
+          <table id="settings-table">
+            <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Offline Threshold (days)</td>
+                <td><input type="number" id="cfg-offline-threshold" min="0.1" step="0.1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit"></td>
+              </tr>
+              <tr>
+                <td>High Priority Threshold (days)</td>
+                <td><input type="number" id="cfg-high-priority" min="1" step="1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit"></td>
+              </tr>
+              <tr>
+                <td>Long-term Fault Threshold (days)</td>
+                <td><input type="number" id="cfg-long-term" min="1" step="1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit"></td>
+              </tr>
+              <tr>
+                <td>Border Radius (km)</td>
+                <td><input type="number" id="cfg-border-radius" min="0" step="1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit"></td>
+              </tr>
+              <tr>
+                <td>Ignore Demo Vehicles</td>
+                <td><input type="checkbox" id="cfg-ignore-demo" style="width:18px;height:18px"></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex; margin-top:var(--sp-2)">
+            <button type="button" class="btn-primary" id="settings-config-save-btn">Save</button>
+          </div>
+          <div id="settings-config-result" class="settings-note"></div>
         </div>
         <div class="panel-card">
           <div class="panel-card-head">
@@ -5507,7 +5537,6 @@ const TCHECKED_COLS = [
   {key:'comment', label:'What Was Found'},
 ];
 const SIMPLE_COLS = [{key:'plate', label:'Plate'}, {key:'status', label:'Current Status'}];
-const SETTINGS_COLS = [{key:'setting', label:'Setting'}, {key:'value', label:'Value Used For This Report'}];
 
 renderTable('full-table', DATA.full, INTEGRITY_COLS, 'full-count');
 const roleIntegrityCols = CURRENT_ROLE === 'client' ? INTEGRITY_COLS_CLIENT : INTEGRITY_COLS;
@@ -5589,7 +5618,62 @@ renderTable('tchecked-table', DATA.tamperChecked || [], TCHECKED_COLS, 'tchecked
 }
 renderTable('recovered-table', DATA.recoveredList, SIMPLE_COLS);
 renderTable('newlyoffline-table', DATA.newlyOfflineList, SIMPLE_COLS);
-renderTable('settings-table', DATA.settingsRows, SETTINGS_COLS);
+
+// ---- Report Configuration, editable (admin-only, p-settings) ----
+// Was a read-only table of whatever settings.ini happened to contain
+// on disk - editing it meant hand-editing that file on the server.
+// Loads the current values once on page load (GET, cheap) and saves a
+// full or partial replacement on demand (POST); values take effect on
+// the next refresh cycle, same as editing the file directly would.
+(function() {
+  const saveBtn = document.getElementById('settings-config-save-btn');
+  if (!saveBtn) return;  // not this role/panel
+  const resultEl = document.getElementById('settings-config-result');
+  const els = {
+    offlineThresholdDays: document.getElementById('cfg-offline-threshold'),
+    highPriorityDays: document.getElementById('cfg-high-priority'),
+    longTermFaultDays: document.getElementById('cfg-long-term'),
+    borderRadiusKm: document.getElementById('cfg-border-radius'),
+  };
+  const ignoreDemoEl = document.getElementById('cfg-ignore-demo');
+
+  function populate(d) {
+    Object.keys(els).forEach(k => { if (d[k] !== undefined && els[k]) els[k].value = d[k]; });
+    if (d.ignoreDemoVehicles !== undefined && ignoreDemoEl) ignoreDemoEl.checked = !!d.ignoreDemoVehicles;
+  }
+
+  fetch('/api/settings/thresholds').then(r => r.json()).then(populate).catch(() => {});
+
+  wireOnce('settings-config-controls', () => {
+    saveBtn.addEventListener('click', () => {
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      resultEl.textContent = '';
+      const body = {ignoreDemoVehicles: ignoreDemoEl.checked};
+      Object.keys(els).forEach(k => { body[k] = parseFloat(els[k].value); });
+      fetch('/api/settings/thresholds', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      })
+        .then(r => r.json().then(b => ({ok: r.ok, b})))
+        .then(({ok, b}) => {
+          saveBtn.disabled = false; saveBtn.textContent = 'Save';
+          if (!ok || b.error) {
+            const fieldMsg = b.fields ? ' (' + Object.entries(b.fields).map(([k, v]) => k + ': ' + v).join(', ') + ')' : '';
+            resultEl.textContent = 'Error: ' + (b.error || 'save failed') + fieldMsg;
+            resultEl.style.color = 'var(--danger)';
+            return;
+          }
+          populate(b);
+          resultEl.textContent = 'Saved. Takes effect on the next data refresh.';
+          resultEl.style.color = 'var(--success)';
+        })
+        .catch(() => {
+          saveBtn.disabled = false; saveBtn.textContent = 'Save';
+          resultEl.textContent = 'Could not reach the server.'; resultEl.style.color = 'var(--danger)';
+        });
+    });
+  });
+})();
 
 // ---- FT Cloud Webhook status/re-subscribe (admin-only, p-settings) ----
 // Was a devtools-console-only action (fetch('/api/ftcloud/webhook/
