@@ -114,17 +114,20 @@ def _sheet_rows(full_rows, category, report_date):
     out = []
     for r in rows_for_category(full_rows, category):
         position = r.get(category["seen_field"]) or ""
+        status = _platform_status_label(r, position, report_date)
         # Both comment columns are what people actually wrote on the
         # platform - the latest "Recommended Action" entry and the latest
         # "Customer Feedback" entry (see feedback_overlay._apply_to_row()).
-        # Blank when nobody has written one; never system-generated text.
+        # Only shown for a device that's offline: on an Online row an old
+        # note ("asset in the workshop") describes a problem that's over.
+        offline = status != "Online"
         out.append({
             "client": r.get("client") or "",
             "plate": r.get("plate") or "",
             "position": position,
-            "status": _platform_status_label(r, position, report_date),
-            "techComment": _clean(r.get("technicianComment")),
-            "customerFeedback": _clean(r.get("customerComment")),
+            "status": status,
+            "techComment": _clean(r.get("technicianComment")) if offline else "",
+            "customerFeedback": _clean(r.get("customerComment")) if offline else "",
         })
     # Newest report first - the point of this column is "which of these
     # needs a second look right now", and that's the stalest entries,

@@ -4269,13 +4269,15 @@ if (usersForm) {
     }
     // Both comments are what people actually wrote on the platform (latest
     // "Recommended Action" / latest "Customer Feedback" entry), mirroring
-    // ddr_report.py's _sheet_rows() - never system-generated text.
+    // ddr_report.py's _sheet_rows() - and, like it, only shown when this
+    // device is offline.
     function ddrRow(r, seenValue) {
+      const status = ddrStatusFor(r, seenValue);
+      const offline = status !== 'Online';
       return {
-        client: r.client, plate: r.plate, position: seenValue,
-        status: ddrStatusFor(r, seenValue),
-        techComment: ddrClean(r.technicianComment),
-        customerFeedback: ddrClean(r.customerComment),
+        client: r.client, plate: r.plate, position: seenValue, status,
+        techComment: offline ? ddrClean(r.technicianComment) : '',
+        customerFeedback: offline ? ddrClean(r.customerComment) : '',
       };
     }
     function ddrRowsForClient(client) {
