@@ -67,40 +67,6 @@ def _clean(value):
     return "" if text.lower() == "none" else text
 
 
-def _known_issue_comment(row):
-    """The client's own explanation for a Known Issue row - genuine
-    hand-written content, kept verbatim regardless of any platform's
-    freshness (that's the whole point of a Known Issue: the question of
-    "why is this quiet" is already answered)."""
-    return _clean(row.get("feedback"))
-
-
-def _platform_recommended_comment(seen_value, report_date, long_term_fault_days, high_priority_days):
-    """
-    Same escalation ladder as classifier._recommended_action(), but
-    keyed off how long THIS platform's own position has been stale,
-    not the vehicle-wide days_silent (the STALEST of all three
-    platforms). Reusing the vehicle-wide action text here was exactly
-    the earlier bug: a truck whose MiX unit died 40 days ago but whose
-    fuel probe reported 13 hours ago showed "Recover device - long-term
-    fault" right next to a Last Position from yesterday, on the sheet
-    that's specifically about the fuel probe - a technician's note
-    about a completely different platform. Recomputed from THIS row's
-    own position instead, so the comment always matches the date next
-    to it.
-    """
-    try:
-        seen_dt = datetime.strptime(seen_value, _SEEN_FMT)
-    except (ValueError, TypeError):
-        return ""
-    days_silent = (report_date - seen_dt).total_seconds() / 86400
-    if days_silent >= long_term_fault_days:
-        return "Recover device - long-term fault, schedule field recovery"
-    if days_silent >= high_priority_days:
-        return "Schedule physical inspection this week"
-    return "Contact customer for status confirmation"
-
-
 def _platform_reported_today(seen_value, report_date):
     if not seen_value:
         return False
@@ -144,31 +110,21 @@ def _platform_status_label(row, seen_value, report_date):
     return "Pending Customer Confirmation"
 
 
-def _sheet_rows(full_rows, category, report_date, long_term_fault_days, high_priority_days):
+def _sheet_rows(full_rows, category, report_date):
     out = []
     for r in rows_for_category(full_rows, category):
         position = r.get(category["seen_field"]) or ""
-        status = _platform_status_label(r, position, report_date)
-        # A healthy device (Online) has nothing here to comment on. A
-        # Known Issue keeps the client's own explanation verbatim - that
-        # was never platform-specific to begin with. Everything else
-        # (Pending Customer Confirmation) gets a comment recomputed from
-        # THIS row's own position, not the vehicle-wide action field -
-        # see _platform_recommended_comment()'s docstring for why that
-        # distinction matters.
-        if status == "Online":
-            tech_comment = ""
-        elif status == "Known Issue":
-            tech_comment = _known_issue_comment(r)
-        else:
-            tech_comment = _platform_recommended_comment(position, report_date, long_term_fault_days, high_priority_days)
+        # Both comment columns are what people actually wrote on the
+        # platform - the latest "Recommended Action" entry and the latest
+        # "Customer Feedback" entry (see feedback_overlay._apply_to_row()).
+        # Blank when nobody has written one; never system-generated text.
         out.append({
             "client": r.get("client") or "",
             "plate": r.get("plate") or "",
             "position": position,
-            "status": status,
-            "techComment": tech_comment,
-            "customerFeedback": "",  # blank - this is the column the client fills in
+            "status": _platform_status_label(r, position, report_date),
+            "techComment": _clean(r.get("technicianComment")),
+            "customerFeedback": _clean(r.get("customerComment")),
         })
     # Newest report first - the point of this column is "which of these
     # needs a second look right now", and that's the stalest entries,
@@ -195,22 +151,17 @@ _COLUMNS = [
 ]
 
 
-def build_workbook(full_rows, client_name=None, report_date=None,
-                    long_term_fault_days=30, high_priority_days=7):
+def build_workbook(full_rows, client_name=None, report_date=None):
     """
-    full_rows: the "full" list from a dashboard-data payload (or
-    RAW_DATA.full client-side) - every vehicle this session can see.
+    full_rows: the "full" list from a dashboard-data payload with
+    feedback already overlaid (app.py's _overlay_feedback) - that's what
+    carries the technicianComment/customerComment fields.
     client_name: restrict to one client's vehicles, or None for every
     client the caller is entitled to (the caller is responsible for
     that scoping - see app.py's /api/ddr/export, which never calls this
     with rows the session isn't allowed to see in the first place).
     report_date: defaults to now - stamped into each sheet's title row,
     same convention as report_writer.py's Fleet Integrity workbook.
-    long_term_fault_days/high_priority_days: the same two thresholds
-    settings.ini's [thresholds] section feeds classifier.py - the
-    caller should pass the real configured values (see app.py's
-    _load_settings()); defaulted here only so this module still works
-    standalone (tests, a REPL) without wiring settings through.
     """
     report_date = report_date or datetime.now()
     if client_name:
@@ -220,7 +171,7 @@ def build_workbook(full_rows, client_name=None, report_date=None,
     wb.remove(wb.active)  # replaced by one real sheet per category below
 
     for category in CATEGORIES:
-        rows = _sheet_rows(full_rows, category, report_date, long_term_fault_days, high_priority_days)
+        rows = _sheet_rows(full_rows, category, report_date)
         ws = wb.create_sheet(title=category["title"][:31])  # Excel's own 31-char sheet-name limit
 
         title = f"{category['title']} - {client_name or 'All Clients'}"

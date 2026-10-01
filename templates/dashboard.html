@@ -143,22 +143,21 @@
      because it's a third-party brand with its own colours. */
   .powered-logo { display:block; width:84%; max-width:160px; height:auto; background:#fff;
     border-radius:9px; padding:8px 11px; box-shadow:0 2px 12px rgba(0,0,0,0.25); }
-  /* The client's own logo, shown next to the Teletrac mark whenever the
-     dashboard is scoped to a single client that has one on file (see
-     CLIENT_LOGOS/updateClientLogo() below) - a fixed small tile rather
-     than a % width like .powered-logo, so it reads as a badge beside the
-     wordmark instead of competing with it for the row. flex:0 0 auto
-     keeps it from growing; .sidebar-brand's flex:1 absorbs the
-     difference automatically. */
-  .client-logo { flex:0 0 auto; height:40px; width:auto; max-width:64px;
-    object-fit:contain; background:#fff; border-radius:8px; padding:4px 6px;
-    box-shadow:0 2px 12px rgba(0,0,0,0.25); }
-  /* [hidden] is only display:none by default via the UA stylesheet,
-     which any author rule - even one with lower specificity, like the
-     block above - overrides in the cascade. Without this, toggling the
-     hidden attribute in JS stopped doing anything visible. */
-  .client-logo[hidden] { display:none; }
-  .sidebar.collapsed .client-logo { display:none; }
+  /* A client-scoped view (see CLIENT_LOGOS/updateClientLogo()) swaps the
+     client's own logo into this top slot and moves Teletrac down to the
+     footer's "Powered by" mark. The client logo is squarer than the
+     Teletrac wordmark, so it's capped by height instead of width. */
+  .client-logo { width:auto; max-height:72px; object-fit:contain; }
+  /* .powered-logo sets display:block, and any author rule beats the UA
+     stylesheet's [hidden]{display:none} - so the attribute needs this
+     to actually hide either logo. */
+  .powered-logo[hidden] { display:none; }
+
+  .powered-by { display:flex; align-items:center; gap:8px; margin-bottom:10px;
+    font-size:10px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-tertiary); }
+  .powered-by img { height:30px; width:auto; background:#fff; border-radius:6px; padding:3px 6px; }
+  .powered-by[hidden] { display:none; }
+  .sidebar.collapsed .powered-by { display:none; }
   /* Sits outside the anchor now, so it can't pick up link underlining
      on hover. Styled as a product descriptor rather than body copy: a
      short accent rule, then quiet letterspaced type. */
@@ -1020,9 +1019,9 @@
         </button>
         <a class="sidebar-brand" href="/" title="Fleet Intelligence Command Centre &mdash; telemetry by Teletrac Fleet Solutions">
           <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}"
-               alt="Teletrac Fleet Solutions" class="powered-logo">
+               alt="Teletrac Fleet Solutions" class="powered-logo" id="brand-logo-teletrac">
+          <img id="client-logo" class="powered-logo client-logo" hidden alt="">
         </a>
-        <img id="client-logo" class="client-logo" hidden alt="">
       </div>
       <p class="brand-tagline">Fleet integrity &amp; tampering intelligence</p>
     </div>
@@ -1193,6 +1192,10 @@
     </div>
 
     <div class="sidebar-foot">
+      <div class="powered-by" id="powered-by" hidden>
+        <span>Powered by</span>
+        <img src="{{ url_for('static', filename='Teletrac_Fleet_Solutions_logo.png') }}" alt="Teletrac Fleet Solutions">
+      </div>
       <div class="status-line"><span class="status-dot"></span> System Nominal</div>
     </div>
   </aside>
@@ -2374,16 +2377,24 @@ const CLIENT_LOGOS = {
 
 function updateClientLogo() {
   const img = document.getElementById('client-logo');
-  if (!img) return;
-  const src = CLIENT_LOGOS[SELECTED_CLIENT];
+  const teletracTop = document.getElementById('brand-logo-teletrac');
+  const poweredBy = document.getElementById('powered-by');
+  if (!img || !teletracTop || !poweredBy) return;
+  // A single-client session (e.g. a client-role login) never sets
+  // SELECTED_CLIENT - setDashboardData() pins it to "All" when there's
+  // nothing to choose between - so its one client is the scope instead.
+  const available = (RAW_DATA && RAW_DATA.meta && RAW_DATA.meta.clients) || [];
+  const client = SELECTED_CLIENT || (available.length === 1 ? available[0] : '');
+  const src = CLIENT_LOGOS[client];
   if (src) {
     img.src = src;
-    img.alt = SELECTED_CLIENT + ' logo';
-    img.hidden = false;
+    img.alt = client + ' logo';
   } else {
-    img.hidden = true;
     img.removeAttribute('src');
   }
+  img.hidden = !src;
+  teletracTop.hidden = !!src;
+  poweredBy.hidden = !src;
 }
 
 function applyClientView() {
@@ -2476,18 +2487,6 @@ function applyClientView() {
     // Gaps examined is a whole-import processing statistic with no
     // per-vehicle rows behind it, so it can't be split per client.
     tamperGapsChecked: 0,
-    // "Total Assets" names all three platforms in its footer but is
-    // itself a per-VEHICLE union - a truck counted here needs a report
-    // from just ONE of the three, not all of them, and coverage varies
-    // wildly per platform (a fuel probe is nowhere near as universally
-    // fitted as a MiX Unity tracking unit). Without a real per-platform
-    // breakdown that footer reads as "these three platforms cover all
-    // of these assets equally," which isn't true. Counted the same way
-    // rowsForCategory in the DDR report does - has a real, non-"No data"
-    // timestamp for that platform.
-    mixCount: countBy(r => r.mixSeen && r.mixSeen !== 'No data'),
-    camCount: countBy(r => r.camSeen && r.camSeen !== 'No data'),
-    tltCount: countBy(r => r.tltSeen && r.tltSeen !== 'No data'),
   });
   DATA = view;
 }
@@ -2613,8 +2612,7 @@ function fillMissingSectionsWithSafeDefaults(d) {
   d.kpi = d.kpi || {};
   const kpiDefaults = ['healthPct', 'total', 'online', 'escalations', 'pending', 'knownIssues',
                         'recovered', 'newlyOffline', 'tamperConfirmed', 'tamperUnconfirmed',
-                        'tamperGapsChecked', 'nullGpsExcluded', 'doubleFlagged', 'border',
-                        'mixCount', 'camCount', 'tltCount'];
+                        'tamperGapsChecked', 'nullGpsExcluded', 'doubleFlagged', 'border'];
   kpiDefaults.forEach(k => { if (d.kpi[k] === undefined) d.kpi[k] = 0; });
   d.sevCounts = d.sevCounts || {'Critical - Long-term Fault': 0, 'High - Escalate This Week': 0, 'Elevated - Monitor': 0};
   return d;
@@ -4189,16 +4187,19 @@ if (usersForm) {
       {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
       {key: 'position', label: 'Last Position'}, {key: 'status', label: 'Status'},
       {key: 'techComment', label: "Technician's Comment"},
+      {key: 'customerFeedback', label: 'Customer Feedback'},
     ];
     const DDR_CAMERA_COLS = [
       {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
       {key: 'position', label: 'Positioning Time'}, {key: 'status', label: 'Status'},
       {key: 'techComment', label: "Technician's Comment"},
+      {key: 'customerFeedback', label: 'Customer Feedback'},
     ];
     const DDR_FUEL_COLS = [
       {key: 'client', label: 'Client'}, {key: 'plate', label: 'Plate'},
       {key: 'position', label: 'Last Reading'}, {key: 'status', label: 'Status'},
       {key: 'techComment', label: "Technician's Comment"},
+      {key: 'customerFeedback', label: 'Customer Feedback'},
     ];
     const ddrClientSelect = document.getElementById('ddr-client-select');
     const ddrExportBtn = document.getElementById('ddr-export-btn');
@@ -4218,32 +4219,6 @@ if (usersForm) {
     // agree on what a blank comment looks like.
     function ddrClean(v) {
       return (v && String(v).trim().toLowerCase() !== 'none') ? String(v).trim() : '';
-    }
-    // The client's own explanation for a Known Issue row - genuine
-    // hand-written content, shown as-is regardless of any platform's
-    // freshness (the question of "why is this quiet" is already answered).
-    function ddrKnownIssueComment(r) {
-      return ddrClean(r.feedback);
-    }
-    // Mirrors ddr_report.py's _platform_recommended_comment(): same
-    // escalation ladder classify_fleet uses (settings.ini's
-    // long_term_fault_days/high_priority_days, exposed to the browser as
-    // DATA.meta.longTermFault/highPriorityDays), but keyed off how long
-    // THIS platform's own position has been stale - not r.action, which
-    // is the vehicle-wide figure (the STALEST of all three platforms).
-    // Showing r.action here was the earlier bug: a truck whose MiX unit
-    // died 40 days ago but whose fuel probe reported 13 hours ago showed
-    // "Recover device - long-term fault" right next to yesterday's Last
-    // Position, on the sheet that's specifically about the fuel probe.
-    function ddrPlatformRecommendedComment(seenValue) {
-      const dt = ddrParseDate(seenValue);
-      if (!dt) return '';
-      const daysSilent = (Date.now() - dt.getTime()) / 86400000;
-      const longTermFaultDays = (DATA.meta && DATA.meta.longTermFault) || 30;
-      const highPriorityDays = (DATA.meta && DATA.meta.highPriorityDays) || 7;
-      if (daysSilent >= longTermFaultDays) return 'Recover device - long-term fault, schedule field recovery';
-      if (daysSilent >= highPriorityDays) return 'Schedule physical inspection this week';
-      return 'Contact customer for status confirmation';
     }
     // Mirrors ddr_report.py's _platform_status_label()/_platform_reported_today():
     // the vehicle-wide status ignores this category entirely (it only
@@ -4292,16 +4267,16 @@ if (usersForm) {
         return (tb ? tb.getTime() : -Infinity) - (ta ? ta.getTime() : -Infinity);
       });
     }
-    // Online has nothing to comment on. Known Issue keeps the client's
-    // own explanation. Pending Customer Confirmation gets a comment
-    // recomputed from THIS row's own position - see
-    // ddrPlatformRecommendedComment()'s docstring above.
+    // Both comments are what people actually wrote on the platform (latest
+    // "Recommended Action" / latest "Customer Feedback" entry), mirroring
+    // ddr_report.py's _sheet_rows() - never system-generated text.
     function ddrRow(r, seenValue) {
-      const status = ddrStatusFor(r, seenValue);
-      const techComment = status === 'Online' ? ''
-        : status === 'Known Issue' ? ddrKnownIssueComment(r)
-        : ddrPlatformRecommendedComment(seenValue);
-      return {client: r.client, plate: r.plate, position: seenValue, status, techComment};
+      return {
+        client: r.client, plate: r.plate, position: seenValue,
+        status: ddrStatusFor(r, seenValue),
+        techComment: ddrClean(r.technicianComment),
+        customerFeedback: ddrClean(r.customerComment),
+      };
     }
     function ddrRowsForClient(client) {
       const rows = (RAW_DATA && RAW_DATA.full) || [];
@@ -4868,13 +4843,15 @@ const qsHealth = document.getElementById('qs-health'); if (qsHealth) qsHealth.te
 const qsTotal = document.getElementById('qs-total'); if (qsTotal) qsTotal.textContent = DATA.kpi.total;
 const totalFoot = document.getElementById('kpi-total-foot');
 if (totalFoot) {
-  // See applyClientView()'s mixCount/camCount/tltCount comment - this
-  // replaces the old static "Across Teletrac, MiX Unity, FT Cloud" text
-  // (which named all three platforms but said nothing about how many of
-  // the total each one actually covers) with the real per-platform
-  // count, so "121 assets" can't be misread as 121 vehicles uniformly
-  // tracked by all three.
-  totalFoot.textContent = DATA.kpi.mixCount + ' MiX Unity · ' + DATA.kpi.camCount + ' FT Cloud · ' + DATA.kpi.tltCount + ' Teletrac';
+  // Real per-platform coverage, so "121 assets" can't be misread as 121
+  // vehicles uniformly tracked by all three (a truck counts toward the
+  // total with a report from just ONE platform). Computed here from whatever DATA currently holds, not read from
+  // kpi: applyClientView() only builds a fresh kpi when a specific
+  // client is picked, so on the "All clients" view (and every
+  // single-client login) these were never set and printed as 0.
+  const assetRows = allAssetRows();
+  const countSeen = field => assetRows.filter(r => r[field] && r[field] !== 'No data').length;
+  totalFoot.textContent = countSeen('mixSeen') + ' MiX Unity · ' + countSeen('camSeen') + ' FT Cloud · ' + countSeen('tltSeen') + ' Teletrac';
 }
 
 // ---- Platform Breakdown (Executive Dashboard) ----
@@ -4910,8 +4887,7 @@ function renderPlatformBreakdown() {
   // plate-click lookup a few hundred lines up. Only used when full is
   // genuinely empty; admin/technician (where full is the superset)
   // take the first branch exactly as before, unchanged.
-  const rows = (DATA.full && DATA.full.length) ? DATA.full :
-    [...(DATA.critical || []), ...(DATA.pending || []), ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
+  const rows = allAssetRows();
   const total = rows.length;
   const PLATFORMS = [
     {key: 'MIX', label: 'MiX Unity'},
@@ -5570,7 +5546,7 @@ renderTable('critical-table', DATA.critical, roleIntegrityCols, 'critical-count'
 // uses (DATA.full is gated to admin/technician's "Full Data" panel,
 // so a client role falls back to the sections it always gets) - no
 // new data needed either way.
-function offlineAssetsRows() {
+function allAssetRows() {
   return (DATA.full && DATA.full.length) ? DATA.full :
     [...(DATA.critical || []), ...(DATA.pending || []), ...(DATA.healthy || []), ...(DATA.knownIssues || [])];
 }
@@ -5580,7 +5556,7 @@ function isFullyOffline(r) {
 function renderOfflinePanel(hours, label) {
   OFFLINE_THRESHOLD_HOURS = hours;
   const durationLabel = label || (hours % 24 === 0 ? (hours / 24) + ' day' + (hours === 24 ? '' : 's') : hours + ' hrs');
-  const rows = offlineAssetsRows()
+  const rows = allAssetRows()
     .filter(r => isFullyOffline(r) && ((r.days || 0) * 24) >= hours)
     .sort((a, b) => (b.days || 0) - (a.days || 0))
     .map(r => r.status === 'Known Issue' ? r : Object.assign({}, r, {status: 'Offline ≥ ' + durationLabel}));

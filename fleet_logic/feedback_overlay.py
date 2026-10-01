@@ -34,6 +34,13 @@ def _apply_to_row(row, entry):
     fb = entry.get("latestFeedback")
     action_entry = entry.get("latestAction")
 
+    # The two entry types, each strictly from its own kind. "feedback"
+    # below can't serve as the customer column: the import fills it from
+    # the latest entry of EITHER type, so an asset with only a technician
+    # note would show that note as the client's words.
+    row["customerComment"] = fb["comment"] if fb else ""
+    row["technicianComment"] = action_entry["comment"] if action_entry else ""
+
     if fb:
         # Status and comment are separate fields - see control_room.py's
         # _integrity_row(). The dashboard badges the status so the

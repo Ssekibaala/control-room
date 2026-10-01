@@ -1374,10 +1374,7 @@ def api_ddr_export():
         return err
 
     import ddr_report
-    settings = _load_settings()
-    data = ddr_report.build_workbook(full_rows, client_name=client_name,
-                                      long_term_fault_days=settings["LONG_TERM_FAULT_DAYS"],
-                                      high_priority_days=settings["HIGH_PRIORITY_DAYS"])
+    data = ddr_report.build_workbook(full_rows, client_name=client_name)
     fname = f"DDR_{client_name.replace(' ', '_')}_{now_eat().strftime('%Y%m%d')}.xlsx"
     return Response(
         data,
@@ -1424,10 +1421,7 @@ def api_ddr_send():
 
     note = (body.get("note") or "").strip() or None
     import ddr_report
-    settings = _load_settings()
-    xlsx_bytes = ddr_report.build_workbook(full_rows, client_name=client_name,
-                                            long_term_fault_days=settings["LONG_TERM_FAULT_DAYS"],
-                                            high_priority_days=settings["HIGH_PRIORITY_DAYS"])
+    xlsx_bytes = ddr_report.build_workbook(full_rows, client_name=client_name)
 
     import notifications
     result = notifications.send_ddr_report(client_name, to_addrs, xlsx_bytes,
