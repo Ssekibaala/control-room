@@ -3011,6 +3011,23 @@ def ft_cloud_webhook_receiver(secret):
     return jsonify({"ok": True, **result}), 200
 
 
+def _refuse_webhook_change_from_local_dev():
+    """
+    FT keeps ONE callback URL per message type for the whole tenant, so
+    any instance that re-subscribes takes the push stream away from
+    every other instance. A local dev run talks to the real tenant but
+    takes its callback from the local .env - which is how a local test
+    re-pointed production's GPS pushes at an old deployment and left
+    production showing FT's lagging updateTime instead of real
+    positioning times. Only the deployed server may change this.
+    """
+    if _is_probably_local_leftover(request.host_url):
+        return jsonify({"error": "Refusing to change FT Cloud's webhook from a local dev server - FT allows "
+                                  "one callback per tenant, so this would take the push stream away from "
+                                  "production. Use Settings > FT Cloud Webhook on the live site instead."}), 409
+    return None
+
+
 @app.route("/api/ftcloud/webhook/subscribe", methods=["POST"])
 @login_required
 def api_ft_cloud_webhook_subscribe():
@@ -3026,6 +3043,9 @@ def api_ft_cloud_webhook_subscribe():
     """
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
+    refused = _refuse_webhook_change_from_local_dev()
+    if refused:
+        return refused
 
     secret = _ft_cloud_webhook_secret()
     if not secret:
@@ -3256,6 +3276,9 @@ def api_ft_cloud_webhook_unsubscribe():
     tenant's single callbackUrl-per-type for another integration."""
     if session["role"] not in MANAGE_USERS_ROLES:
         return jsonify({"error": "Not permitted for your role"}), 403
+    refused = _refuse_webhook_change_from_local_dev()
+    if refused:
+        return refused
     from adapters.ft_cloud_api_client import FtCloudApiClient
     client = FtCloudApiClient()
     if not client.is_configured():

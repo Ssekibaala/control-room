@@ -5673,6 +5673,8 @@ renderTable('newlyoffline-table', DATA.newlyOfflineList, SIMPLE_COLS);
       'GPS: ' + (gps.subscribed ? ('subscribed, ' + gps.deviceCount + ' device(s)') : 'NOT subscribed'),
       'ONLINE_STATE: ' + (online.subscribed ? ('subscribed, ' + online.deviceCount + ' device(s)') : 'NOT subscribed'),
       'Events received so far: ' + ((d.received && d.received.devices) || 0) + ' device(s)',
+      'Last event received: ' + ((d.received && d.received.updatedAt)
+        ? d.received.updatedAt.slice(0, 16).replace('T', ' ') + ' (EAT)' : 'never'),
       'This server’s public URL: ' + (d.publicBaseUrl || '(not set)'),
     ].join('\n');
     resultEl.style.color = 'var(--text-secondary)';
