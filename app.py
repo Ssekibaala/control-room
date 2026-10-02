@@ -2779,11 +2779,11 @@ def _ft_cloud_api_poll_once():
         webhook_positions = ft_cloud_webhook.positions_by_unique_id(
             FT_CLOUD_WEBHOOK_STATE_PATH,
             max_age_minutes=settings["FT_CLOUD_API_WEBHOOK_POSITION_MAX_AGE_MINUTES"])
-        # NOT freshness-filtered on purpose - a device whose last webhook
-        # report was over a week ago must still show that stale
-        # timestamp for online/offline purposes, not fall back to FT's
-        # connectivity flag (which stayed "online" the whole time). See
-        # ft_cloud_api._last_seen().
+        # NOT freshness-filtered on purpose - ft_cloud_api._last_seen()
+        # weighs it against FT's own updateTime and keeps the newer, so
+        # an old webhook record never hides a fresher report, and a
+        # device with neither still reads stale rather than falling back
+        # to FT's "online" connectivity flag.
         webhook_last_seen = ft_cloud_webhook.last_seen_by_unique_id(FT_CLOUD_WEBHOOK_STATE_PATH)
 
     reports = ft_cloud_api.fetch_all_reports(

@@ -39,12 +39,16 @@ def _last_seen(info, webhook_last_seen=None):
     """
     When this device was last VERIFIABLY in contact with FT.
 
-    webhook_last_seen, when given, is the timestamp of the last webhook
-    event FT actually pushed us for this device (see
-    ft_cloud_webhook.last_seen_by_unique_id) - a real report, not merely
-    a connectivity flag - and it wins whenever present, however old.
+    Two sources, and the NEWER one wins. webhook_last_seen is the
+    timestamp of the last webhook event FT pushed us for this device
+    (see ft_cloud_webhook.last_seen_by_unique_id). It used to win
+    whenever present, however old - so once a device had any webhook
+    record, a pause in deliveries froze its date for good while FT's own
+    updateTime kept moving. Confirmed live on UBQ968H: FT reported it
+    ONLINE with updateTime 15 minutes old while the dashboard showed a
+    webhook event from 15 days earlier, unchanged by any refresh.
 
-    Otherwise, updateTime ("the time when the device last reported
+    The other is updateTime ("the time when the device last reported
     status", per FT's own field description) - not lastOnlineTime or
     lastOfflineTime. Those two are transition timestamps, not
     last-report timestamps: they flip which one is populated based on
@@ -59,9 +63,8 @@ def _last_seen(info, webhook_last_seen=None):
     device's true last full report regardless of whether it's currently
     ONLINE or OFFLINE.
     """
-    if webhook_last_seen is not None:
-        return webhook_last_seen
-    return _parse_timestamp(info.get("updateTime"))
+    candidates = [t for t in (webhook_last_seen, _parse_timestamp(info.get("updateTime"))) if t is not None]
+    return max(candidates) if candidates else None
 
 
 def _status_note(vehicle, info):
@@ -94,9 +97,9 @@ def _reported_offline(vehicle):
 
     Only returns True (a confirmed OFFLINE) or None - never False. FT
     reporting ONLINE is only a connectivity heartbeat, not proof of a
-    real report, and must not suppress the opposite finding produced by
-    webhook staleness (see _last_seen()'s webhook_last_seen branch,
-    which exists for exactly that case).
+    real report, so it must not override a stale last-report time -
+    Online/Offline for a device FT calls ONLINE still comes from
+    _last_seen()'s age.
     """
     return True if vehicle.get("onlineState") == "OFFLINE" else None
 

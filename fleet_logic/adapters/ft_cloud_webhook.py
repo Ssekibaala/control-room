@@ -297,7 +297,8 @@ def last_seen_by_unique_id(path):
     reporting doesn't get to hide behind FT's own connectivity flag,
     which stays "online" from a live modem heartbeat with no
     corresponding report ever arriving here. See
-    ft_cloud_api._last_seen() for where this overrides that flag.
+    ft_cloud_api._last_seen(), which keeps the newer of this and FT's
+    own updateTime.
 
     Returns {uniqueId: parsed datetime}, only for devices with a stored
     timestamp at all - a device this webhook has never heard from isn't
