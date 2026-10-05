@@ -135,6 +135,7 @@ def build_workbook(rows, month=None, fields=None):
     columns, in OPTIONAL_FIELDS order - mirrors whichever checkboxes
     the admin ticked on screen.
     """
+    latest_month = max((r["installMonth"] for r in rows if r.get("installMonth")), default=None)
     if month:
         rows = [r for r in rows if r.get("installMonth") == month]
     rows = sorted(rows, key=lambda r: (r.get("client") or "", r.get("installMonth") or "", r.get("plate") or ""))
@@ -164,6 +165,15 @@ def build_workbook(rows, month=None, fields=None):
         col = get_column_letter(i)
         cell_lens = [len(str(ws.cell(row=r, column=i).value or "")) for r in range(2, ws.max_row + 1)]
         ws.column_dimensions[col].width = min(max([len(c["label"])] + cell_lens) + 2, 40)
+
+    if month and not rows:
+        # A headers-only sheet reads as a broken export; say why it's empty.
+        note = f"No assets were installed in {label}."
+        if latest_month:
+            note += f" Most recent install month in this data: {month_display(latest_month)}."
+        ws.append([note])
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(columns))
+        ws.cell(row=2, column=1).font = Font(italic=True, color="666666")
 
     out = io.BytesIO()
     wb.save(out)
