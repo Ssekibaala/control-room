@@ -4052,6 +4052,15 @@ if (usersForm) {
       const month = monthInput.value;
       const filtered = month ? AID_ROWS.filter(r => r.installMonth === month) : AID_ROWS;
       renderTable('aid-table', filtered, aidCurrentCols());
+      if (month && !filtered.length && AID_ROWS.length) {
+        const latest = AID_ROWS.filter(r => r.installMonth)
+          .sort((a, b) => a.installMonth.localeCompare(b.installMonth)).pop();
+        const label = new Date(month + '-01T00:00:00').toLocaleString('en-GB', {month: 'long', year: 'numeric'});
+        document.getElementById('aid-table').innerHTML =
+          '<tbody><tr><td style="padding:20px;color:var(--text-tertiary)">No assets were installed in ' + escapeHTML(label)
+          + ' in the fetched data.' + (latest ? ' Most recent install month: ' + escapeHTML(latest.installMonthDisplay) + '.' : '')
+          + ' Clear the month filter to see every asset.</td></tr></tbody>';
+      }
     }
     function aidUpdateExportLink() {
       const params = new URLSearchParams();
@@ -4130,6 +4139,13 @@ if (usersForm) {
       }
       const errCount = data.errors ? Object.keys(data.errors).length : 0;
       if (errCount) statusEl.textContent += ' (' + errCount + ' org' + (errCount === 1 ? '' : 's') + ' failed to fetch)';
+      // A successful fetch rewrites the snapshot without lastError, so its
+      // presence means the most recent attempt failed and the rows above
+      // are from an earlier fetch.
+      if (data.lastError) {
+        statusEl.textContent += ' — latest fetch FAILED ' + new Date(data.lastErrorAt).toLocaleString()
+          + ': ' + data.lastError;
+      }
     }
 
     function aidLoad() {

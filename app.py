@@ -2293,15 +2293,48 @@ def api_asset_install_dates():
     return jsonify(snapshot)
 
 
+def _record_asset_install_error(reason):
+    """Keeps the last good rows but marks the snapshot with why the
+    latest fetch didn't replace them, so the panel can say so instead of
+    silently showing the previous fetch as if it were current."""
+    snapshot = {"fetchedAt": None, "rows": [], "errors": {}, "clients": []}
+    if os.path.exists(MIX_ASSET_INSTALL_SNAPSHOT_PATH):
+        try:
+            with open(MIX_ASSET_INSTALL_SNAPSHOT_PATH) as f:
+                snapshot = json.load(f)
+        except (OSError, ValueError):
+            pass
+    snapshot["lastError"] = reason
+    snapshot["lastErrorAt"] = now_eat().isoformat()
+    _write_json_atomic(MIX_ASSET_INSTALL_SNAPSHOT_PATH, snapshot)
+
+
+def _run_asset_install_fetch(client_names):
+    try:
+        result = _mix_asset_install_poll_once(client_names)
+        print(f"Asset install date fetch: {result}")
+        if result.get("status") != "ok":
+            _record_asset_install_error(result.get("reason") or "fetch did not complete")
+    except Exception as e:
+        print(f"Asset install date fetch failed: {e}")
+        _record_asset_install_error(str(e))
+    finally:
+        _release_lock(ASSET_INSTALL_REFRESH_LOCK_PATH)
+
+
 @app.route("/api/admin/asset-install-dates/refresh", methods=["POST"])
 @login_required
 def api_asset_install_dates_refresh():
     """
-    Manual trigger. Runs synchronously (one MiX call per org, rate-
-    limited, so this can legitimately take a minute or two with many
-    orgs mapped) rather than on a background thread - see
-    ASSET_INSTALL_REFRESH_LOCK_PATH's comment for why a file lock, not
-    an in-memory flag, guards against a double-trigger. Body: optional
+    Manual trigger. Starts the fetch on a background thread and returns
+    immediately; the panel polls GET /api/admin/asset-install-dates
+    (its "running" flag) until it finishes. It used to run inside the
+    request, but every org is one MiX call plus inter_org_delay_seconds,
+    so all four orgs take ~55s - past gunicorn's default 30s worker
+    timeout. Production killed the request mid-fetch every time, nothing
+    was saved, and the panel kept showing the last fetch small enough to
+    fit (AGL+GTL only). See ASSET_INSTALL_REFRESH_LOCK_PATH's comment
+    for why a file lock guards against a double-trigger. Body: optional
     {"clients": [...]} to scope the fetch to specific clients instead of
     every MiX client.
     """
@@ -2312,14 +2345,7 @@ def api_asset_install_dates_refresh():
 
     body = request.get_json(force=True, silent=True) or {}
     client_names = body.get("clients") or None
-    try:
-        result = _mix_asset_install_poll_once(client_names)
-        print(f"Asset install date fetch: {result}")
-    except Exception as e:
-        print(f"Asset install date fetch failed: {e}")
-        return jsonify({"error": f"Fetch failed: {e}"}), 502
-    finally:
-        _release_lock(ASSET_INSTALL_REFRESH_LOCK_PATH)
+    threading.Thread(target=_run_asset_install_fetch, args=(client_names,), daemon=True).start()
     return jsonify({"status": "started"})
 
 
