@@ -711,7 +711,7 @@ def api_platform_accounts():
         from adapters.mix_api_client import MixApiClient
         client = MixApiClient()
         if not client.is_configured():
-            raise RuntimeError("MiX API credentials not set")
+            raise RuntimeError("Mix4000 API credentials not set")
         out["mix"] = sorted(
             ({"id": str(g.get("GroupId")), "name": g.get("Name") or str(g.get("GroupId"))}
              for g in client.get_organisation_groups()),
@@ -735,7 +735,7 @@ def api_platform_accounts():
         from adapters.ft_cloud_api_client import FtCloudApiClient
         client = FtCloudApiClient()
         if not client.is_configured():
-            raise RuntimeError("FT Cloud API credentials not set")
+            raise RuntimeError("AD Plus API credentials not set")
         out["ftCloud"] = sorted(
             ({"id": str(f.get("fleetId")), "name": f.get("fleetName") or str(f.get("fleetId"))}
              for f in client.get_fleets()),
@@ -805,9 +805,9 @@ def _platform_account_conflict(name, mix, teletrac, ft):
     for other in existing:
         if other["name"].strip().lower() == name.strip().lower():
             continue
-        for requested, key, label in ((mix, "mixOrgIds", "MiX organisation"),
-                                      (teletrac, "teletracClientIds", "Teletrac client"),
-                                      (ft, "ftCloudFleetIds", "FT Cloud fleet")):
+        for requested, key, label in ((mix, "mixOrgIds", "Mix4000 organisation"),
+                                      (teletrac, "teletracClientIds", "Fuel Probes client"),
+                                      (ft, "ftCloudFleetIds", "AD Plus fleet")):
             clash = set(requested or []) & set(other.get(key) or [])
             if clash:
                 return (f"That {label} is already mapped to '{other['name']}'. "
@@ -2241,7 +2241,7 @@ def _mix_asset_install_poll_once(client_names=None):
         clients = [c for c in clients if c.get("name") in wanted]
     org_ids = client_registry.ids_for_platform(clients, "mix")
     if not org_ids:
-        return {"status": "skipped", "reason": "no MiX organisations mapped to any selected client"}
+        return {"status": "skipped", "reason": "no Mix4000 organisations mapped to any selected client"}
     owner = client_registry.platform_index(clients)["mix"]
 
     client = MixApiClient(inter_org_delay_seconds=settings["MIX_API_INTER_ORG_DELAY_SECONDS"])
@@ -2358,12 +2358,12 @@ def api_asset_install_dates_export():
     if session["role"] != "admin":
         return jsonify({"error": "Not permitted for your role"}), 403
     if not os.path.exists(MIX_ASSET_INSTALL_SNAPSHOT_PATH):
-        return jsonify({"error": "No data yet - fetch from MiX first."}), 404
+        return jsonify({"error": "No data yet - fetch from Mix4000 first."}), 404
     try:
         with open(MIX_ASSET_INSTALL_SNAPSHOT_PATH) as f:
             snapshot = json.load(f)
     except (OSError, ValueError):
-        return jsonify({"error": "Snapshot file is unreadable - fetch from MiX again."}), 503
+        return jsonify({"error": "Snapshot file is unreadable - fetch from Mix4000 again."}), 503
 
     month = (request.args.get("month") or "").strip() or None
     fields = [f.strip() for f in (request.args.get("fields") or "").split(",") if f.strip()]
@@ -3048,9 +3048,9 @@ def _refuse_webhook_change_from_local_dev():
     positioning times. Only the deployed server may change this.
     """
     if _is_probably_local_leftover(request.host_url):
-        return jsonify({"error": "Refusing to change FT Cloud's webhook from a local dev server - FT allows "
+        return jsonify({"error": "Refusing to change the AD Plus webhook from a local dev server - the provider allows "
                                   "one callback per tenant, so this would take the push stream away from "
-                                  "production. Use Settings > FT Cloud Webhook on the live site instead."}), 409
+                                  "production. Use Settings > AD Plus Webhook on the live site instead."}), 409
     return None
 
 
@@ -3099,7 +3099,7 @@ def api_ft_cloud_webhook_subscribe():
     clients = _poll_registry(settings)
     fleet_ids = client_registry.ids_for_platform(clients, "ftCloud")
     if not fleet_ids:
-        return jsonify({"error": "no FT Cloud fleets mapped to any client in the registry"}), 400
+        return jsonify({"error": "no AD Plus fleets mapped to any client in the registry"}), 400
 
     client = FtCloudApiClient()
     if not client.is_configured():

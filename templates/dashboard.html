@@ -1530,19 +1530,19 @@
               named differently on each one &mdash; these selections are what merge them into one client.</span>
           </div>
           <div class="ff-row">
-            <label for="cf-mix">MiX Unity organisation</label>
+            <label for="cf-mix">Mix4000 organisation</label>
             <select id="cf-mix" class="platform-select" data-platform="mix">
               <option value="">Loading&hellip;</option>
             </select>
           </div>
           <div class="ff-row">
-            <label for="cf-teletrac">Teletrac client</label>
+            <label for="cf-teletrac">Fuel Probes client</label>
             <select id="cf-teletrac" class="platform-select" data-platform="teletrac">
               <option value="">Loading&hellip;</option>
             </select>
           </div>
           <div class="ff-row">
-            <label for="cf-ftcloud">FT Cloud fleet</label>
+            <label for="cf-ftcloud">AD Plus fleet</label>
             <select id="cf-ftcloud" class="platform-select" data-platform="ftCloud">
               <option value="">Loading&hellip;</option>
             </select>
@@ -1704,7 +1704,7 @@
           <div class="kpi-card clickable" data-goto="p-full" data-goto-label="Full Data">
             <div class="kpi-head"><span class="kpi-label">Total Assets</span></div>
             <div class="kpi-main"><span class="kpi-num" id="kpi-num-total" data-count="0">0</span></div>
-            <div class="kpi-foot muted" id="kpi-total-foot" title="How many of these assets actually have a report on each platform - a vehicle can be counted here from just one platform, it doesn't need all three.">Across Teletrac, MiX Unity, FT Cloud</div>
+            <div class="kpi-foot muted" id="kpi-total-foot" title="How many of these assets actually have a report on each platform - a vehicle can be counted here from just one platform, it doesn't need all three.">Across Fuel Probes, Mix4000, AD Plus</div>
             <div class="kpi-goto">View all assets <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
           </div>
           <div class="kpi-card success clickable" data-goto="p-healthy" data-goto-label="Healthy Fleet">
@@ -1911,8 +1911,8 @@
         </div>
         <div class="panel-card">
           <div class="panel-card-head">
-            <h3>FT Cloud Webhook</h3>
-            <span class="chart-subhead">Live position/status pushes from FT Cloud (AD Plus AI Camera data). If a device's camera status looks stuck on an old date, check the status below and re-subscribe - this replaces any existing subscription with one pointed at this server.</span>
+            <h3>AD Plus Webhook</h3>
+            <span class="chart-subhead">Live position/status pushes for the AD Plus AI cameras. If a device's camera status looks stuck on an old date, check the status below and re-subscribe - this replaces any existing subscription with one pointed at this server.</span>
           </div>
           <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
             <button type="button" class="btn-secondary" id="ftwebhook-check-btn">Check Status</button>
@@ -1939,7 +1939,7 @@
         <div class="panel-card">
           <div class="panel-card-head">
             <h3>Asset Install Dates</h3>
-            <span class="chart-subhead">Pulls assets straight from the MiX API with who installed them and when &mdash; use this to find assets added in a given month for billing.</span>
+            <span class="chart-subhead">Pulls assets straight from the Mix4000 API with who installed them and when &mdash; use this to find assets added in a given month for billing.</span>
           </div>
           <div class="ff-row" style="align-items:center; gap:var(--sp-2); flex-wrap:wrap; display:flex">
             <div class="export-wrap">
@@ -1964,7 +1964,7 @@
                 <div id="aid-fields-list" class="picker-menu-list"></div>
               </div>
             </div>
-            <button class="btn-secondary" id="aid-refresh-btn">Fetch from MiX</button>
+            <button class="btn-secondary" id="aid-refresh-btn">Fetch from Mix4000</button>
             <span id="aid-status" class="settings-note" style="margin:0"></span>
             <label style="margin-left:auto; display:flex; align-items:center; gap:6px">
               Month
@@ -1980,9 +1980,9 @@
       {% if 'p-ddr' in allowed_panels %}
 <section id="p-ddr" class="panel">
         <div class="callout muted">
-          A per-client device status report, split by platform: <strong>OBC Status</strong> (MiX Unity-tracked
-          assets), <strong>AD Plus AI Camera Status</strong> (FT Cloud-tracked cameras), and
-          <strong>Fuel Probe Status</strong> (Teletrac-tracked fuel sensors). Export it, or email it straight to the
+          A per-client device status report, split by platform: <strong>OBC Status</strong> (Mix4000-tracked
+          assets), <strong>AD Plus AI Camera Status</strong> (AD Plus cameras), and
+          <strong>Fuel Probe Status</strong> (fuel probes). Export it, or email it straight to the
           client &mdash; anything they send back gets logged the same way an in-app comment does. Click any row
           below to add a comment against that vehicle right now. A device that hasn't reported today shows as
           <strong>Pending Customer Confirmation</strong> here, regardless of the vehicle's overall status elsewhere.
@@ -3045,7 +3045,7 @@ const PANEL_SUBS = {
   'p-known': 'Explained offline - no follow-up needed, kept out of the active queue',
   'p-activity': 'Every feedback comment across every vehicle, newest first',
   'p-users': 'Team accounts and role assignment',
-  'p-asset-install': 'Live from the MiX API - find assets added in a given month, for billing',
+  'p-asset-install': 'Live from the Mix4000 API - find assets added in a given month, for billing',
 };
 let ALLOWED_PANELS = null;
 
@@ -4111,7 +4111,7 @@ if (usersForm) {
           clientsList.innerHTML = names.map(n =>
             '<label><input type="checkbox" data-client="' + escapeHTML(n) + '"' +
             ((!hadAnyBefore || previouslyChecked.has(n)) ? ' checked' : '') + '> ' + escapeHTML(n) + '</label>').join('')
-            || '<div class="picker-menu-empty">No clients have a MiX organisation mapped yet.</div>';
+            || '<div class="picker-menu-empty">No clients have a Mix4000 organisation mapped yet.</div>';
           aidUpdateSummaries();
         })
         .catch(() => {
@@ -4135,7 +4135,7 @@ if (usersForm) {
         const scope = (data.clients && data.clients.length) ? data.clients.join(', ') : 'all clients';
         statusEl.textContent = AID_ROWS.length + ' assets (' + scope + ') — fetched ' + new Date(data.fetchedAt).toLocaleString();
       } else {
-        statusEl.textContent = 'No data yet — pick organisation(s) and click "Fetch from MiX".';
+        statusEl.textContent = 'No data yet — pick organisation(s) and click "Fetch from Mix4000".';
       }
       const errCount = data.errors ? Object.keys(data.errors).length : 0;
       if (errCount) statusEl.textContent += ' (' + errCount + ' org' + (errCount === 1 ? '' : 's') + ' failed to fetch)';
@@ -4157,7 +4157,7 @@ if (usersForm) {
             refreshBtn.disabled = true; refreshBtn.textContent = 'Fetching…';
             setTimeout(aidLoad, 4000);
           } else {
-            refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from MiX';
+            refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from Mix4000';
           }
         })
         .catch(() => { statusEl.textContent = 'Could not load asset data.'; });
@@ -4165,7 +4165,7 @@ if (usersForm) {
 
     refreshBtn.addEventListener('click', () => {
       refreshBtn.disabled = true; refreshBtn.textContent = 'Fetching…';
-      statusEl.textContent = 'Fetching from MiX — this can take a minute or two.';
+      statusEl.textContent = 'Fetching from Mix4000 — this can take a minute or two.';
       fetch('/api/admin/asset-install-dates/refresh', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({clients: aidSelectedClients()}),
@@ -4173,7 +4173,7 @@ if (usersForm) {
         .then(r => r.json())
         .then(() => setTimeout(aidLoad, 3000))
         .catch(() => {
-          refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from MiX';
+          refreshBtn.disabled = false; refreshBtn.textContent = 'Fetch from Mix4000';
           statusEl.textContent = 'Could not start the fetch.';
         });
     });
@@ -4522,9 +4522,9 @@ if (usersForm) {
     // so adding a fourth later means editing one list rather than
     // hunting for three parallel copies.
     const PLATFORMS = [
-      {key: 'mix',      field: 'mixOrgIds',        label: 'MiX Unity', selectId: 'cf-mix'},
-      {key: 'teletrac', field: 'teletracClientIds', label: 'Teletrac',  selectId: 'cf-teletrac'},
-      {key: 'ftCloud',  field: 'ftCloudFleetIds',   label: 'FT Cloud',  selectId: 'cf-ftcloud'},
+      {key: 'mix',      field: 'mixOrgIds',        label: 'Mix4000', selectId: 'cf-mix'},
+      {key: 'teletrac', field: 'teletracClientIds', label: 'Fuel Probes',  selectId: 'cf-teletrac'},
+      {key: 'ftCloud',  field: 'ftCloudFleetIds',   label: 'AD Plus',  selectId: 'cf-ftcloud'},
     ];
     let PLATFORM_ACCOUNTS = null;   // {mix:[{id,name}], teletrac:[...], ftCloud:[...], errors:{}}
     let LAST_CLIENTS = [];
@@ -4869,7 +4869,7 @@ if (totalFoot) {
   // single-client login) these were never set and printed as 0.
   const assetRows = allAssetRows();
   const countSeen = field => assetRows.filter(r => r[field] && r[field] !== 'No data').length;
-  totalFoot.textContent = countSeen('mixSeen') + ' MiX Unity · ' + countSeen('camSeen') + ' FT Cloud · ' + countSeen('tltSeen') + ' Teletrac';
+  totalFoot.textContent = countSeen('mixSeen') + ' Mix4000 · ' + countSeen('camSeen') + ' AD Plus · ' + countSeen('tltSeen') + ' Fuel Probes';
 }
 
 // ---- Platform Breakdown (Executive Dashboard) ----
@@ -4908,9 +4908,9 @@ function renderPlatformBreakdown() {
   const rows = allAssetRows();
   const total = rows.length;
   const PLATFORMS = [
-    {key: 'MIX', label: 'MiX Unity'},
-    {key: 'CAM', label: 'FT Cloud'},
-    {key: 'TLT', label: 'Teletrac'},
+    {key: 'MIX', label: 'Mix4000'},
+    {key: 'CAM', label: 'AD Plus'},
+    {key: 'TLT', label: 'Fuel Probes'},
   ];
   grid.innerHTML = PLATFORMS.map(p => {
     const online = rows.filter(r => r[p.key] === 'Online').length;
@@ -5160,7 +5160,7 @@ function platformCellHTML(c, r) {
 // Full platform names for the source tag/tooltip - matching the labels
 // already used in the TLT/MIX/CAM column headers, so "TLT" never shows
 // up as raw shorthand next to a plain-English timestamp.
-const PLATFORM_FULL_NAME = {TLT: 'Teletrac', MIX: 'MiX Unity', CAM: 'FT Cloud'};
+const PLATFORM_FULL_NAME = {TLT: 'Fuel Probes', MIX: 'Mix4000', CAM: 'AD Plus'};
 
 /**
  * lastPosition is the EARLIEST timestamp across three independent
@@ -5484,8 +5484,8 @@ document.getElementById('global-search').addEventListener('input', (e) => {
 const INTEGRITY_COLS = [
   {key:'plate', label:'Plate'}, {key:'status', label:'Status'}, {key:'severity', label:'Severity'},
   {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Earliest Last Seen'},
-  {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'},
-  {key:'CAM', label:'FT Cloud'}, {key:'border', label:'Border Risk'}, {key:'borderDetail', label:'Border Detail'},
+  {key:'TLT', label:'Fuel Probes'}, {key:'MIX', label:'Mix4000'},
+  {key:'CAM', label:'AD Plus'}, {key:'border', label:'Border Risk'}, {key:'borderDetail', label:'Border Detail'},
   {key:'feedback', label:'Customer Feedback'}, {key:'action', label:'Recommended Action'},
   {key:'reasons', label:'Investigation Reasons'}, {key:'location', label:'Last Known Location'},
 ];
@@ -5495,14 +5495,14 @@ const INTEGRITY_COLS = [
 const INTEGRITY_COLS_CLIENT = [
   {key:'plate', label:'Plate'}, {key:'status', label:'Status'}, {key:'severity', label:'Severity'},
   {key:'days', label:'Days Offline'}, {key:'lastPosition', label:'Earliest Last Seen'},
-  {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'}, {key:'CAM', label:'FT Cloud'},
+  {key:'TLT', label:'Fuel Probes'}, {key:'MIX', label:'Mix4000'}, {key:'CAM', label:'AD Plus'},
   {key:'feedback', label:'Customer Feedback'}, {key:'action', label:'Recommended Action'},
   {key:'location', label:'Last Known Location'},
 ];
 const HEALTHY_COLS = [
   {key:'plate', label:'Plate'}, {key:'lastPosition', label:'Earliest Last Seen'},
-  {key:'TLT', label:'Teletrac'}, {key:'MIX', label:'MiX Unity'},
-  {key:'CAM', label:'FT Cloud'}, {key:'location', label:'Last Known Location'},
+  {key:'TLT', label:'Fuel Probes'}, {key:'MIX', label:'Mix4000'},
+  {key:'CAM', label:'AD Plus'}, {key:'location', label:'Last Known Location'},
 ];
 const PRIORITY_COLS = [
   {key:'plate', label:'Plate'}, {key:'severity', label:'Severity'}, {key:'days', label:'Days Offline'},
@@ -6048,9 +6048,9 @@ const cardsHTML = DATA.criticalCards.map(r => {
     '<div class="card-top"><div class="plate">' + escapeHTML(r.plate) + '</div>' + miniGauge(r.days, DATA.meta.longTermFault * 1.5, color) + '</div>' +
     '<span class="severity-pill" style="background:' + color + '22;color:' + color + '">' + escapeHTML(r.severity) + '</span>' +
     '<div class="leds">' +
-      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.TLT) + '"></div>TLT</div>' +
-      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.MIX) + '"></div>MIX</div>' +
-      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.CAM) + '"></div>CAM</div>' +
+      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.TLT) + '"></div>Fuel Probes</div>' +
+      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.MIX) + '"></div>Mix4000</div>' +
+      '<div class="led-item"><div class="led-dot" style="background:' + ledColor(r.CAM) + '"></div>AD Plus</div>' +
     '</div>' +
     (badges.length ? '<div class="badge-row">' + badges.join('') + '</div>' : '') +
     '<div class="last-seen">Earliest last seen: <b>' + escapeHTML(r.lastPosition) + '</b></div>' +

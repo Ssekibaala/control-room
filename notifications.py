@@ -19,6 +19,7 @@ import db_store
 import mailer
 import email_templates
 from users import notification_recipients
+from schema import platform_display_name
 
 
 def _now():
@@ -585,7 +586,7 @@ def send_recovery_notice(classification, recovered, episodes=None, requires_comm
                 "location": info.get("last_location") or "Unknown",
                 "comment": (info.get("feedback") or {}).get("comment") if info.get("feedback") else None,
                 "offline_since": episode.get("offlineSince"),
-                "offline_platforms": episode.get("offlinePlatforms") or [],
+                "offline_platforms": [platform_display_name(p) for p in episode.get("offlinePlatforms") or []],
                 "offline_for": _humanise_duration(episode.get("offlineHours")),
                 "last_seen": episode.get("lastSeenAt"),
             })
@@ -616,15 +617,13 @@ def send_recovery_notice(classification, recovered, episodes=None, requires_comm
 
 def _offline_platform_detail(info):
     """
-    Names the actual platform(s) that are silent (e.g. "MiX Unity"), not
-    just a count - classifier.py's platform_status keys are already the
-    real display names ("Teletrac", "MiX Unity", "FT Cloud Camera", see
-    fleet_logic/adapters/*.py's source_platform= values), so no mapping
-    is needed, just reading them straight through instead of discarding
-    them down to a bare "X/Y platforms" number.
+    Names the actual platform(s) that are silent (e.g. "Mix4000"), not
+    just a count, instead of discarding them down to a bare "X/Y
+    platforms" number.
     """
     platforms = info.get("platforms") or []
-    offline = sorted(p for p, (s, _) in (info.get("platform_status") or {}).items() if s in ("Offline", "No Data"))
+    offline = sorted(platform_display_name(p) for p, (s, _) in (info.get("platform_status") or {}).items()
+                     if s in ("Offline", "No Data"))
     days = info.get("days_silent") or 0
     tracked = f"{len(platforms)} platform{'s' if len(platforms) != 1 else ''} tracked"
     if offline and len(offline) < len(platforms):
@@ -960,7 +959,7 @@ def _send_reconnect_check(plate, days_offline, open_comment, base_url, episode=N
         plate, days_offline, open_comment, timestamp, no_url, need_url, recent,
         client=owning_client,
         offline_since=episode.get("offlineSince"),
-        offline_platforms=episode.get("offlinePlatforms") or [],
+        offline_platforms=[platform_display_name(p) for p in episode.get("offlinePlatforms") or []],
         offline_for=_humanise_duration(episode.get("offlineHours")))
 
     result = {"sent": False, "reason": None, "case_id": case["caseId"]}
@@ -1144,7 +1143,7 @@ def _platform_seen_rows(info):
     rows = []
     for platform, (status, seen) in sorted((info.get("platform_status") or {}).items()):
         rows.append({
-            "platform": platform,
+            "platform": platform_display_name(platform),
             "status": status,
             "seen": seen.strftime("%d %b %Y, %H:%M") if hasattr(seen, "strftime") else "No data",
         })

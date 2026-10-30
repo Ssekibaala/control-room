@@ -710,7 +710,7 @@ def _recovery_row(v):
     """
     One recovered vehicle. The headline is the outage that just ended,
     not the reconnection: "back online" on its own tells the reader
-    nothing they can act on, while "offline 4 days on MiX Unity, last
+    nothing they can act on, while "offline 4 days on Mix4000, last
     seen near Athi River" tells them whether to care.
     """
     def line(text, strong=False):

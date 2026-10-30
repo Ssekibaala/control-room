@@ -78,6 +78,16 @@ import re
 _PLATE_PATTERN = re.compile(r'^[A-Z]{1,3}\d{2,4}[A-Z]{1,3}$')
 
 
+# What each source_platform is called on screen, in reports and in emails.
+# source_platform itself stays as-is: it's the key data is matched on, and
+# stored offline episodes already contain those values.
+PLATFORM_DISPLAY_NAMES = {"Teletrac": "Fuel Probes", "MiX Unity": "Mix4000", "FT Cloud Camera": "AD Plus"}
+
+
+def platform_display_name(platform: str) -> str:
+    return PLATFORM_DISPLAY_NAMES.get(platform, platform)
+
+
 def normalize_plate(raw: str) -> str:
     """
     Plates arrive as 'FAW UBQ 756P', 'FAW-UBQ756P', 'UBQ756P', 'UBQ540X_2', etc.

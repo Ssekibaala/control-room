@@ -43,7 +43,7 @@ ALL_PLATFORMS = ["Teletrac", "MiX Unity", "FT Cloud Camera"]
 
 FULL_HEADERS = [
     "Asset Plate", "Status", "Severity", "Days Offline",
-    "Teletrac", "MiX Unity", "FT Cloud Camera",
+    "Fuel Probes", "Mix4000", "AD Plus",
     "Border Risk", "Nearest Border", "Distance (km)",
     "Customer Feedback", "Recommended Action",
     "Investigation Reasons", "Last Known Location",
@@ -169,7 +169,7 @@ def write_report(results: dict, settings: dict, recovered: list, newly_offline: 
     ws["A2"] = f"Automated Cross-Platform Analysis  |  Generated {report_date.strftime('%d %B %Y, %H:%M')}"
     ws["A2"].font = Font(name=FONT_NAME, size=11, italic=True, color="595959")
     ws.merge_cells("A3:F3")
-    ws["A3"] = "Sources: Teletrac, MiX Unity (Mobile Status, Movement, Power Events), FT Cloud Camera Platform"
+    ws["A3"] = "Sources: Fuel Probes, Mix4000 (Mobile Status, Movement, Power Events), AD Plus"
     ws["A3"].font = Font(name=FONT_NAME, size=9, italic=True, color="808080")
 
     row = 5
@@ -305,7 +305,7 @@ def write_report(results: dict, settings: dict, recovered: list, newly_offline: 
 
     # ================= HEALTHY FLEET =================
     healthy_ws = wb.create_sheet("Healthy Fleet")
-    healthy_ws.append(["Asset Plate", "Teletrac", "MiX Unity", "FT Cloud Camera", "Last Known Location"])
+    healthy_ws.append(["Asset Plate", "Fuel Probes", "Mix4000", "AD Plus", "Last Known Location"])
     _style_header(healthy_ws, 1, 5, fill="548235")
     healthy_ws.freeze_panes = "A2"
     for plate in sorted(online_plates):
@@ -375,7 +375,7 @@ def build_email_body(results: dict, settings: dict, recovered, newly_offline, re
     lines.append("")
     lines.append(
         "Please find below the daily fleet integrity status update, automated cross-platform "
-        f"analysis across MiX Unity, Teletrac, and FT Cloud, generated {report_date.strftime('%d %B %Y %H:%M')}."
+        f"analysis across Mix4000, Fuel Probes, and AD Plus, generated {report_date.strftime('%d %B %Y %H:%M')}."
     )
     lines.append("")
     lines.append(f"Total Assets Tracked: {total}")
